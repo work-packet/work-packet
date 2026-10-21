@@ -9,6 +9,7 @@ import signal
 
 POINTS = ("after-model", "after-commit-begin", "mid-spawn", "after-state-swap-1",
           "after-state-swap-2", "after-memento", "after-status", "before-cleanup")
+NEW_POINTS = ("new-before-rename", "new-before-register")
 
 _step = None
 

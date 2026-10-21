@@ -7,9 +7,20 @@ step. A small deterministic executor (`wpk`) runs one step at a time with
 `claude -p`, commits the result atomically, and decides when the packet runs
 next: now, in ten days, or every Monday.
 
-Status: pre-alpha. The packet format is specified (`docs/spec.md`) and
-`wpk check [path]` validates packets, projects and the registry against it.
-Nothing runs steps yet.
+Status: pre-alpha. The Stage 1 commands work against a fake model in the
+test suite; they have not yet been run against the real `claude` (that is
+M8 in `docs/stage1-plan.md`).
+
+```bash
+wpk new count-demo --prompt "Increment state/count.md until it reaches 8, then spawn a child that writes Hello World"
+wpk tick --until-idle      # or from cron: */5 * * * * wpk tick -j 2
+wpk ps                     # what is running, sleeping, paused or failed
+wpk log count-demo         # the root packet's journal; --step N for one step
+wpk check                  # validate everything against docs/spec.md
+```
+
+Also: `wpk step`, `recover`, `show`, `pause`, `resume`, `adopt` and `rm`.
+`wpk <command> --help` describes each.
 
 ## Documents
 

@@ -1,8 +1,8 @@
 # Stage 1 build plan: a packet that survives `kill -9`
 
-Status (2026-10-21): M0–M5 done (repo, CI pair, spec v0.2, `wpk check`, resume
-resolution, `wpk step`/`wpk recover`, spawn, crash safety). Next: M6 (projects
-and the registry).
+Status (2026-10-21): M0–M7 done: every Stage 1 command exists and E1–E6 pass
+in CI against the fake model. Next: M8 (real use: E7 with live Haiku, then a
+week under cron for E8), which needs a person at the keyboard.
 Status log is at the end. A fresh session should be able to resume from this
 file alone.
 
@@ -396,16 +396,16 @@ boxes as you go and add a line to the status log.
 - [x] `faults.py`; roll-forward; `steps/NNNN.failed-<a>` handling
 - Tests: E2 for every fault point; an external `SIGKILL` at a random time.
 
-### M6: Projects and the registry
+### M6: Projects and the registry (done 2026-10-21)
 
-- [ ] `registry.py`, `project.py`; `new`, `adopt`, `rm`, `ps`, `show`, `log`,
+- [x] `registry.py`, `project.py`; `new`, `adopt`, `rm`, `ps`, `show`, `log`,
       `pause`, `resume`
 - Tests: E5; `--dry-run` writes nothing; name clash; WPID prefix lookup;
   `ps` output for each state.
 
-### M7: `wpk tick`
+### M7: `wpk tick` (done 2026-10-21)
 
-- [ ] `scheduler.py`: due set, ordering, `-j`, `--until-idle`, `--max-steps`
+- [x] `scheduler.py`: due set, ordering, `-j`, `--until-idle`, `--max-steps`
 - Tests: E4; leased packets are skipped; oldest-due first across two
   projects; `-j 2` never runs more than two steps at once; `--until-idle` on
   `prototype/sub` ends with everything `COMPLETED`.
@@ -524,3 +524,41 @@ Decisions made while building:
 E1 (fake model), E2 (all eight fault points plus random external kills),
 E3 and E4 pass. 208 tests, green on 3.12 locally and 3.10 in the runner
 image.
+
+### 2026-10-21: M6 and M7 done
+
+`wpk new`, `adopt`, `rm`, `ps`, `show`, `log`, `pause`, `resume` and `tick`.
+New modules: `views` (what `ps`, `show` and `log` print) and `scheduler`;
+`registry` and `project` are complete for Stage 1.
+
+Decisions made while building:
+
+- **`wpk new` builds the project in a hidden sibling** (`.<name>.wpk-new`),
+  renames it into place, then writes the registry entry. Killed before the
+  rename, it leaves nothing (the next `wpk new` clears the leftover); killed
+  between the rename and the entry, the directory is complete but
+  unregistered, and `wpk new` says to run `wpk adopt <dir>`. Fault points
+  `new-before-rename` and `new-before-register` test both (E5).
+- **Lookup order** for a target: a packet or project directory, then a
+  registered project name (its root), then a WPID or a unique prefix of at
+  least 4 hex characters across all registered projects.
+- **`pause` and `resume` on a project name** act on every packet in it
+  (`pause`: RUNNABLE and SLEEPING; `resume`: PAUSED). On one WPID, `resume`
+  also takes a FAILED packet back to RUNNABLE with `attempts = 0`, which is
+  how a person retries one. Both take the lease and write an `admin` record
+  with `op`, `by` (`user@host`), `from` and `to`. Pausing a sleeper drops its
+  `wake_at`; `resume` makes it RUNNABLE.
+- **"Finished" for `ps`** means no packet is RUNNABLE, SLEEPING or PAUSED.
+  Rows are in tree order, children indented under their parent; times are
+  shown in the project zone.
+- **`tick` runs each step as a `wpk step` subprocess**, so a crash or a
+  fault point kills one step, not the scheduler. RUNNABLE packets are due
+  from their `updated` time, sleepers from `wake_at`; the oldest goes first.
+  `--until-idle` repeats passes while the last pass committed or failed
+  something, so a leased or stuck packet cannot make it spin.
+- `tick` exits 0 even when steps fail (it is meant for cron); the per-step
+  lines and the closing count say what happened.
+
+CI note: Forgejo failed on the M2 commit (e8f9ede) with the 3.10
+fraction-of-a-second bug; the M3–M5 commit fixed it and is green on both
+forges. 237 tests, green on 3.12 locally and on 3.10 in the runner image.

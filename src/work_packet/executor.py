@@ -7,7 +7,8 @@ import shutil
 import uuid
 from dataclasses import dataclass
 
-from . import clock, faults, frontmatter, fsutil, journal, model, prompt, schema, spawn
+from . import (clock, faults, frontmatter, fsutil, journal, model, prompt, registry,
+               schema, spawn)
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, project_of, settings
@@ -29,18 +30,11 @@ class UsageError(Exception):
 # --- finding the packet ------------------------------------------------------
 
 def resolve_packet(target):
-    """A packet directory, or a project directory (meaning its root packet)."""
-    p = os.path.abspath(target)
-    if os.path.isfile(os.path.join(p, "status.md")):
-        return Packet(p)
-    if os.path.isfile(os.path.join(p, "project.toml")):
-        from .project import load_project
-        try:
-            root = load_project(p)["root"]
-        except ProjectError as e:
-            raise UsageError(str(e)) from None
-        return Packet(os.path.join(p, "packets", root))
-    raise UsageError("%s is not a packet or project directory" % target)
+    """A packet directory, project directory or name, or a unique WPID prefix."""
+    try:
+        return Packet(registry.resolve(target))
+    except registry.LookupFailed as e:
+        raise UsageError(str(e)) from None
 
 
 def _context(target):
@@ -469,3 +463,51 @@ def _run(pkt, st, meta, body, n, a, lease, now):
     _apply(pkt, st, rec)
     return Outcome(OK, "step %d committed: %s%s" % (
         n, state, " until %s" % decision["wake_at"] if wake else ""))
+
+
+# --- pause and resume ------------------------------------------------------------
+
+def _who():
+    import getpass
+    import socket
+    try:
+        user = getpass.getuser()
+    except (KeyError, OSError):
+        user = "unknown"
+    return "%s@%s" % (user, socket.gethostname())
+
+
+def admin(pkt, op):
+    """``pause``: RUNNABLE or SLEEPING to PAUSED. ``resume``: PAUSED or FAILED to RUNNABLE.
+
+    Takes the lease, so it never races a running step, and records an
+    ``admin`` line in the journal.
+    """
+    try:
+        meta, body = pkt.load_status()
+    except (OSError, frontmatter.FrontMatterError) as e:
+        return Outcome(USAGE, str(e))
+    try:
+        lease = Lease(pkt.lease_path, meta["step"] + 1, 0, 60).acquire()
+    except LeaseHeld as e:
+        return Outcome(LEASED, str(e))
+    try:
+        meta, body = pkt.load_status()
+        old = meta["state"]
+        if op == "pause":
+            if old not in ("RUNNABLE", "SLEEPING"):
+                return Outcome(NOT_RUNNABLE, "%s is %s; nothing to pause" % (pkt.wpid[:8], old))
+            meta.update(state="PAUSED", reason="by hand", wake_at=None)
+        elif op == "resume":
+            if old not in ("PAUSED", "FAILED"):
+                return Outcome(NOT_RUNNABLE, "%s is %s; nothing to resume" % (pkt.wpid[:8], old))
+            meta.update(state="RUNNABLE", reason=None, wake_at=None, attempts=0)
+        else:
+            raise ValueError(op)
+        meta["updated"] = _ts()
+        pkt.save_status(meta, body)
+        journal.append(pkt.journal_path, {"type": "admin", "t": _ts(), "op": op, "by": _who(),
+                                          "from": old, "to": meta["state"]})
+        return Outcome(OK, "%s: %s -> %s" % (pkt.wpid[:8], old, meta["state"]))
+    finally:
+        lease.release()
