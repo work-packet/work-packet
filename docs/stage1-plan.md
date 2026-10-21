@@ -413,6 +413,8 @@ boxes as you go and add a line to the status log.
 ### M8: Real use
 
 - [ ] E7: live `prototype/sub` with Haiku, three runs
+      (`WPK_LIVE=1 pytest -m live -s`, `tests/test_live.py`; about $0.50 a
+      run at the smoke step's cost)
 - [ ] A cron entry (`*/5 * * * * wpk tick -j 2`) and two real projects, for
       example a weekly check of a dv-flow regression and a research packet
       that fans out to children
@@ -562,3 +564,15 @@ Decisions made while building:
 CI note: Forgejo failed on the M2 commit (e8f9ede) with the 3.10
 fraction-of-a-second bug; the M3–M5 commit fixed it and is green on both
 forges. 237 tests, green on 3.12 locally and on 3.10 in the runner image.
+
+### 2026-10-21: first live step
+
+One `wpk step` with the real `claude -p` (Haiku 4.5) on a three-count
+smoke project, run by hand in a scratch directory. It committed: every
+flag was accepted, the stream-json `result` event parsed (cost, tokens,
+session ID), the model wrote only `.pending/`, and `wpk check` was clean.
+The step took 25 s and cost $0.054, almost all of it cache tokens for
+Claude Code's own system prompt (12.5k written, 195k read), not the
+packet prompt. So a nine-step E7 run is roughly $0.50, and per-step
+overhead is worth watching in M8. `tests/test_live.py` holds E7; it is
+skipped unless `WPK_LIVE=1`.
