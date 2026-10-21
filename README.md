@@ -30,6 +30,9 @@ Also: `wpk step`, `recover`, `show`, `pause`, `resume`, `adopt` and `rm`.
 - `docs/spec.md`: the packet format, v0.2. `wpk check` enforces it.
 - `docs/runner.md`: design of the runner, the dashboard and `wpk new`.
 - `docs/stage1-plan.md`: the detailed build plan for the first stage, with status.
+- `docs/long-running.md`: design for long-running projects: hand-off between a
+  person and the runner, a git workspace inside the packet, the runner daemon
+  and board actions, with a walkthrough and build plan.
 - `slides/work-packet.pptx`: overview deck (built from `slides/*.js`).
 - `prototype/`: the original experiment, kept as evidence. Its failures become
   regression tests.

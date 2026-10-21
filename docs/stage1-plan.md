@@ -3,7 +3,8 @@
 Status (2026-10-21): M0–M7 and M9 done: every Stage 1 command exists, E1–E6
 pass in CI against the fake model, and `wpk dash` serves a read-only board.
 E7 passed live with Haiku. Next: the rest of M8 (a week under cron with two
-real projects for E8), which needs a person at the keyboard.
+real projects for E8), which needs a person at the keyboard. Long-running projects (hand-off, `work/`,
+the runner daemon) are designed in `docs/long-running.md`.
 Status log is at the end. A fresh session should be able to resume from this
 file alone.
 
