@@ -216,7 +216,13 @@ model. That is what makes recovery deterministic.
           --model <model> --session-id <uuid5(WPID, n, a)>
           --permission-mode <project> --allowedTools <project>
           --max-budget-usd <step budget> [--add-dir <resolved identity targets>]
+          --tools <allowed tool names> --strict-mcp-config
+          --setting-sources "" --disable-slash-commands
    ```
+
+   The last line keeps the step to what the project allows and leaves out
+   the user's MCP servers, settings files and skills, which also roughly
+   halves Claude Code's own context (status log, 2026-10-21).
 
    stdout goes to `steps/NNNN/transcript.jsonl`, stderr to `stderr.log`.
    `WPK_CLAUDE` replaces the `claude` executable (tests use the fake model).
@@ -576,3 +582,28 @@ Claude Code's own system prompt (12.5k written, 195k read), not the
 packet prompt. So a nine-step E7 run is roughly $0.50, and per-step
 overhead is worth watching in M8. `tests/test_live.py` holds E7; it is
 skipped unless `WPK_LIVE=1`.
+
+### 2026-10-21: trimming Claude Code's context per step
+
+The first live step cost $0.054, of which only ~2k tokens was the
+packet's own work; the rest was Claude Code's system prompt and tool
+definitions, written to cache once and re-read on each of ~6 API calls.
+Measured on one Haiku step of the smoke project (cold cache):
+
+| Flags | Cost | Cache write | Cache read |
+|---|---|---|---|
+| as before | $0.043 | 12.0k | 115k |
+| + `--tools`, `--strict-mcp-config`, `--setting-sources ""`, `--disable-slash-commands` | $0.027 | 7.6k | 51k |
+| + a one-line `--system-prompt` too | $0.031 | 7.7k | 46k |
+
+Kept the second row. Replacing the system prompt saved nothing (the
+conversation still crosses the cache threshold, and it took more turns)
+and would drop Claude Code's guidance on using its tools.
+`--exclude-dynamic-system-prompt-sections` made no difference on one
+machine. `--bare` was ruled out because it accepts only
+`ANTHROPIC_API_KEY`, not a subscription login. Back-to-back steps reuse
+the 5-minute cache, so `wpk tick` steps cost less than a cold one: the
+three-step smoke project ran live to COMPLETED at $0.025, $0.023 and
+$0.023. `--tools` is the allowed tools' base names
+(`Bash(git *)` gives `Bash`). Still to try in M8: putting small `state/`
+files into the prompt, so a step needs fewer Read calls.

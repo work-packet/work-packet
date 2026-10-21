@@ -36,12 +36,33 @@ class StepResult:
         return None
 
 
+def tool_names(allowed_tools):
+    """Built-in tool names for ``--tools``: ``Bash(git *)`` is the ``Bash`` tool."""
+    out = []
+    for t in allowed_tools:
+        name = t.split("(", 1)[0].strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
 def command(model, session_id, permission_mode, allowed_tools, budget_usd, add_dirs=()):
+    """The ``claude -p`` command line for one step.
+
+    A step sees only what the project allows: ``--tools`` loads just the
+    allowed built-in tools, and the user's MCP servers, settings files and
+    skills are left out. Besides isolating the step, this keeps Claude
+    Code's own context small; on Haiku it took a one-step smoke run from
+    $0.043 to $0.027 (stage1-plan status log, 2026-10-21).
+    """
     exe = shlex.split(os.environ.get("WPK_CLAUDE") or "claude")
     argv = exe + ["-p", "--output-format", "stream-json", "--verbose",
                   "--model", model, "--session-id", session_id,
                   "--permission-mode", permission_mode,
-                  "--max-budget-usd", "%.2f" % budget_usd]
+                  "--max-budget-usd", "%.2f" % budget_usd,
+                  "--tools", ",".join(tool_names(allowed_tools)),
+                  "--strict-mcp-config", "--setting-sources", "",
+                  "--disable-slash-commands"]
     if allowed_tools:
         argv += ["--allowedTools", ",".join(allowed_tools)]
     for d in add_dirs:

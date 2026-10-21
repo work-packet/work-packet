@@ -100,7 +100,8 @@ def test_prompt_contents(fresh):
 def test_step_passes_settings_to_model(fresh, monkeypatch, tmp_path):
     proj, root = fresh
     set_project(proj, step_budget_usd=0.25,
-                permissions={"allowed_tools": ["Read"], "permission_mode": "plan"})
+                permissions={"allowed_tools": ["Read", "Bash(git log *)", "Bash(ls)"],
+                             "permission_mode": "plan"})
     seen = {}
     real = executor.model.run
 
@@ -112,7 +113,10 @@ def test_step_passes_settings_to_model(fresh, monkeypatch, tmp_path):
     assert executor.step(proj).code == 0
     argv = seen["argv"]
     assert argv[argv.index("--max-budget-usd") + 1] == "0.25"
-    assert argv[argv.index("--allowedTools") + 1] == "Read"
+    assert argv[argv.index("--allowedTools") + 1] == "Read,Bash(git log *),Bash(ls)"
+    assert argv[argv.index("--tools") + 1] == "Read,Bash"
+    assert argv[argv.index("--setting-sources") + 1] == ""
+    assert "--strict-mcp-config" in argv and "--disable-slash-commands" in argv
     assert argv[argv.index("--permission-mode") + 1] == "plan"
     assert argv[argv.index("--model") + 1] == status(root)["model"]
     assert seen["env"]["WPK_WPID"] == ROOT and seen["env"]["WPK_STEP"] == "1"
