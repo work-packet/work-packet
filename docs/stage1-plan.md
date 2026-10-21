@@ -351,8 +351,9 @@ boxes as you go and add a line to the status log.
 - [x] `work-packet/work-packet` on Forgejo, seeded from `agent-proc`
 - [x] Python skeleton (`wpk --version`), CI pair from `forgejo-ops/templates`
 - [x] CI steps trial-run in `catthehacker/ubuntu:act-22.04`
-- [ ] First CI run is green on Forgejo, and the repo appears on GitHub after
-      the next sync cycle (check `git-sync status work-packet/work-packet`)
+- [x] First CI run is green on Forgejo (Build and test, Release authority)
+- [ ] The repo appears on GitHub after the next sync cycle (`git-sync plan`
+      showed "WOULD CREATE on GitHub ... AUTO"), and GitHub CI is green
 
 ### M1: Spec v0.2 and schema checker
 
@@ -452,4 +453,5 @@ tagging. No tag is planned in Stage 1.
 - 2026-10-21: M0. Repo created on Forgejo and seeded with `docs/`,
   `slides/` and the prototype (`prototype/`, was `agent-proc/test/`). Python
   skeleton and CI pair added; CI steps pass in the Forgejo runner image
-  (Python 3.10.12). Plan written.
+  (Python 3.10.12). Plan written. First Forgejo CI run green; GitHub mirror
+  pending the next sync cycle.
