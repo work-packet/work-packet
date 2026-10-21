@@ -1,7 +1,7 @@
 # Stage 1 build plan: a packet that survives `kill -9`
 
-Status (2026-10-21): M0 and M1 done (repo, CI pair, spec v0.2, `wpk check`).
-Next: M2 (clock and resume expressions).
+Status (2026-10-21): M0–M2 done (repo, CI pair, spec v0.2, `wpk check`, resume resolution).
+Next: M3 (executor core).
 Status log is at the end. A fresh session should be able to resume from this
 file alone.
 
@@ -368,9 +368,9 @@ boxes as you go and add a line to the status log.
 - Tests: round-trip front matter; good and bad fixtures for each schema;
   `check` reports file and field for each error.
 
-### M2: Clock and resume expressions
+### M2: Clock and resume expressions (done 2026-10-21)
 
-- [ ] `clock.py`: `resolve()` with zone handling (`now()` and
+- [x] `clock.py`: `resolve()` with zone handling (`now()` and
       `parse_resume()` landed in M1)
 - Tests: each form; DST change in the project zone; `in 10 days` across a
   month end; rejected later-stage forms name their stage.
@@ -476,3 +476,14 @@ tagging. No tag is planned in Stage 1.
   `tests/conftest.py: make_project()` builds a valid project with committed
   steps and a child; M3 should produce the same tree through the real
   executor.
+
+### 2026-10-21: M2 done
+
+`clock.resolve(resume, committed, tz)` returns `(state, wake_at)`. Minutes
+and hours are elapsed time; days and weeks are calendar days in the
+project zone. A skipped wall time moves forward by the gap and a repeated
+one takes the first occurrence (both `fold=0`); this rule is now in spec
+§5. With no `tz`, the zone is `$TZ`, then `/etc/localtime`, then UTC.
+27 new tests (London and New York DST in both directions, month and year
+ends, explicit offsets, sub-second truncation, later-stage rejections);
+174 in all.

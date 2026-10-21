@@ -1,14 +1,16 @@
-"""Time for the executor.
+"""Time for the executor: the clock, resume expressions and their resolution.
 
-M1 holds ``now()`` and the resume-expression parser, which the checker
-needs. M2 adds ``resolve()`` and zone handling.
+Stored times are aware UTC. A zone is applied only when an expression is
+resolved: ``in`` days and weeks count calendar days in the project zone,
+and an ``at`` without an offset is read in it (spec §5).
 """
 
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 UNITS = {
     "minute": "minutes", "minutes": "minutes",
@@ -90,3 +92,78 @@ def parse_resume(expr):
             raise ResumeError("'%s' is not an ISO 8601 date or time" % rest) from None
     raise ResumeError("unknown resume expression '%s' "
                       "(use now, done, fail, 'in <N> <unit>' or 'at <time>')" % e)
+
+
+# Expression kind -> state after commit.
+STATE_AFTER = {
+    "now": "RUNNABLE",
+    "done": "COMPLETED",
+    "fail": "FAILED",
+    "in": "SLEEPING",
+    "at": "SLEEPING",
+}
+
+
+def local_zone():
+    """The machine's zone, with its DST rules: ``$TZ``, then ``/etc/localtime``, then UTC."""
+    name = os.environ.get("TZ", "").lstrip(":")
+    if name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    try:
+        with open("/etc/localtime", "rb") as fp:
+            return ZoneInfo.from_file(fp, key="localtime")
+    except (OSError, ValueError):
+        return timezone.utc
+
+
+def zone(name=None):
+    """The zone named by a project's ``tz``, or the local zone when it has none."""
+    if name is None:
+        return local_zone()
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ResumeError("unknown time zone '%s'" % name) from None
+
+
+def _wall(local, tz):
+    """Attach ``tz`` to the naive wall time ``local`` and return aware UTC.
+
+    A time skipped by a DST change moves forward by the size of the gap
+    (02:30 on a spring-forward night is 03:30). A time that occurs twice
+    is the first of the two. Both come from ``fold=0``.
+    """
+    return local.replace(tzinfo=tz, fold=0).astimezone(timezone.utc)
+
+
+def resolve(resume, committed, tz=None):
+    """Resolve a resume expression at commit time.
+
+    ``resume`` is a Resume or an expression string; ``committed`` is the
+    aware commit time; ``tz`` is a zone name or tzinfo (None: local zone).
+    Returns ``(state, wake_at)``, where ``wake_at`` is aware UTC with whole
+    seconds, or None when the state is not SLEEPING.
+    """
+    if isinstance(resume, str):
+        resume = parse_resume(resume)
+    if committed.tzinfo is None:
+        raise ValueError("resolve needs an aware commit time")
+    if tz is None or isinstance(tz, str):
+        tz = zone(tz)
+    state = STATE_AFTER[resume.kind]
+    if resume.kind == "in":
+        if resume.unit in ("minutes", "hours"):
+            wake = committed + timedelta(**{resume.unit: resume.count})
+        else:
+            days = resume.count * (7 if resume.unit == "weeks" else 1)
+            local = committed.astimezone(tz).replace(tzinfo=None)
+            wake = _wall(local + timedelta(days=days), tz)
+    elif resume.kind == "at":
+        at = resume.at
+        wake = _wall(at, tz) if at.tzinfo is None else at
+    else:
+        return state, None
+    return state, wake.astimezone(timezone.utc).replace(microsecond=0)

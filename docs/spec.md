@@ -290,7 +290,15 @@ Created by the executor at the start of a step. The model writes:
 `week(s)`. `in` days and weeks are calendar days in the project zone, so
 `in 1 day` across a DST change is 23 or 25 hours. `at` accepts
 `2027-01-10`, `2027-01-10 09:00`, `2027-01-10T09:00:00+01:00` and a `Z`
-suffix. An `at` in the past is accepted and means "due now".
+suffix; a date alone means midnight. An `at` in the past is accepted and
+means "due now". `minute(s)` and `hour(s)` are elapsed time, so `in 24
+hours` is always 24 hours.
+
+A wall time that a DST change skips moves forward by the size of the gap
+(`at 2027-03-28 01:30` in `Europe/London` is 02:30 BST). A wall time that
+occurs twice means the first of the two. A project with no `tz` uses the
+runner's local zone (`$TZ`, else `/etc/localtime`, else UTC).
+`wake_at` is stored in UTC and truncated to whole seconds.
 
 Rejected with the stage that adds them: `on <date>` and `every`
 (Stage 2), `wait` and `ask` (Stage 3).
