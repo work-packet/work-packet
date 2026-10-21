@@ -147,8 +147,8 @@ jobs:
         run: |
           python3 -m venv /tmp/testenv
           /tmp/testenv/bin/pip install -q --upgrade pip
-          /tmp/testenv/bin/pip install -q pytest
-          /tmp/testenv/bin/pip install -q "$(ls dist/*.whl)"
+          /tmp/testenv/bin/pip install -q pytest httpx
+          /tmp/testenv/bin/pip install -q "$(ls dist/*.whl)[dash]"
           /tmp/testenv/bin/python -m pytest -q
 
       - name: Upload distributions

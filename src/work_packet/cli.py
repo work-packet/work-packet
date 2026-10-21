@@ -198,6 +198,19 @@ def cmd_tick(args) -> int:
     return 0
 
 
+def cmd_dash(args) -> int:
+    try:
+        from .dash.app import serve
+    except ImportError as e:
+        return _err("wpk dash needs the dash extra: pip install 'work-packet[dash]' (%s)" % e)
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print("wpk: warning: the board has no login; %s exposes it beyond this machine"
+              % args.host, file=sys.stderr)
+    print("wpk dash: http://%s:%d/ (Ctrl-C to stop)" % (args.host, args.port), file=sys.stderr)
+    serve(args.host, args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wpk", description="work-packet")
     parser.add_argument("--version", action="version", version=f"wpk {__version__}")
@@ -263,6 +276,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="list what is due; run nothing")
     p.add_argument("--project", help="only this project")
     p.set_defaults(func=cmd_tick)
+
+    p = sub.add_parser("dash", help="serve the read-only web board on localhost",
+                       description="Serve the board: every registered project by state, "
+                       "with packet trees, timelines and step transcripts. Read-only, no "
+                       "login; reach it remotely through an SSH tunnel.")
+    p.add_argument("--host", default="127.0.0.1", help="address to bind (default 127.0.0.1)")
+    p.add_argument("--port", type=int, default=7878, help="port (default 7878)")
+    p.set_defaults(func=cmd_dash)
 
     p = sub.add_parser("step", help="run one step of a packet",
                        description="Run exactly one step. Exit status: 0 committed, "

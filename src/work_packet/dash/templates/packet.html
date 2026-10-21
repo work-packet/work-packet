@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ p.short }} · {{ e.name }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <code>{{ p.short }}</code>{% endblock %}
+{% block main %}
+<h1><code>{{ p.wpid }}</code>
+  {% if p.running %}<span class="state running pulse">RUNNING</span>{% endif %}
+  <span class="state {{ p.meta.state }}">{{ p.meta.state or "?" }}</span></h1>
+
+{% if p.running %}
+<div class="panel" style="margin-bottom:12px">Running step {{ p.running.step }}, attempt {{ p.running.attempt }},
+  since {{ p.running.since|when }}.
+  {% if p.steps and p.steps[0].outcome == "running" %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/{{ p.steps[0].dir }}">Watch its transcript</a>.{% endif %}</div>
+{% endif %}
+
+<div class="grid2">
+  <section>
+    <h2>Status</h2>
+    <dl class="kv panel">
+      {% for k, v in p.fields %}
+      <dt>{{ k }}</dt><dd>{% if k == "parent" and v %}<a href="/p/{{ e.name|urlencode }}/{{ v }}"><code>{{ v }}</code></a>{% elif v is none %}<span class="muted">-</span>{% elif k == "children" %}{{ v|length }}{% else %}{{ v }}{% endif %}</dd>
+      {% endfor %}
+      {% if p.next %}<dt>next</dt><dd>{{ p.next }}</dd>{% endif %}
+      <dt>directory</dt><dd><code>{{ p.path }}</code></dd>
+    </dl>
+    {% if p.summary %}<h2>Last summary</h2><pre>{{ p.summary }}</pre>{% endif %}
+    <h2>Next instruction (<code>memento.md</code>)</h2>
+    <pre>{{ p.memento }}</pre>
+  </section>
+  <section>
+    <h2>State files</h2>
+    {% if not p.files %}<p class="muted"><code>state/</code> is empty.</p>{% endif %}
+    {% for f in p.files %}
+    <details id="file-{{ loop.index }}" {{ "open" if loop.length <= 5 and f.text is not none and f.size < 2000 }}>
+      <summary><code>state/{{ f.rel }}</code> <span class="muted">{{ f.size }} bytes</span></summary>
+      {% if f.text is not none %}<pre>{{ f.text }}</pre>{% else %}<p class="muted">Binary or too large to show.</p>{% endif %}
+    </details>
+    {% endfor %}
+    {% if p.children %}
+    <h2>Children</h2>
+    <table>
+      <tr><th>Child</th><th>State</th><th class="num">Step</th><th>Last summary</th></tr>
+      {% for c in p.children %}
+      <tr><td><a href="/p/{{ e.name|urlencode }}/{{ c.wpid }}">{{ c.name or c.short }}</a></td>
+        <td><span class="state {{ c.state }}">{{ c.state }}</span></td><td class="num">{{ c.step }}</td><td>{{ c.summary }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </section>
+</div>
+
+<h2>Steps</h2>
+{% if p.steps %}
+<div class="wrap"><table>
+  <tr><th>Step</th><th>Outcome</th><th>Started</th><th class="num">Time</th><th class="num">Cost</th><th>Summary</th></tr>
+  {% for s in p.steps %}
+  <tr>
+    <td><a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/{{ s.dir }}">{{ s.n }}{% if s.outcome == "failed" %} attempt {{ s.attempt }}{% endif %}</a></td>
+    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span></td>
+    <td style="white-space:nowrap">{{ s.start|when }}</td>
+    <td class="num">{{ s.duration_s|secs }}</td>
+    <td class="num">{{ s.cost_usd|money }}</td>
+    <td>{% if s.why %}<span class="err">{{ s.why }}</span>{% else %}{{ s.summary }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<p class="muted">No steps yet.</p>
+{% endif %}
+
+<details id="journal">
+  <summary>Journal (last {{ p.journal|length }} records)</summary>
+  <div class="wrap"><table>
+    <tr><th>Time</th><th>Type</th><th>Step</th><th>Detail</th></tr>
+    {% for r in p.journal|reverse %}
+    <tr><td style="white-space:nowrap">{{ r.t }}</td><td>{{ r.type }}</td><td>{{ r.step if r.step is defined }}</td>
+      <td><code>{{ r|tojson }}</code></td></tr>
+    {% endfor %}
+  </table></div>
+</details>
+{% endblock %}

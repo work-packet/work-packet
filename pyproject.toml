@@ -24,6 +24,13 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 
+[project.optional-dependencies]
+dash = [
+    "starlette >= 0.37",
+    "jinja2 >= 3.1",
+    "uvicorn >= 0.29",
+]
+
 [project.scripts]
 wpk = "work_packet.cli:main"
 
@@ -37,7 +44,7 @@ version = {attr = "work_packet.__about__.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-work_packet = ["prompts/*.md"]
+work_packet = ["prompts/*.md", "dash/templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

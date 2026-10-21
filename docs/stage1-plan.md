@@ -1,8 +1,9 @@
 # Stage 1 build plan: a packet that survives `kill -9`
 
-Status (2026-10-21): M0–M7 done: every Stage 1 command exists and E1–E6 pass
-in CI against the fake model. Next: M8 (real use: E7 with live Haiku, then a
-week under cron for E8), which needs a person at the keyboard.
+Status (2026-10-21): M0–M7 and M9 done: every Stage 1 command exists, E1–E6
+pass in CI against the fake model, and `wpk dash` serves a read-only board.
+Next: M8 (real use: E7 with live Haiku, then a week under cron for E8), which
+needs a person at the keyboard.
 Status log is at the end. A fresh session should be able to resume from this
 file alone.
 
@@ -284,6 +285,7 @@ Exit codes: 0 committed, 1 attempt failed (retry later), 2 not runnable,
 | `wpk log <WPID> [--step N]` | The journal as a table; with `--step`, that step's summary, diff and meta |
 | `wpk pause <WPID\|project>` / `wpk resume …` | Set `PAUSED` (reason "by hand") or back to `RUNNABLE`, through the same commit path, with an `admin` journal line |
 | `wpk check [path]` | The schema checker: every packet under a project or the registry. Used by E6 |
+| `wpk dash [--host H] [--port P]` | M9: the read-only board on `127.0.0.1:7878`. Needs `pip install 'work-packet[dash]'` |
 
 `pause` and `resume` are in Stage 1 because they are the only safe way for a
 person to stop a runaway packet, and they are small.
@@ -317,6 +319,8 @@ src/work_packet/
   registry.py     WPK_HOME, config, projects/*.toml, WPID lookup
   project.py      new and adopt
   scheduler.py    tick
+  dash/data.py    M9: board, tree, timeline, packet and step views, read from the files
+  dash/app.py     M9: Starlette routes and Jinja rendering (`dash/templates/`)
 tests/
   conftest.py     temporary WPK_HOME, fake-model environment, tree normaliser
   fakemodel/fake_claude.py   stands in for `claude -p`
@@ -427,14 +431,15 @@ boxes as you go and add a line to the status log.
 - [ ] Notes on what the board and Stage 2 need, written to the roadmap
 - Exit: E8.
 
-### M9 (cut to Stage 2 if M8 runs late): read-only board
+### M9: read-only board (done 2026-10-21, ahead of M8)
 
-- [ ] `wpk dash` (`work-packet[dash]`: Starlette, Jinja2, uvicorn): board
+- [x] `wpk dash` (`work-packet[dash]`: Starlette, Jinja2, uvicorn): board
       with the columns from `docs/runner.md` that exist in Stage 1 (Running,
       Ready, Sleeping, Paused, Failed, Done), project page with the packet tree,
       step viewer with prompt, transcript, diff and meta. Refreshes every 10 s;
       server-sent events come in Stage 2.
-- Tests: every Stage 1 state lands in the right column, from fixture trees.
+- [x] Tests: every Stage 1 state lands in the right column, from fixture trees
+      (`tests/test_dash.py`).
 
 ## 9. Risks
 
@@ -627,3 +632,37 @@ now says to Read the `.pending/state/` copy only for a file it changes
 
 The calls that are left are one Read and one Edit or Write for the file it
 changes, plus Writes of `summary.md` and `memento.md`.
+
+### 2026-10-21: M9 done (the board)
+
+Done ahead of M8 so that real use can be watched. `wpk dash` (extra
+`work-packet[dash]`: Starlette, Jinja2, uvicorn) serves four pages, all
+read-only and read straight from the files:
+
+- **Board** (`/`): a card per project in Running, Ready, Sleeping, Paused,
+  Failed or Done. Running comes from a live `.lease` anywhere in the tree;
+  the others from the root's state. A card shows the next wake or the
+  reason, the root's last summary, per-state packet counts, spend (total
+  and today, from every `meta.json`, failed attempts included), and a
+  badge when a packet below the root has failed.
+- **Project** (`/p/<name>`): an SVG timeline with one row per packet and
+  one bar per step (green committed, red failed, pulsing teal running;
+  click a bar for the step), the packet tree with spawn names, and the 50
+  most recent steps.
+- **Packet** (`/p/<name>/<wpid>`): `status.md` fields, last summary,
+  `memento.md`, the `state/` files, children, every step including failed
+  attempts with their reason, and the journal.
+- **Step** (`/p/<name>/<wpid>/<NNNN[.failed-a]>`): meta (cost, tokens,
+  time), summary, the memento it wrote, `state.diff` coloured, the
+  transcript as blocks (model text, tool calls and results collapsible,
+  errors open, long results cut at 4000 characters), the prompt, stderr,
+  previous and next, and a copyable `claude --resume <id> --fork-session`.
+
+Pages refresh every 10 s by swapping `<main>` in place, so scroll position
+and open sections survive. A "live" button pauses it. A finished step's page
+does not refresh; a running one does, so its transcript can be watched as
+it grows. It binds to 127.0.0.1 and warns if `--host` is anything else.
+Checked by eye in headless Chrome against a demo home (every column, plus
+the live smoke project's real transcripts) at desktop and narrow widths.
+Not yet: buttons (Pause, Resume, Wake now), server-sent events, the
+Upcoming, Inbox and Spend views, and search; see `docs/runner.md`.

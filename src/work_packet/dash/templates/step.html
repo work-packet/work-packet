@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}step {{ s.label }} · {{ s.short }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <a href="/p/{{ e.name|urlencode }}/{{ s.wpid }}"><code>{{ s.short }}</code></a> / step {{ s.label }}{% endblock %}
+{% block head %}
+<style>
+.nav { display: flex; gap: 12px; margin-bottom: 12px; }
+.blk { border-left: 3px solid var(--line); padding: 2px 0 2px 10px; margin: 8px 0; }
+.blk.text { border-left-color: var(--link); }
+.blk.tool_use { border-left-color: var(--SLEEPING); }
+.blk.tool_result { border-left-color: var(--COMPLETED); }
+.blk.tool_result.error, .blk.result.error { border-left-color: var(--FAILED); }
+.blk.result { border-left-color: var(--running); }
+.blk .who { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+pre.diff { padding: 0; } pre.diff div { padding: 0 12px; }
+pre.diff .add { background: var(--add); } pre.diff .del { background: var(--del); }
+pre.diff .hunk { background: var(--hunk); color: var(--muted); }
+.copy { display: flex; gap: 8px; align-items: flex-start; }
+.copy pre { flex: 1; margin: 0; }
+</style>
+{% endblock %}
+{% block main %}
+<div class="nav">
+  {% if s.prev %}<a href="/p/{{ e.name|urlencode }}/{{ s.wpid }}/{{ s.prev }}">← previous</a>{% else %}<span class="muted">← previous</span>{% endif %}
+  {% if s.next %}<a href="/p/{{ e.name|urlencode }}/{{ s.wpid }}/{{ s.next }}">next →</a>{% else %}<span class="muted">next →</span>{% endif %}
+</div>
+<h1>Step {{ s.label }} <span class="state {{ s.info.outcome }}{{ ' pulse' if s.info.outcome == 'running' }}">{{ s.info.outcome }}</span></h1>
+{% if s.info.why %}<p class="err">{{ s.info.why }}</p>{% endif %}
+
+<div class="grid2">
+  <section>
+    <h2>Meta</h2>
+    {% if s.meta %}
+    <dl class="kv panel">
+      {% for k, v in s.meta.items() %}<dt>{{ k }}</dt><dd>{% if k == "tokens" and v is mapping %}{% for tk, tv in v.items() %}{{ tk }} {{ tv }}{{ ", " if not loop.last }}{% endfor %}{% elif k == "cost_usd" %}{{ v|money }}{% elif k == "duration_s" %}{{ v|secs }}{% else %}{{ v }}{% endif %}</dd>{% endfor %}
+    </dl>
+    {% else %}<p class="muted">No <code>meta.json</code> yet{% if s.info.outcome == "running" %}: the model is still running{% endif %}.</p>{% endif %}
+    {% if s.fork %}
+    <h2>Open in Claude Code</h2>
+    <div class="copy"><pre id="fork">{{ s.fork }}</pre>
+      <button type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(document.getElementById('fork').textContent)">Copy</button></div>
+    <p class="muted" style="font-size:12px">Forks the session, so the recorded history stays as it was.</p>
+    {% endif %}
+  </section>
+  <section>
+    {% if s.summary %}<h2>Summary</h2><pre>{{ s.summary }}</pre>{% endif %}
+    {% if s.result %}<h2>Memento it wrote</h2><pre>{{ s.result }}</pre>{% endif %}
+  </section>
+</div>
+
+<h2>State changes</h2>
+{% if s.diff is none %}<p class="muted">No <code>state.diff</code> (only committed steps have one).</p>
+{% elif not s.diff %}<p class="muted">No changes to <code>state/</code>.</p>
+{% else %}<pre class="diff">{% for kind, ln in s.diff %}<div class="{{ kind }}">{{ ln }}</div>{% endfor %}</pre>{% endif %}
+
+<h2>Transcript</h2>
+{% if not s.blocks %}<p class="muted">Empty so far.</p>{% endif %}
+{% for b in s.blocks %}
+  {% if b.kind == "tool_use" %}
+  <details id="b{{ loop.index }}" class="blk tool_use"><summary><span class="who">tool</span> <code>{{ b.name }}</code></summary><pre>{{ b.text }}</pre></details>
+  {% elif b.kind == "tool_result" %}
+  <details id="b{{ loop.index }}" class="blk tool_result {{ 'error' if b.error }}" {{ "open" if b.error }}><summary><span class="who">{{ "error" if b.error else "result" }}</span> <span class="muted">{{ b.text.splitlines()[0][:100] if b.text else "(empty)" }}</span></summary><pre>{{ b.text }}</pre></details>
+  {% elif b.kind == "thinking" %}
+  <details id="b{{ loop.index }}" class="blk"><summary><span class="who">thinking</span></summary><pre>{{ b.text }}</pre></details>
+  {% elif b.kind == "init" or b.kind == "result" %}
+  <div class="blk {{ b.kind }} {{ 'error' if b.error }}"><span class="who">{{ "session" if b.kind == "init" else "end" }}</span> <span class="muted">{{ b.text }}</span></div>
+  {% else %}
+  <div class="blk text"><span class="who">model</span><pre>{{ b.text }}</pre></div>
+  {% endif %}
+{% endfor %}
+
+<details id="prompt"><summary>Prompt as sent</summary><pre>{{ s.prompt or "(missing)" }}</pre></details>
+{% if s.stderr %}<details id="stderr"><summary>stderr</summary><pre>{{ s.stderr }}</pre></details>{% endif %}
+{% endblock %}

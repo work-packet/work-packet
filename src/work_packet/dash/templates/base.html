@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}work-packet{% endblock %} · wpk dash</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #667085; --line: #dde1e8;
+  --code: #f1f3f6; --link: #2457c5;
+  --RUNNABLE: #2f6fdf; --SLEEPING: #7a52c7; --PAUSED: #b7791f; --FAILED: #c53030;
+  --COMPLETED: #2f855a; --running: #0b8a9a; --unknown: #888;
+  --add: #e6f4ea; --del: #fce8e6; --hunk: #e8eefc;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --panel: #1b1f27; --ink: #e3e6ec; --muted: #949bab; --line: #2c323d;
+    --code: #232833; --link: #7fa7ff;
+    --RUNNABLE: #6f9cff; --SLEEPING: #a98be8; --PAUSED: #e0a84a; --FAILED: #f07373;
+    --COMPLETED: #5fc28f; --running: #39c3d3; --unknown: #999;
+    --add: #1d3324; --del: #3a2022; --hunk: #1f2940;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+header .brand { font-weight: 700; }
+header .crumbs { flex: 1; color: var(--muted); }
+header .crumbs a { color: var(--ink); }
+#live { font-size: 12px; color: var(--muted); cursor: pointer; border: 1px solid var(--line);
+  border-radius: 10px; padding: 1px 8px; background: none; }
+main { padding: 16px; max-width: 1600px; margin: 0 auto; }
+@media (max-width: 640px) { header .ver { display: none; } }
+h1 { font-size: 20px; margin: 0 0 12px; }
+h2 { font-size: 15px; margin: 22px 0 8px; }
+.muted { color: var(--muted); }
+code, pre { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+pre { background: var(--code); padding: 10px 12px; border-radius: 6px; overflow-x: auto;
+  white-space: pre-wrap; word-break: break-word; margin: 6px 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px 14px; }
+table { border-collapse: collapse; width: 100%; background: var(--panel); }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line);
+  vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; }
+td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wrap { overflow-x: auto; }
+.state { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .03em;
+  padding: 1px 7px; border-radius: 9px; color: #fff; background: var(--unknown); }
+.state.RUNNABLE { background: var(--RUNNABLE); } .state.SLEEPING { background: var(--SLEEPING); }
+.state.PAUSED { background: var(--PAUSED); } .state.FAILED { background: var(--FAILED); }
+.state.COMPLETED { background: var(--COMPLETED); } .state.running { background: var(--running); }
+.state.committed { background: var(--COMPLETED); } .state.failed { background: var(--FAILED); }
+.pulse { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+details { margin: 6px 0; }
+summary { cursor: pointer; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 14px; margin: 0; }
+dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; word-break: break-word; }
+.err { color: var(--FAILED); }
+</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+<header>
+  <a class="brand" href="/">wpk dash</a>
+  <span class="crumbs">{% block crumbs %}{% endblock %}</span>
+  {% if live %}<button id="live" type="button" title="Refresh every {{ refresh_s }} s">live</button>{% endif %}
+  <span class="muted ver" style="font-size:12px">work-packet {{ version }}</span>
+</header>
+<main id="main">{% block main %}{% endblock %}</main>
+{% if live %}
+<script>
+// Refresh by swapping <main> in place, so scroll position and open <details> survive.
+(function () {
+  var btn = document.getElementById("live"), on = true;
+  try { on = localStorage.getItem("wpk-live") !== "off"; } catch (e) {}
+  function show() { btn.textContent = on ? "live" : "paused"; btn.style.opacity = on ? 1 : .6; }
+  btn.onclick = function () { on = !on; try { localStorage.setItem("wpk-live", on ? "on" : "off"); } catch (e) {} show(); };
+  show();
+  setInterval(function () {
+    if (!on || document.hidden) return;
+    fetch(location.href, {cache: "no-store"}).then(function (r) { return r.text(); }).then(function (html) {
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      var next = doc.getElementById("main"); if (!next) return;
+      var open = {};
+      document.querySelectorAll("#main details[id]").forEach(function (d) { open[d.id] = d.open; });
+      document.getElementById("main").innerHTML = next.innerHTML;
+      document.querySelectorAll("#main details[id]").forEach(function (d) { if (d.id in open) d.open = open[d.id]; });
+      document.title = doc.title;
+    }).catch(function () {});
+  }, {{ refresh_s * 1000 }});
+})();
+</script>
+{% endif %}
+</body>
+</html>

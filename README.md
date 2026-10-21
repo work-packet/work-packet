@@ -8,8 +8,9 @@ step. A small deterministic executor (`wpk`) runs one step at a time with
 next: now, in ten days, or every Monday.
 
 Status: pre-alpha. The Stage 1 commands work against a fake model in the
-test suite; they have not yet been run against the real `claude` (that is
-M8 in `docs/stage1-plan.md`).
+test suite, and short projects have run end to end against the real
+`claude` with Haiku. A week of real use is next (M8 in
+`docs/stage1-plan.md`).
 
 ```bash
 wpk new count-demo --prompt "Increment state/count.md until it reaches 8, then spawn a child that writes Hello World"
@@ -17,6 +18,7 @@ wpk tick --until-idle      # or from cron: */5 * * * * wpk tick -j 2
 wpk ps                     # what is running, sleeping, paused or failed
 wpk log count-demo         # the root packet's journal; --step N for one step
 wpk check                  # validate everything against docs/spec.md
+wpk dash                   # the board at http://127.0.0.1:7878/ (pip install 'work-packet[dash]')
 ```
 
 Also: `wpk step`, `recover`, `show`, `pause`, `resume`, `adopt` and `rm`.
@@ -35,7 +37,7 @@ Also: `wpk step`, `recover`, `show`, `pause`, `resume`, `adopt` and `rm`.
 ## Development
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -e . pytest
+python3 -m venv .venv && .venv/bin/pip install -e '.[dash]' pytest httpx
 .venv/bin/pytest -q
 ```
 
