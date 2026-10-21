@@ -1,0 +1,1 @@
+Write '6789' to log2.out every 2 seconds for 3 iterations

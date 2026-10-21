@@ -1,0 +1,207 @@
+# work-packet/work-packet -- GitHub Actions.
+#
+# COPY THIS AS A PAIR. Its counterpart is .forgejo/workflows/ci.yml, from
+# templates/ci.forgejo.yml. If .forgejo/workflows/ is absent the Forgejo runner
+# falls back to running THIS FILE, under a runner with a different Python, no
+# third-party actions, and no arbitration about which forge ships a release.
+# See templates/README.md.
+#
+# Replace every @PLACEHOLDER@. Grep for '@' when you are done.
+#
+# ---------------------------------------------------------------------------
+# DECISION, 2026-08-30: publish jobs FAIL CLOSED on an unreachable switch.
+#
+# Recorded here as a decision taken on this date, with its reasoning, rather
+# than as an inheritance from the reference implementation -- this file is
+# copied into ~57 repositories and the next person to read one needs to know it
+# was chosen.
+#
+# If https://dvkit.org/.well-known/release-authority.json cannot be fetched ON A
+# TAG, the gate fails and nothing publishes. The alternative is a release going
+# to whichever forge happens to guess, and on the Marketplace or npm a version
+# can be yanked but never reused. A release blocked by an outage is
+# recoverable; a release published twice from two forges is not.
+# ---------------------------------------------------------------------------
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------- gate ----
+  gate:
+    # Release master switch. ONE file, above both platforms, decides who
+    # releases this repo. Generated from sync-policy.toml by
+    # `git-sync emit-release-authority` and published by the cycle that reads
+    # that policy, so GitHub and Forgejo cannot drift -- there is only one copy
+    # for them to disagree about.
+    #
+    # The runner only READS it, over plain HTTPS with no credential: a workflow
+    # file is public and editable by anyone who can push, so nothing secret
+    # goes in one.
+    #
+    # THIS IS A SEPARATE JOB AND HAS TO BE. `if:` on a job cannot reference a
+    # step in its own job, so the switch is resolved here and consumed through
+    # needs.gate.outputs.authority. This is the thing people try to simplify.
+    name: Release authority
+    runs-on: ubuntu-latest
+    outputs:
+      authority: ${{ steps.resolve.outputs.authority }}
+    steps:
+      - id: resolve
+        # The resolver is one line on purpose. A multi-line `python3 -c` script
+        # has to start at column 0, which terminates the YAML block scalar and
+        # silently corrupts the workflow.
+        run: |
+          url=https://dvkit.org/.well-known/release-authority.json
+          if ! body=$(curl -fsS --max-time 10 "$url"); then
+            # Fail CLOSED, but only make noise when a release was actually due:
+            # a red build on every branch push during a dvkit.org outage would
+            # train people to ignore the signal.
+            case "$GITHUB_REF" in
+              refs/tags/v*)
+                echo "::error::release-authority switch unreachable; refusing to publish"
+                exit 1 ;;
+              *)
+                echo "authority=none" >> "$GITHUB_OUTPUT"
+                echo "switch unreachable on a non-tag ref; nothing to release"
+                exit 0 ;;
+            esac
+          fi
+          auth=$(printf '%s' "$body" | python3 -c 'import json,os,sys; d=json.load(sys.stdin); r=os.environ["GITHUB_REPOSITORY"]; print(d["repos"].get(r) or d["orgs"].get(r.split("/")[0]) or d["default"])')
+          echo "release authority for $GITHUB_REPOSITORY: $auth"
+          echo "authority=$auth" >> "$GITHUB_OUTPUT"
+
+  # --------------------------------------------------------------- build ----
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Stamp the build version
+        # Tag builds keep the clean number. EVERYTHING ELSE gets a PEP 440
+        # local version segment, which PyPI rejects outright -- so an accidental
+        # upload of a CI artifact fails at the tool rather than succeeding
+        # quietly. See templates/README.md for why `.dev` and not a bare
+        # `.<run-id>`, and why the platform tag is not optional.
+        #
+        #   0.0.5.dev33020374597+gh.g7775f37
+        #
+        # EDIT ME: point the sed at however this project stores its version.
+        # The pattern below matches the __about__.py SUFFIX convention used by
+        # featherweight-hdl/peakrdl-fw-hdl.
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              echo "tag build -- leaving the version clean"
+              ;;
+            *)
+              stamp=".dev${GITHUB_RUN_ID}+gh.g$(git rev-parse --short=7 HEAD)"
+              echo "stamping $stamp"
+              sed -i 's/^SUFFIX = ""$/SUFFIX = "'"$stamp"'"/' src/work_packet/__about__.py
+              ;;
+          esac
+          grep -n 'SUFFIX' src/work_packet/__about__.py || true
+
+      - name: Build
+        run: |
+          pip install --upgrade pip build twine
+          rm -rf dist/
+          python -m build
+          twine check dist/*
+          ls -la dist/
+
+      - name: Test
+        run: |
+          pip install pytest
+          pip install "$(ls dist/*.whl)"
+          pytest -q
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-work-packet
+          path: dist/*
+          if-no-files-found: error
+
+  # ------------------------------------------------------------- publish ----
+  publish:
+    name: Publish to PyPI
+    # Two conditions, and both matter:
+    #   * a TAG -- a push to a branch never releases anything. This is what
+    #     makes the 5-minute sync safe: mirroring your work cannot ship it.
+    #   * the switch names THIS forge.
+    #
+    # SKIPS -- does not fail -- when the switch names the other side. A red
+    # build on the dormant side every time anyone tags would train people to
+    # ignore the signal, which is worse than no signal.
+    if: startsWith(github.ref, 'refs/tags/v') && needs.gate.outputs.authority == 'github'
+    needs: [gate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-work-packet
+          path: dist
+
+      - name: Check the tag IS the version
+        # REQUIRED, not optional. With the dev-build publish stream deleted
+        # there is no fallback: the tag alone determines the published version.
+        # This is what stops v0.1.0 being tagged while the source still says
+        # 0.0.1 -- which would publish under the wrong number, unfixably,
+        # because a PyPI version can be yanked but never reused.
+        #
+        # Asserts twice on purpose: the SOURCE agrees with the tag, and the
+        # BUILT ARTIFACTS agree with the source. A build that read a stale
+        # version file passes the first check and fails the second.
+        #
+        # EDIT ME: the extractor must match src/work_packet/__about__.py.
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          base=$(python3 -c "import ast,re; s=open('src/work_packet/__about__.py').read(); print('.'.join(str(n) for n in ast.literal_eval(re.search(r'^version_info = (.*)$', s, re.M).group(1))))")
+          echo "tag=$tag  source=$base"
+          if [ "$tag" != "$base" ]; then
+            echo "::error::tag v$tag does not match version $base in src/work_packet/__about__.py"
+            exit 1
+          fi
+          for f in dist/*; do
+            case "$(basename "$f")" in
+              work_packet-${base}-*.whl|work_packet-${base}.tar.gz) ;;
+              *) echo "::error::artifact $(basename "$f") is not version ${base}"; exit 1 ;;
+            esac
+          done
+          echo "OK: tag, source version and every artifact agree on ${base}"
+
+      - name: Publish
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "::error::PYPI_API_TOKEN is not visible to this repository"
+            exit 1
+          fi
+          pip install --upgrade twine
+          twine check dist/*
+          # Idempotence net: with one switch and two possible publishers, a
+          # double-fire must be a no-op rather than a failure or a corruption.
+          twine upload --non-interactive --skip-existing dist/*

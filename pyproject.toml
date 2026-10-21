@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "work-packet"
+dynamic = ["version"]
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml >= 6",
+    "tomli >= 2; python_version < '3.11'",
+    "tomli-w >= 1",
+]
+authors = [
+    {name="Matthew Ballance"},
+]
+description = "Agents as processes: resumable LLM work packets with durable state on disk"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.scripts]
+wpk = "work_packet.cli:main"
+
+[project.urls]
+Source = "https://github.com/work-packet/work-packet"
+
+[tool.setuptools.dynamic]
+version = {attr = "work_packet.__about__.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: calls the real claude CLI (skipped unless WPK_LIVE=1)"]

@@ -1,0 +1,219 @@
+# work-packet/work-packet -- Forgejo Actions.
+#
+# COPY THIS AS A PAIR. Its counterpart is .github/workflows/ci.yml, from
+# templates/ci.github.yml. The two are near-identical and differ in exactly two
+# things: the `authority ==` comparison, and the runner constraints below.
+# If you are changing anything else, they are drifting.
+#
+# Replace every @PLACEHOLDER@. Grep for '@' when you are done.
+#
+# ---------------------------------------------------------------------------
+# DECISION, 2026-08-30: publish jobs FAIL CLOSED on an unreachable switch.
+#
+# Recorded here as a decision taken on this date, with its reasoning, rather
+# than as an inheritance from the reference implementation -- this file is
+# copied into ~57 repositories and the next person to read one needs to know it
+# was chosen.
+#
+# If https://dvkit.org/.well-known/release-authority.json cannot be fetched ON A
+# TAG, the gate fails and nothing publishes. The alternative is a release going
+# to whichever forge happens to guess, and on the Marketplace or npm a version
+# can be yanked but never reused. A release blocked by an outage is
+# recoverable; a release published twice from two forges is not.
+# ---------------------------------------------------------------------------
+#
+# FORGEJO RUNNER CONSTRAINTS -- all measured on this instance, not assumed.
+# `runs-on: ubuntu-latest` maps to catthehacker/ubuntu:act-22.04.
+#
+#   * Python is 3.10, and pip is 22.0.2 -- which PREDATES PEP 660, so
+#     `pip install -e .` fails outright on a pyproject-only project. Build a
+#     wheel and install that; it is also the more honest test, because what is
+#     tested is then what would ship.
+#   * `python` unqualified DOES NOT EXIST. Use python3.
+#   * NO THIRD-PARTY ACTIONS. A bare `uses:` resolves against code.forgejo.org
+#     (Forgejo's DEFAULT_ACTIONS_URL), not github.com -- so actions/setup-python,
+#     actions/setup-node and pypa/gh-action-pypi-publish are unavailable.
+#     Publishing is plain twine, which also keeps GitHub off the critical path
+#     of a release. actions/checkout and forgejo/upload-artifact DO resolve.
+#
+# Trial-run any step you add before landing it:
+#   docker run --rm -v "$PWD:/w" -w /w catthehacker/ubuntu:act-22.04 bash -c '<steps>'
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------- gate ----
+  gate:
+    # Release master switch. Identical to the GitHub side except for what the
+    # publish job compares the answer against. See templates/ci.github.yml for
+    # the full reasoning; the short version is that `if:` on a job cannot
+    # reference a step in its own job, so the switch is resolved here and
+    # consumed through needs.gate.outputs.authority.
+    name: Release authority
+    runs-on: ubuntu-latest
+    outputs:
+      authority: ${{ steps.resolve.outputs.authority }}
+    steps:
+      - id: resolve
+        # One line on purpose: a multi-line `python3 -c` has to start at column
+        # 0, which terminates the YAML block scalar and silently corrupts the
+        # workflow.
+        run: |
+          url=https://dvkit.org/.well-known/release-authority.json
+          if ! body=$(curl -fsS --max-time 10 "$url"); then
+            case "$GITHUB_REF" in
+              refs/tags/v*)
+                echo "::error::release-authority switch unreachable; refusing to publish"
+                exit 1 ;;
+              *)
+                echo "authority=none" >> "$GITHUB_OUTPUT"
+                echo "switch unreachable on a non-tag ref; nothing to release"
+                exit 0 ;;
+            esac
+          fi
+          auth=$(printf '%s' "$body" | python3 -c 'import json,os,sys; d=json.load(sys.stdin); r=os.environ["GITHUB_REPOSITORY"]; print(d["repos"].get(r) or d["orgs"].get(r.split("/")[0]) or d["default"])')
+          echo "release authority for $GITHUB_REPOSITORY: $auth"
+          echo "authority=$auth" >> "$GITHUB_OUTPUT"
+
+  # --------------------------------------------------------------- build ----
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for internal identifiers in tracked files
+        # This repo is published to git.dvkit.org, so anything committed here is
+        # public. Internal host names, tailnet addresses and CGNAT-range IPs
+        # must not appear in tracked files -- if a build ever needs one, it
+        # belongs in a repository secret, which is masked in logs.
+        run: |
+          pattern='perch-char\.ts\.net|\.ts\.net|a9550|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+'
+          if git grep -nIE "$pattern" -- . ':!.forgejo/workflows/ci.yml' ; then
+            echo "::error::internal identifier found in a tracked file (see matches above)"
+            exit 1
+          fi
+          echo "OK: no internal identifiers in tracked files"
+
+      - name: Stamp the build version
+        # Tag builds keep the clean number. Everything else gets a PEP 440
+        # local version segment, which PyPI rejects outright.
+        #
+        #   0.0.5.dev12+fj.g7775f37
+        #            │   └─ WHICH FORGE. $GITHUB_RUN_ID is NOT unique across
+        #            │      them: GitHub's is an 11-digit global counter,
+        #            │      Forgejo's is a per-repo index (max 146 on this whole
+        #            │      instance) that restarts if the instance is rebuilt.
+        #            │      Without the platform tag the two collide.
+        #            └───── the CI run
+        #
+        # EDIT ME: point the sed at however this project stores its version.
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/*)
+              echo "tag build -- leaving the version clean"
+              ;;
+            *)
+              stamp=".dev${GITHUB_RUN_ID}+fj.g$(git rev-parse --short=7 HEAD)"
+              echo "stamping $stamp"
+              sed -i 's/^SUFFIX = ""$/SUFFIX = "'"$stamp"'"/' src/work_packet/__about__.py
+              ;;
+          esac
+          grep -n 'SUFFIX' src/work_packet/__about__.py || true
+
+      - name: Build sdist and wheel
+        # A venv rather than the system interpreter: the image's pip is 22.0.2
+        # and predates PEP 660, so an editable install fails on a pyproject-only
+        # project. Upgrading pip inside a venv is cheap and keeps the image's
+        # own python untouched.
+        run: |
+          python3 -m venv /tmp/buildenv
+          /tmp/buildenv/bin/pip install -q --upgrade pip build twine
+          rm -rf dist/
+          /tmp/buildenv/bin/python -m build .
+          /tmp/buildenv/bin/twine check dist/*
+          ls -la dist/
+
+      - name: Test against the built wheel
+        # Against the wheel, not the source tree: what is tested has to be what
+        # would ship.
+        run: |
+          python3 -m venv /tmp/testenv
+          /tmp/testenv/bin/pip install -q --upgrade pip
+          /tmp/testenv/bin/pip install -q pytest
+          /tmp/testenv/bin/pip install -q "$(ls dist/*.whl)"
+          /tmp/testenv/bin/python -m pytest -q
+
+      - name: Upload distributions
+        uses: forgejo/upload-artifact@v4
+        with:
+          name: dist-work-packet
+          path: dist/*
+          if-no-files-found: error
+
+  # ------------------------------------------------------------- publish ----
+  publish-pypi:
+    # A TAG, and the switch naming THIS forge. A push to a branch never
+    # releases anything -- that is what makes the 5-minute sync safe.
+    #
+    # SKIPS -- does not fail -- when the switch names GitHub.
+    if: startsWith(github.ref, 'refs/tags/v') && needs.gate.outputs.authority == 'forgejo'
+    needs: [gate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download distributions
+        uses: forgejo/download-artifact@v4
+        with:
+          name: dist-work-packet
+          path: dist
+
+      - name: Check the tag IS the version
+        # REQUIRED, not optional. With the dev-build publish stream deleted
+        # there is no fallback: the tag alone determines the published version.
+        # Asserts the SOURCE agrees with the tag AND that the built artifacts
+        # agree with the source -- a build that read a stale version file
+        # passes the first and fails the second.
+        #
+        # EDIT ME: the extractor must match src/work_packet/__about__.py.
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          base=$(python3 -c "import ast,re; s=open('src/work_packet/__about__.py').read(); print('.'.join(str(n) for n in ast.literal_eval(re.search(r'^version_info = (.*)$', s, re.M).group(1))))")
+          echo "tag=$tag  source=$base"
+          if [ "$tag" != "$base" ]; then
+            echo "::error::tag v$tag does not match version $base in src/work_packet/__about__.py"
+            exit 1
+          fi
+          for f in dist/*; do
+            case "$(basename "$f")" in
+              work_packet-${base}-*.whl|work_packet-${base}.tar.gz) ;;
+              *) echo "::error::artifact $(basename "$f") is not version ${base}"; exit 1 ;;
+            esac
+          done
+          echo "OK: tag, source version and every artifact agree on ${base}"
+
+      - name: Publish to PyPI
+        # Plain twine rather than a third-party action -- which is not available
+        # here anyway, and which would also put GitHub on the critical path of a
+        # release. PYPI_API_TOKEN is a repository or organization secret.
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "::error::PYPI_API_TOKEN is not visible to this repository"
+            exit 1
+          fi
+          python3 -m venv /tmp/twineenv
+          /tmp/twineenv/bin/pip install -q --upgrade pip twine
+          /tmp/twineenv/bin/twine check dist/*
+          /tmp/twineenv/bin/twine upload --non-interactive --skip-existing dist/*
+          echo "published $(ls dist/ | wc -l) artifact(s)"
