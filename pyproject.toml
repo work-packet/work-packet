@@ -36,6 +36,9 @@ version = {attr = "work_packet.__about__.__version__"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+work_packet = ["prompts/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["live: calls the real claude CLI (skipped unless WPK_LIVE=1)"]

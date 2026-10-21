@@ -27,6 +27,21 @@ def cmd_check(args) -> int:
     return 0
 
 
+def _outcome(out) -> int:
+    print("wpk: %s" % out.msg, file=sys.stderr)
+    return out.code
+
+
+def cmd_step(args) -> int:
+    from . import executor
+    return _outcome(executor.step(args.target, force=args.force))
+
+
+def cmd_recover(args) -> int:
+    from . import executor
+    return _outcome(executor.recover(args.target))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wpk", description="work-packet")
     parser.add_argument("--version", action="version", version=f"wpk {__version__}")
@@ -40,6 +55,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict", action="store_true", help="fail on warnings too")
     p.add_argument("-q", "--quiet", action="store_true", help="print errors only")
     p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("step", help="run one step of a packet",
+                       description="Run exactly one step. Exit status: 0 committed, "
+                       "1 attempt failed, 2 not runnable, 3 lease held, 4 usage error.")
+    p.add_argument("target", help="packet directory, or project directory for its root")
+    p.add_argument("--force", action="store_true",
+                   help="run even if the packet is not due or not RUNNABLE")
+    p.set_defaults(func=cmd_step)
+
+    p = sub.add_parser("recover", help="finish or clean up a crashed step; run no model")
+    p.add_argument("target", help="packet directory, or project directory for its root")
+    p.set_defaults(func=cmd_recover)
     return parser
 
 

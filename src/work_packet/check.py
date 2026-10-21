@@ -2,11 +2,11 @@
 
 import json
 import os
-import socket
 from dataclasses import dataclass
 from typing import Optional
 
-from . import clock, frontmatter, schema
+from . import frontmatter, journal, schema
+from . import lease as lease_mod
 from .packet import Packet
 
 try:
@@ -76,22 +76,7 @@ def _load_fm(path, rep):
         return None
 
 
-def lease_is_stale(lease, now=None):
-    """True if a parsed .lease has expired or names a dead PID on this host."""
-    now = now or clock.now()
-    try:
-        if schema.parse_timestamp(lease["expires"]) <= now:
-            return True
-    except (KeyError, TypeError, ValueError):
-        return True
-    if lease.get("host") == socket.gethostname():
-        try:
-            os.kill(int(lease["pid"]), 0)
-        except ProcessLookupError:
-            return True
-        except (PermissionError, KeyError, TypeError, ValueError):
-            pass
-    return False
+lease_is_stale = lease_mod.is_stale
 
 
 def _check_lease(pkt, rep):
@@ -200,8 +185,13 @@ def check_packet(path, project=None, rep=None):
     pkt = Packet(path)
     if not schema.is_wpid(pkt.wpid):
         rep.add(pkt.path, None, "directory name is not a WPID")
+    records = pkt.journal().records
+    committing = journal.unfinished_commit(records) is not None
+    pending_kids = journal.pending_children(records)
     for e in REQUIRED_ENTRIES:
         if not os.path.lexists(os.path.join(pkt.path, e)):
+            if e == "state" and committing and os.path.isdir(pkt.state_old_dir):
+                continue        # mid state swap; the journal warning covers it
             rep.add(os.path.join(pkt.path, e), None, "missing")
     for e in sorted(os.listdir(pkt.path)):
         if e not in KNOWN_ENTRIES:
@@ -252,7 +242,7 @@ def check_packet(path, project=None, rep=None):
         for c in sorted(listed - set(links)):
             rep.add(os.path.join(pkt.children_dir, c), None,
                     "child listed in status.md has no link")
-        for c in sorted(set(links) - listed):
+        for c in sorted(set(links) - listed - pending_kids):
             rep.add(os.path.join(pkt.children_dir, c), None,
                     "link for a child not listed in status.md")
         for c, target in links.items():
@@ -309,7 +299,9 @@ def check_project(path, rep=None):
         if par is not None:
             if par not in statuses:
                 rep.add(sp, "parent", "parent %s does not exist in this project" % par)
-            elif w not in (statuses[par].get("children") or []):
+            elif w not in (statuses[par].get("children") or []) and \
+                    w not in journal.pending_children(
+                        Packet(os.path.join(pdir, par)).journal().records):
                 rep.add(sp, "parent", "parent %s does not list this packet as a child" % par)
         for c in s.get("children") or []:
             if c not in statuses:

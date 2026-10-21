@@ -98,3 +98,28 @@ def make_project(base, name="demo", steps=0, spawn_at=None):
 def project(tmp_path):
     """A project whose root has run 3 steps and spawned one child at step 2."""
     return make_project(tmp_path, steps=3, spawn_at=2)
+
+
+FAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fakemodel", "fake_claude.py")
+
+
+@pytest.fixture
+def fake(monkeypatch, tmp_path):
+    """The fake model and an empty runner home. Returns a setter for behaviour and fault."""
+    import shlex
+    import sys
+    monkeypatch.setenv("WPK_CLAUDE", "%s %s" % (shlex.quote(sys.executable), shlex.quote(FAKE)))
+    monkeypatch.setenv("WPK_HOME", str(tmp_path / "wpk-home"))
+    monkeypatch.setenv("WPK_NOW", NOW)
+    monkeypatch.delenv("WPK_FAULT_AT", raising=False)
+    monkeypatch.setenv("WPK_FAKE_BEHAVIOR", "add_one")
+    monkeypatch.delenv("WPK_FAKE_FAULT", raising=False)
+
+    def use(behavior=None, fault=None):
+        if behavior is not None:
+            monkeypatch.setenv("WPK_FAKE_BEHAVIOR", behavior)
+        if fault:
+            monkeypatch.setenv("WPK_FAKE_FAULT", fault)
+        else:
+            monkeypatch.delenv("WPK_FAKE_FAULT", raising=False)
+    return use

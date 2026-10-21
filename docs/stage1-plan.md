@@ -1,7 +1,8 @@
 # Stage 1 build plan: a packet that survives `kill -9`
 
-Status (2026-10-21): M0–M2 done (repo, CI pair, spec v0.2, `wpk check`, resume resolution).
-Next: M3 (executor core).
+Status (2026-10-21): M0–M5 done (repo, CI pair, spec v0.2, `wpk check`, resume
+resolution, `wpk step`/`wpk recover`, spawn, crash safety). Next: M6 (projects
+and the registry).
 Status log is at the end. A fresh session should be able to resume from this
 file alone.
 
@@ -375,24 +376,24 @@ boxes as you go and add a line to the status log.
 - Tests: each form; DST change in the project zone; `in 10 days` across a
   month end; rejected later-stage forms name their stage.
 
-### M3: Executor core (`wpk step`, `wpk recover`)
+### M3: Executor core (`wpk step`, `wpk recover`) (done 2026-10-21)
 
-- [ ] `journal.py`, `lease.py`, `prompt.py` + `prompts/step.md`, `model.py`
-- [ ] `executor.py` §4 without spawn; `steps/NNNN/` capture
-- [ ] Fake model with `add_one` and the fault behaviours
-- Tests: one step commits and captures all six files; each fake fault gives
+- [x] `journal.py`, `lease.py`, `prompt.py` + `prompts/step.md`, `model.py`
+- [x] `executor.py` §4; `steps/NNNN/` capture (seven files, spec §4.4)
+- [x] Fake model with `add_one` and the fault behaviours
+- Tests: one step commits and captures every file; each fake fault gives
   `step-failed` and `attempts + 1`; three failures give `FAILED`; a live lease
   gives exit 3; a stale lease is cleared; E3.
 
-### M4: Spawn
+### M4: Spawn (done 2026-10-21)
 
-- [ ] `spawn.py`; children table in the prompt
+- [x] `spawn.py`; children table in the prompt
 - Tests: deterministic WPIDs; `copy` globs; a retried commit creates no second
   child; E1.
 
-### M5: Crash safety
+### M5: Crash safety (done 2026-10-21)
 
-- [ ] `faults.py`; roll-forward; `steps/NNNN.failed-<a>` handling
+- [x] `faults.py`; roll-forward; `steps/NNNN.failed-<a>` handling
 - Tests: E2 for every fault point; an external `SIGKILL` at a random time.
 
 ### M6: Projects and the registry
@@ -487,3 +488,39 @@ one takes the first occurrence (both `fold=0`); this rule is now in spec
 27 new tests (London and New York DST in both directions, month and year
 ends, explicit offsets, sub-second truncation, later-stage rejections);
 174 in all.
+
+### 2026-10-21: M3, M4 and M5 done
+
+`wpk step <dir>` and `wpk recover <dir>` work end to end with the fake
+model (`tests/fakemodel/`). The target is a packet or project directory for
+now; WPID prefixes and project names come with the registry in M6. New
+modules: `lease`, `model`, `prompt` (+ `prompts/step.md`), `executor`,
+`spawn`, `faults`, `tomlio`, and the settings half of `registry` and
+`project` (defaults, then `config.toml`, then `project.toml`).
+
+Decisions made while building:
+
+- **E3 restores, not just rejects.** The executor keeps an in-memory copy of
+  the committed files (status, memento, journal, `state/`, `children/`,
+  `identity/`) taken after `step-start`. If the model changed any of them,
+  they are put back byte for byte before `step-failed` is written.
+- **The last allowed failure sets `FAILED` at once**, with the reason, rather
+  than waiting for the next `wpk step` to notice.
+- **Recovery sets `attempts` to the crashed attempt's number** instead of
+  adding one, so recovering twice cannot double-count. A failed attempt
+  writes `status.md` before `step-failed` for the same reason.
+- **`state.diff` is made in Python** (difflib), so the executor does not need
+  `diff` on the host.
+- **Fault points take `<point>@<step>`**, e.g. `WPK_FAULT_AT=mid-spawn@8`.
+  E2 kills at step 8, the step that spawns, so `mid-spawn` is exercised.
+- **The checker allows a half-done commit.** While the journal has an
+  unfinished `commit-begin`, a child link or a parent's missing listing for
+  a child that commit is creating, and `state/` missing during the swap, are
+  covered by the "unfinished commit" warning instead of being errors.
+- **Recovery removes `.tmp-*` files** that a killed `atomic_write` leaves.
+- Python 3.10's `fromisoformat` takes only 3 or 6 fraction digits;
+  `clock.parse_iso` pads the fraction (found by the runner-image trial).
+
+E1 (fake model), E2 (all eight fault points plus random external kills),
+E3 and E4 pass. 208 tests, green on 3.12 locally and 3.10 in the runner
+image.

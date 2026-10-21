@@ -46,3 +46,24 @@ def read(path):
             continue
         j.records.append(rec)
     return j
+
+
+def unfinished_commit(records):
+    """The last ``commit-begin`` with no ``commit-end`` after it, or None."""
+    begin = None
+    for r in records:
+        t = r.get("type") if isinstance(r, dict) else None
+        if t == "commit-begin":
+            begin = r
+        elif t == "commit-end" and begin is not None and r.get("step") == begin.get("step"):
+            begin = None
+    return begin
+
+
+def pending_children(records):
+    """WPIDs that an unfinished commit is creating: allowed to be half-linked."""
+    begin = unfinished_commit(records)
+    try:
+        return {e["wpid"] for e in begin["decision"]["spawn"]}
+    except (TypeError, KeyError):
+        return set()

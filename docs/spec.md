@@ -335,6 +335,15 @@ Full detail: `docs/stage1-plan.md` §4.
 Each sub-step can tell whether it already happened, so recovery reads the
 last `commit-begin` and redoes whatever is missing.
 
+A step that does not reach `commit-begin` is a **failed attempt**: its
+folder becomes `steps/NNNN.failed-<attempt>`, `status.md` gets `attempts`
+set to that attempt's number, `step-failed` is appended, and `.pending/` is
+removed. If the model changed any committed file, those files are restored
+first. When `attempts` reaches `max_attempts` the packet becomes `FAILED`
+with a reason naming the step and the last failure. A `step-start` with no
+outcome (the executor died) is recorded the same way by the next `wpk step`
+or `wpk recover`.
+
 ## 8. Changes from v0.1 (`prototype/agent-proc.md`)
 
 - The executor, not the model, owns `status.md`, step numbers, spawning and

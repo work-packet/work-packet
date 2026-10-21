@@ -28,6 +28,7 @@ LATER = {
 }
 
 _IN_RX = re.compile(r"^in\s+(\d+)\s+([a-z]+)$")
+_FRAC_RX = re.compile(r"(\d{2}:\d{2}:\d{2})\.(\d+)")
 
 
 class ResumeError(ValueError):
@@ -47,6 +48,8 @@ def parse_iso(s):
     s = s.strip()
     if s.endswith("Z") or s.endswith("z"):
         s = s[:-1] + "+00:00"
+    # 3.10 takes only 3 or 6 fraction digits; seconds precision is all we keep.
+    s = _FRAC_RX.sub(lambda m: m.group(1) + "." + (m.group(2) + "000000")[:6], s)
     return datetime.fromisoformat(s)
 
 
