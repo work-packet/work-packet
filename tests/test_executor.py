@@ -95,6 +95,26 @@ def test_prompt_contents(fresh):
     assert "Read state/count.md" in text           # the instruction
     assert "Write **only**" in text and "$" not in text.split("## This step")[1]
     assert NOW in text
+    assert "## State files\n\n- `state/count.md`:\n\n```\n1\n```" in text
+
+
+def test_state_files_section(tmp_path):
+    from work_packet.prompt import FILE_MAX, state_files
+    d = tmp_path / "state"
+    assert state_files(str(d)) == "`state/` is empty."
+    (d / "sub").mkdir(parents=True)
+    (d / "a.md").write_text("has ``` inside\n")
+    (d / "big.txt").write_text("x" * (FILE_MAX + 1))
+    (d / "bin.dat").write_bytes(b"\xff\xfe\x00")
+    (d / "sub" / "n.md").write_text("no newline")
+    (d / "empty.md").write_text("")
+    got = state_files(str(d))
+    assert "- `state/a.md`:\n\n````\nhas ``` inside\n````" in got
+    assert "- `state/big.txt` (%d bytes, not shown)" % (FILE_MAX + 1) in got
+    assert "- `state/bin.dat` (3 bytes, not shown)" in got
+    assert "- `state/sub/n.md`:\n\n```\nno newline\n```" in got
+    assert "- `state/empty.md`:\n\n```\n```" in got
+    assert got.index("a.md") < got.index("empty.md") < got.index("sub/n.md")
 
 
 def test_step_passes_settings_to_model(fresh, monkeypatch, tmp_path):

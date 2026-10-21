@@ -10,8 +10,11 @@ inside `.pending/`. Every other file is committed and owned by the
 executor; if you change one, this step is thrown away.
 
 - `.pending/state/` is a copy of `state/`, the packet's working files.
-  Read and edit the copy in `.pending/state/`, not `state/`. Your changes
-  are committed only if the step succeeds.
+  Your changes are committed only if the step succeeds. The current
+  contents of small files are under "State files" below, so you need not
+  read them. To change a file, Read its `.pending/state/` copy (Claude
+  Code will not overwrite a file it has not read), then Edit or Write
+  that copy. New files can be written straight away.
 - Write `.pending/summary.md`: a few lines on what this step did.
 - Write `.pending/memento.md`: Markdown with YAML front matter. The body is
   the instruction for the next step, written for a reader who remembers
@@ -63,6 +66,10 @@ $last_summary
 ## Children
 
 $children
+
+## State files
+
+$state
 
 $agent_md## Instruction for this step
 

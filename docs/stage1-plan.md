@@ -419,8 +419,8 @@ boxes as you go and add a line to the status log.
 ### M8: Real use
 
 - [ ] E7: live `prototype/sub` with Haiku, three runs
-      (`WPK_LIVE=1 pytest -m live -s`, `tests/test_live.py`; about $0.50 a
-      run at the smoke step's cost)
+      (`WPK_LIVE=1 pytest -m live -s`, `tests/test_live.py`; about $0.20 a
+      run at the smoke steps' cost after trimming)
 - [ ] A cron entry (`*/5 * * * * wpk tick -j 2`) and two real projects, for
       example a weekly check of a dv-flow regression and a research packet
       that fans out to children
@@ -605,5 +605,25 @@ machine. `--bare` was ruled out because it accepts only
 the 5-minute cache, so `wpk tick` steps cost less than a cold one: the
 three-step smoke project ran live to COMPLETED at $0.025, $0.023 and
 $0.023. `--tools` is the allowed tools' base names
-(`Bash(git *)` gives `Bash`). Still to try in M8: putting small `state/`
-files into the prompt, so a step needs fewer Read calls.
+(`Bash(git *)` gives `Bash`).
+
+### 2026-10-21: state files in the prompt
+
+The step transcripts showed where the calls went. A step read the
+committed `state/count.md`, then tried to Write `.pending/state/count.md`
+and was refused: Claude Code will not overwrite a file it has not read in
+the session. It then read the `.pending/` copy and edited it, which came to
+6–8 calls, some of them errors. The prompt now has a "State files" section
+with the full text of each small `state/` file (up to 4 KiB each and 16 KiB
+in all; larger or binary files are listed with their size). The protocol
+now says to Read the `.pending/state/` copy only for a file it changes
+(`prompt.state_files`). Live, the same smoke project:
+
+| Step | Before: calls | Before: cost | After: calls | After: cost |
+|---|---|---|---|---|
+| 1 (cold) | 5 | $0.025 | 4 | $0.027 |
+| 2 | 6 (1 error) | $0.023 | 4 | $0.017 |
+| 3 | 7 (1 error) | $0.023 | 4 | $0.014 |
+
+The calls that are left are one Read and one Edit or Write for the file it
+changes, plus Writes of `summary.md` and `memento.md`.

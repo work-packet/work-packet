@@ -393,7 +393,8 @@ def _run(pkt, st, meta, body, n, a, lease, now):
     agent = fsutil.read_text(st.agent_md) if st.agent_md else None
     text = prompt.build(status=meta, last_summary=body, instruction=instruction, step=n,
                         attempt=a, max_attempts=st.max_attempts, now=now, tz=tz,
-                        children=_children(pkt, meta), agent_md=agent)
+                        children=_children(pkt, meta), agent_md=agent,
+                        state_dir=pkt.state_dir)
     fsutil.atomic_write(os.path.join(sd, "prompt.md"), text)
     # 7. step-start, then 5. snapshot (so the journal line is part of it).
     session = str(uuid.uuid5(uuid.UUID(meta["wpid"]), "%d:%d" % (n, a)))
