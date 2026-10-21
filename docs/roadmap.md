@@ -9,7 +9,8 @@ how we explain the idea. The prototype in `prototype/` keeps its old names.
 Status (2026-10-21): roadmap drafted. Nothing below has been built yet. The
 `work-packet/work-packet` repo exists, seeded from the original `agent-proc`
 notes. Stage 1 (Phase 0, Phase 1 and the first slice of `docs/runner.md`) is
-planned in detail in `docs/stage1-plan.md`.
+planned in detail in `docs/stage1-plan.md`. Phase 0 is done: the format is
+`docs/spec.md` and `wpk check` enforces it.
 Runner, dashboard and `wpk new` design: `docs/runner.md`.
 Slides: `slides/work-packet.pptx` (25 slides; "User experience" section is slides 15–21), built from
 `slides/build_deck.js`, `slides/prior_art.js` and `slides/ux.js`.
@@ -114,16 +115,17 @@ regression tests.
 
 ### Phase 0: Spec and schema
 
-- [ ] Rewrite `prototype/agent-proc.md` as spec v0.2. Fixed file names:
+- [x] Rewrite `prototype/agent-proc.md` as spec v0.2 (`docs/spec.md`). Fixed file names:
   - `memento.md`: the next instruction, with versioned front matter;
   - `status.md`: front matter plus free text;
   - `journal.jsonl`, `state/`, `stack/`, `children/`, `mailbox/`.
-- [ ] `status.md` front matter fields:
+- [x] `status.md` front matter fields (leases moved to `.lease`; `every`
+  and `tz` deferred to Stage 2 / `project.toml`):
   - state: RUNNABLE / SLEEPING / WAITING / NEEDS_INPUT / PAUSED / COMPLETED /
     FAILED (NEEDS_INPUT and PAUSED come from `docs/runner.md`);
   - step, wake_at, resume_expr, every, tz, model;
   - parent, children, lease_holder, lease_expires.
-- [ ] Define what goes in `state/` (copied on spawn) and what goes in
+- [x] Define what goes in `state/` (copied on spawn) and what goes in
   `identity/` (symlinked, read-only).
 - [ ] Borrowed from: Beads (a structured ledger instead of free-form plan
   files) and Manus (re-reading `todo.md`).

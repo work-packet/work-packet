@@ -7,11 +7,14 @@ step. A small deterministic executor (`wpk`) runs one step at a time with
 `claude -p`, commits the result atomically, and decides when the packet runs
 next: now, in ten days, or every Monday.
 
-Status: pre-alpha. Nothing works yet beyond `wpk --version`.
+Status: pre-alpha. The packet format is specified (`docs/spec.md`) and
+`wpk check [path]` validates packets, projects and the registry against it.
+Nothing runs steps yet.
 
 ## Documents
 
 - `docs/roadmap.md`: the idea, lessons from the prototype, and phases 0–5.
+- `docs/spec.md`: the packet format, v0.2. `wpk check` enforces it.
 - `docs/runner.md`: design of the runner, the dashboard and `wpk new`.
 - `docs/stage1-plan.md`: the detailed build plan for the first stage, with status.
 - `slides/work-packet.pptx`: overview deck (built from `slides/*.js`).

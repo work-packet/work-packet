@@ -1,6 +1,7 @@
 # Stage 1 build plan: a packet that survives `kill -9`
 
-Status (2026-10-21): M0 done (repo, skeleton, CI pair). Next: M1.
+Status (2026-10-21): M0 and M1 done (repo, CI pair, spec v0.2, `wpk check`).
+Next: M2 (clock and resume expressions).
 Status log is at the end. A fresh session should be able to resume from this
 file alone.
 
@@ -76,8 +77,8 @@ revisited; none is expensive to change before Stage 2.
 
 ## 3. Packet format v0.2 (summary)
 
-The full text becomes `docs/spec.md` in M1. This section is what the code is
-written against.
+The full text is `docs/spec.md` (written in M1). Where the two differ, the spec
+wins; this section is kept as the summary the plan was written against.
 
 ### Layout
 
@@ -91,7 +92,7 @@ written against.
       memento.md         the next instruction (front matter + body)
       state/             private working files; copied (selectively) to children
       identity/          symlinks to outside resources; read-only by convention
-      children/          symlinks ../<child WPID>
+      children/          symlinks ../../<child WPID>
       journal.jsonl      append-only, executor-owned
       steps/
         0001/            one per committed step
@@ -296,6 +297,7 @@ src/work_packet/
   frontmatter.py  read and write Markdown with YAML front matter
   clock.py        now() honouring WPK_NOW; resume-expression parser and resolver
   schema.py       status, memento, project and config validation; used by `check`
+  check.py        `wpk check`: walk a packet, project or runner home; cross-file rules
   packet.py       Packet: paths, load and save status, children, identity
   journal.py      append and read records; find an unfinished step or commit
   lease.py        acquire, refresh (thread), release, stale detection
@@ -352,21 +354,24 @@ boxes as you go and add a line to the status log.
 - [x] Python skeleton (`wpk --version`), CI pair from `forgejo-ops/templates`
 - [x] CI steps trial-run in `catthehacker/ubuntu:act-22.04`
 - [x] First CI run is green on Forgejo (Build and test, Release authority)
-- [ ] The repo appears on GitHub after the next sync cycle (`git-sync plan`
-      showed "WOULD CREATE on GitHub ... AUTO"), and GitHub CI is green
+- [x] The repo appears on GitHub after the next sync cycle, and GitHub CI is
+      green (`git-sync status`: all aligned)
 
-### M1: Spec v0.2 and schema checker
+### M1: Spec v0.2 and schema checker (done 2026-10-21)
 
-- [ ] `docs/spec.md`: the full text of §3, plus `project.toml` and
+- [x] `docs/spec.md`: the full text of §3, plus `project.toml` and
       `config.toml`
-- [ ] `fsutil.py`, `frontmatter.py`, `schema.py`, `packet.py`
-- [ ] `wpk check`
+- [x] `fsutil.py`, `frontmatter.py`, `schema.py`, `packet.py` (plus
+      `journal.py` read/append, and `clock.now()` / `parse_resume()` pulled
+      forward from M2 because the checker needs them)
+- [x] `wpk check [path] [--strict] [-q]`
 - Tests: round-trip front matter; good and bad fixtures for each schema;
   `check` reports file and field for each error.
 
 ### M2: Clock and resume expressions
 
-- [ ] `clock.py`: `now()`, `parse_resume()`, `resolve()` with zone handling
+- [ ] `clock.py`: `resolve()` with zone handling (`now()` and
+      `parse_resume()` landed in M1)
 - Tests: each form; DST change in the project zone; `in 10 days` across a
   month end; rejected later-stage forms name their stage.
 
@@ -455,3 +460,19 @@ tagging. No tag is planned in Stage 1.
   skeleton and CI pair added; CI steps pass in the Forgejo runner image
   (Python 3.10.12). Plan written. First Forgejo CI run green; GitHub mirror
   pending the next sync cycle.
+- 2026-10-21: M0 closed: GitHub mirror created by the sync cycle, GitHub CI
+  green.
+- 2026-10-21: M1. `docs/spec.md` (v0.2) written. Decisions made while
+  writing it: `children/` links are `../../<WPID>`; `project.toml` carries
+  `root` as well as the registry entry; a committed memento keeps its front
+  matter as a record and may have none at step 0; crash leftovers
+  (`.pending/` with no lease, torn journal tail, unfinished commit,
+  `.tmp-<WPID>`, stale lease) are warnings, not errors; `NS_WPK` fixed at
+  `6f0c3e1a-8b7d-5c2e-9f4a-1d3b5e7a9c0b`. Modules: `fsutil`, `frontmatter`
+  (timestamps stay strings), `clock` (now, parse_resume), `schema`,
+  `journal`, `packet`, `check`. `wpk check` exits 1 on errors (`--strict`:
+  on warnings too) and prints `level: path: field: message` relative to the
+  checked directory. 147 tests pass on 3.12 and in the runner image (3.10).
+  `tests/conftest.py: make_project()` builds a valid project with committed
+  steps and a child; M3 should produce the same tree through the real
+  executor.
