@@ -2,8 +2,8 @@
 
 Status (2026-10-21): M0–M7 and M9 done: every Stage 1 command exists, E1–E6
 pass in CI against the fake model, and `wpk dash` serves a read-only board.
-Next: M8 (real use: E7 with live Haiku, then a week under cron for E8), which
-needs a person at the keyboard.
+E7 passed live with Haiku. Next: the rest of M8 (a week under cron with two
+real projects for E8), which needs a person at the keyboard.
 Status log is at the end. A fresh session should be able to resume from this
 file alone.
 
@@ -422,7 +422,7 @@ boxes as you go and add a line to the status log.
 
 ### M8: Real use
 
-- [ ] E7: live `prototype/sub` with Haiku, three runs
+- [x] E7: live `prototype/sub` with Haiku, three runs (done 2026-10-21)
       (`WPK_LIVE=1 pytest -m live -s`, `tests/test_live.py`; about $0.20 a
       run at the smoke steps' cost after trimming)
 - [ ] A cron entry (`*/5 * * * * wpk tick -j 2`) and two real projects, for
@@ -666,3 +666,25 @@ Checked by eye in headless Chrome against a demo home (every column, plus
 the live smoke project's real transcripts) at desktop and narrow widths.
 Not yet: buttons (Pause, Resume, Wake now), server-sent events, the
 Upcoming, Inbox and Spend views, and search; see `docs/runner.md`.
+
+### 2026-10-21: E7 passed
+
+Run by hand with `wpk` rather than `pytest -m live`, so the runs show on
+the board: three projects `e7-1`..`e7-3` in the real `~/.work-packet`
+(directories under `~/work-packet-runs/`), created with the prompt from
+`tests/test_live.py` and run together with `wpk tick -j 3 --until-idle`.
+Each was then checked against the same assertions as the test.
+
+| Run | Result | Steps | Failed attempts | Cost | Wall time |
+|---|---|---|---|---|---|
+| e7-1 | pass | 9 (8 root, 1 child) | 0 | $0.166 | 120 s |
+| e7-2 | pass | 9 | 0 | $0.157 | 121 s |
+| e7-3 | pass | 9 | 0 | $0.157 | 121 s |
+
+$0.48 in all, about $0.018 a step, 11–12 s a step. 3–6 tool calls a step
+(mean 4.1). 6 tool errors in 27 steps, all recovered within the step: in
+3 first steps the model tried to read `count.md`, which did not exist yet,
+despite "`state/` is empty" in the prompt; twice it wrote without reading
+first, despite the new instruction; once it read a directory. None
+reached the executor. The model never wrote outside `.pending/` (E3 did
+not fire).
