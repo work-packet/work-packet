@@ -14,8 +14,8 @@ from . import clock
 
 FORMAT_VERSION = "0.2"
 
-STATES = ("RUNNABLE", "SLEEPING", "PAUSED", "COMPLETED", "FAILED")
-RESERVED_STATES = {"WAITING": "Stage 3", "NEEDS_INPUT": "Stage 3"}
+STATES = ("RUNNABLE", "SLEEPING", "NEEDS_INPUT", "PAUSED", "COMPLETED", "FAILED")
+RESERVED_STATES = {"WAITING": "Stage 3"}
 
 STATUS_FIELDS = (
     "wpk", "wpid", "project", "state", "step", "attempts", "parent",
@@ -23,8 +23,9 @@ STATUS_FIELDS = (
     "updated",
 )
 
-MEMENTO_FIELDS = ("resume", "reason", "spawn")
-MEMENTO_LATER = {"every": "Stage 2", "wait": "Stage 3", "ask": "Stage 3"}
+MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item")
+ITEM_MAX = 80
+MEMENTO_LATER = {"every": "Stage 2", "wait": "Stage 3"}
 SPAWN_FIELDS = ("name", "instruction", "copy", "model")
 
 PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "dontAsk",
@@ -32,23 +33,55 @@ PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "dontAsk",
 
 CONFIG_DEFAULTS = {
     "model": "claude-haiku-4-5-20251001",
+    "harness": "claude",              # harness.md §3
     "max_concurrent": 1,
-    "step_timeout": "20m",
+    "step_timeout": "120m",
     "max_attempts": 3,
     "step_budget_usd": 1.00,
+    "step_context_tokens": 80000,     # context.md C3; 0 = off
+    "carry_session": False,           # context.md C4
+    "carry_ttl": "55m",
+    "carry_factor": 4.0,              # C4: fresh again at this multiple of O
 }
+SERVER_DEFAULTS = {                   # server.md §6
+    "port": 7878,
+    "loopback": True,
+    "tailnet": False,
+    "auth": "tailscale",
+    "allow": [],
+    "tls": "off",
+    "extra_hosts": [],
+    "run": False,                      # dash-tasks.md §7: the runner in the server
+}
+IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
+    "desktop": True,                   # vscode:// buttons
+    "web": False,                      # VS Code under the board's /ide/
+    "backend": "serve-web",
+    "code": "code",                    # the VS Code CLI that runs serve-web
+    "ssh_host": "",                    # empty: you@ the board's name or MagicDNS name
+    "desktop_link": "auto",            # auto | remote | local: the vscode:// link to follow
+    "idle_minutes": 60,
+    "workspace_trust": False,          # V0 finding 4: the runner already runs this code
+}
+IDE_BACKENDS = ("serve-web",)          # openvscode-server: §4.4, when needed
+SERVER_AUTH = ("tailscale", "none")
+SERVER_TLS = ("off", "tailscale")        # server.md §2.3    # token, pam: server.md S3
 PERMISSION_DEFAULTS = {
-    "allowed_tools": ["Read", "Write", "Edit", "Glob", "Grep"],
+    "allowed_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
     "permission_mode": "acceptEdits",
 }
 
 JOURNAL_TYPES = {
     "step-start": ("step", "attempt", "model", "session_id"),
     "step-failed": ("step", "attempt", "why"),
+    "step-nudge": ("step", "attempt", "why"),
     "commit-begin": ("step", "decision"),
     "commit-end": ("step",),
     "admin": ("op", "by"),
     "note": ("msg",),
+    "handoff": ("by", "from", "to"),
+    "config": ("by", "changes"),
+    "seed": ("files",),               # docs/setup.md §10: the root filled from the project root
 }
 DECISION_FIELDS = ("state", "resume_expr", "wake_at", "reason", "model",
                    "summary", "spawn")
@@ -212,7 +245,7 @@ def validate_status(meta, body=""):
     if "model" in meta and not (isinstance(meta["model"], str) and meta["model"]):
         out.append(_err("model", "must be a non-empty string"))
     out += _opt_str(meta, "reason")
-    if st in ("PAUSED", "FAILED") and not meta.get("reason"):
+    if st in ("NEEDS_INPUT", "PAUSED", "FAILED") and not meta.get("reason"):
         out.append(_err("reason", "required when %s" % st))
     if "updated" in meta and not is_timestamp(meta["updated"]):
         out.append(_err("updated", "must be a UTC timestamp like 2026-10-21T18:02:11Z"))
@@ -267,6 +300,23 @@ def validate_spawn(spawn):
     return out
 
 
+def memento_item(meta):
+    """The plan item a step worked on, from its memento's optional ``item``, as
+    a string (a list is joined with ", "), or None. Never an error: a missing
+    or odd ``item`` only means the step's tokens are not charged to an item."""
+    v = meta.get("item") if isinstance(meta, dict) else None
+    if isinstance(v, (list, tuple)):
+        v = ", ".join(str(x).strip() for x in v
+                      if isinstance(x, (str, int, float)) and not isinstance(x, bool)
+                      and str(x).strip())
+    elif isinstance(v, (int, float)) and not isinstance(v, bool):
+        v = str(v)
+    if not isinstance(v, str):
+        return None
+    v = " ".join(v.split())
+    return v[:ITEM_MAX] or None
+
+
 def validate_memento(meta, body, proposal=True):
     """Check a memento.
 
@@ -296,6 +346,17 @@ def validate_memento(meta, body, proposal=True):
     out += _opt_str(meta, "reason")
     if r is not None and r.kind == "fail" and not meta.get("reason"):
         out.append(_err("reason", "required with resume: fail"))
+    if "ask" in meta:
+        from . import questions
+        probs = questions.validate(meta["ask"])
+        if probs:
+            out += probs
+        elif r is not None and r.kind in ("done", "fail"):
+            out.append(_err("ask", "cannot go with resume: %s; the step after the answer "
+                            "needs a resume" % r.kind))
+        elif not body.strip():
+            out.append(_err(None, "body is empty; with ask: it is the instruction for "
+                            "after the answer"))
     if "spawn" in meta and meta["spawn"] is not None:
         out += validate_spawn(meta["spawn"])
     if r is not None and r.kind not in ("done", "fail") and not body.strip():
@@ -309,6 +370,10 @@ def _validate_limits(d):
     out = []
     if "model" in d and not (isinstance(d["model"], str) and d["model"]):
         out.append(_err("model", "must be a non-empty string"))
+    if "harness" in d:
+        from .harness import names
+        if d["harness"] not in names():
+            out.append(_err("harness", "must be one of: %s" % ", ".join(names())))
     if "max_concurrent" in d and not (is_int(d["max_concurrent"]) and d["max_concurrent"] >= 1):
         out.append(_err("max_concurrent", "must be an integer >= 1"))
     if "max_attempts" in d and not (is_int(d["max_attempts"]) and d["max_attempts"] >= 1):
@@ -322,11 +387,87 @@ def _validate_limits(d):
         v = d["step_budget_usd"]
         if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
             out.append(_err("step_budget_usd", "must be a number > 0"))
+    if "step_context_tokens" in d and not (is_int(d["step_context_tokens"])
+                                           and d["step_context_tokens"] >= 0):
+        out.append(_err("step_context_tokens", "must be an integer >= 0"))
+    if "carry_session" in d and not isinstance(d["carry_session"], bool):
+        out.append(_err("carry_session", "must be true or false"))
+    if "carry_factor" in d:
+        v = d["carry_factor"]
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 1):
+            out.append(_err("carry_factor", "must be a number > 1"))
+    if "carry_ttl" in d:
+        try:
+            parse_duration(d["carry_ttl"])
+        except ValueError as e:
+            out.append(_err("carry_ttl", str(e)))
+    return out
+
+
+def _validate_profiles(d):
+    from .profiles import validate
+    t = d.get("profiles")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("profiles", "must be a table of [profiles.<name>] tables")]
+    return [_err("profiles.%s" % name, msg) for name, pd in t.items()
+            for msg in validate(name, pd)[:1]]
+
+
+def _validate_server(d):
+    t = d.get("server")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("server", "must be a table")]
+    out = _unknown(t, tuple(SERVER_DEFAULTS), "server")
+    port = t.get("port", 7878)
+    if not (isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536):
+        out.append(_err("server.port", "must be a port number"))
+    for k in ("loopback", "tailnet", "run"):
+        if k in t and not isinstance(t[k], bool):
+            out.append(_err("server." + k, "must be true or false"))
+    if t.get("auth", "tailscale") not in SERVER_AUTH:
+        out.append(_err("server.auth", "must be one of %s (token and pam are not built yet)"
+                        % ", ".join(SERVER_AUTH)))
+    elif t.get("auth") == "none" and t.get("tailnet"):
+        out.append(_err("server.auth", "\"none\" cannot be used with tailnet = true"))
+    for k in ("allow", "extra_hosts"):
+        v = t.get(k, [])
+        if not (isinstance(v, list) and all(isinstance(x, str) and x for x in v)):
+            out.append(_err("server." + k, "must be a list of strings"))
+    if t.get("tls", "off") not in SERVER_TLS:
+        out.append(_err("server.tls", "must be one of %s" % ", ".join(SERVER_TLS)))
+    return out
+
+
+def _validate_ide(d):
+    t = d.get("ide")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("ide", "must be a table")]
+    out = _unknown(t, tuple(IDE_DEFAULTS), "ide")
+    for k in ("desktop", "web", "workspace_trust"):
+        if k in t and not isinstance(t[k], bool):
+            out.append(_err("ide." + k, "must be true or false"))
+    for k in ("code", "ssh_host"):
+        if k in t and not isinstance(t[k], str):
+            out.append(_err("ide." + k, "must be a string"))
+    if t.get("desktop_link", "auto") not in ("auto", "remote", "local"):
+        out.append(_err("ide.desktop_link", "must be auto, remote or local"))
+    if t.get("backend", "serve-web") not in IDE_BACKENDS:
+        out.append(_err("ide.backend", "must be one of %s" % ", ".join(IDE_BACKENDS)))
+    m = t.get("idle_minutes", 60)
+    if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
+        out.append(_err("ide.idle_minutes", "must be a positive whole number"))
     return out
 
 
 def validate_config(d):
-    return _unknown(d, tuple(CONFIG_DEFAULTS)) + _validate_limits(d)
+    return _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide")) + \
+        _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d)
 
 
 def _validate_template(d):
@@ -336,10 +477,51 @@ def _validate_template(d):
     return []
 
 
+SETUP_TABLES = {                        # docs/setup.md §4: (required, optional) keys
+    "repo": (("name", "from"), ("branch", "share")),
+    "input": (("from",), ("to",)),
+    "link": (("from",), ("name",)),
+    "smoke": (("run",), ("repo",)),
+}
+
+
+def _validate_setup(t):
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("setup", "must be a table")]
+    out = _unknown(t, ("smoke_timeout",) + tuple(SETUP_TABLES), "setup")
+    if "smoke_timeout" in t:
+        try:
+            parse_duration(t["smoke_timeout"])
+        except ValueError as e:
+            out.append(_err("setup.smoke_timeout", str(e)))
+    for kind, (req, opt) in SETUP_TABLES.items():
+        lst = t.get(kind, [])
+        if not (isinstance(lst, list) and all(isinstance(e, dict) for e in lst)):
+            out.append(_err("setup." + kind, "must be a list of [[setup.%s]] tables" % kind))
+            continue
+        for i, e in enumerate(lst):
+            f = "setup.%s[%d]" % (kind, i)
+            out += _unknown(e, req + opt, f)
+            for k in req:
+                if not (isinstance(e.get(k), str) and e[k]):
+                    out.append(_err("%s.%s" % (f, k), "required; must be a non-empty string"))
+            for k in opt:
+                if k == "share":
+                    v = e.get(k, [])
+                    if not (isinstance(v, list) and all(isinstance(x, str) and x for x in v)):
+                        out.append(_err(f + ".share", "must be a list of directory names"))
+                elif k in e and not (isinstance(e[k], str) and e[k]):
+                    out.append(_err("%s.%s" % (f, k), "must be a non-empty string"))
+    return out
+
+
 def validate_project(d):
-    known = ("name", "root", "created", "template", "tz", "model",
-             "step_timeout", "max_attempts", "step_budget_usd", "permissions")
-    out = _unknown(d, known)
+    known = ("name", "root", "created", "template", "tz", "model", "harness", "profile",
+             "step_timeout", "max_attempts", "step_budget_usd", "step_context_tokens",
+             "carry_session", "carry_ttl", "carry_factor", "permissions", "setup")
+    out = _unknown(d, known) + _validate_setup(d.get("setup"))
     if not is_name(d.get("name")):
         out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
     if not is_wpid(d.get("root")):
@@ -350,6 +532,8 @@ def validate_project(d):
     if "tz" in d and not is_zone(d["tz"]):
         out.append(_err("tz", "not a known IANA time zone: %r" % (d["tz"],)))
     out += _validate_limits(d)
+    if "profile" in d and not is_name(d["profile"]):
+        out.append(_err("profile", "must be a profile name"))
     perm = d.get("permissions")
     if perm is not None:
         if not isinstance(perm, dict):

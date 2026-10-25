@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% import "_settings.html" as sm with context %}
+{% block title %}Compose · {{ e.name }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / compose{% endblock %}
+{% block head %}
+<style>
+.compose { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 14px; align-items: start; }
+@media (max-width: 860px) { .compose { grid-template-columns: 1fr; } }
+.checks h3 { margin: 10px 0 4px; font-size: 14px; }
+.checks .ck { font-size: 13px; margin: 4px 0 8px; }
+.checks .ck .why { color: var(--muted); font-size: 12px; }
+.checks .ck code.fix { display: block; white-space: pre-wrap; word-break: break-all; margin-top: 2px; }
+.mark { display: inline-block; width: 1.2em; font-weight: 700; }
+.mark.ok { color: var(--COMPLETED); } .mark.missing { color: var(--FAILED); }
+.mark.warn { color: var(--NEEDS_INPUT); } .mark.info { color: var(--muted); }
+form.act textarea.instr { min-height: 18em; font-family: ui-monospace, monospace; font-size: 13px; }
+details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
+.shellpane { margin-top: 14px; }
+.shellpane .term { height: 26em; background: #0d1117; border-radius: 6px; padding: 4px; }
+.shellpane .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.shellpane .tabs button.on { border-color: var(--link); }
+.shellpane .shellidle { display: flex; gap: 10px; align-items: center; padding: 18px 4px; }
+.shellpane [hidden] { display: none; }
+.last { white-space: pre-wrap; font-size: 13px; max-height: 12em; overflow: auto; }
+</style>
+{% if shell_ok and c.owned %}<link rel="stylesheet" href="/static/vendor/xterm.css?v={{ asset_v }}">{% endif %}
+{% endblock %}
+{% block main %}
+{% set q = e.name|urlencode %}
+<h1>{{ e.name }} <span class="muted" style="font-weight:400">· {{ "set up" if c.mode == "setup" else "next batch (batch " ~ (c.batch + 1) ~ ")" }}</span>
+  {% if c.running %}<span class="state running pulse">RUNNING</span>{% endif %}
+  <span class="state {{ c.state }}">{{ c.state }}</span></h1>
+
+{% if not c.owned %}
+<div class="panel" style="margin-bottom:12px">The runner has this task ({{ c.state }}{% if c.running %}, step {{ c.running.step }} running{% endif %}), so it cannot be changed here.
+  {% if c.state in ("RUNNABLE", "SLEEPING") and not c.running %}
+  <form class="act row" method="post" action="/p/{{ q }}/{{ c.tg.packet.wpid }}/act" style="display:inline-flex;margin:0 0 0 8px">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="go" name="action" value="pause">Pause it</button></form>
+  {% else %}<a href="/p/{{ q }}/{{ c.tg.packet.wpid }}/live">Live view</a>; send it a note there.{% endif %}</div>
+{% endif %}
+
+{% if c.mode == "next" %}
+<section class="panel" style="margin-bottom:12px">
+  <h3 style="margin-top:0">Where batch {{ c.batch }} stopped</h3>
+  {% if c.meta.reason %}<p class="{{ 'err' if c.state == 'FAILED' }}" style="margin:0 0 6px">{{ c.meta.reason }}</p>{% endif %}
+  <div class="last">{{ c.summary or "No summary." }}</div>
+  <p class="muted" style="font-size:12px;margin-bottom:0">Step {{ c.meta.step }}. <a href="/p/{{ q }}/{{ c.tg.packet.wpid }}">Packet</a> · <a href="/p/{{ q }}/{{ c.tg.packet.wpid }}/live">steps and outline</a></p>
+</section>
+{% endif %}
+
+<div class="compose">
+  <aside class="panel checks">
+    <h2 style="margin:0">Checks</h2>
+    <p class="muted" style="font-size:12px;margin:2px 0 0">{{ c.missing }} missing. <a href="/p/{{ q }}/compose">Recheck</a></p>
+    {% for g in c.groups %}
+    <h3><span class="mark {{ g.level }}">{{ {"ok": "✓", "info": "·", "warn": "!", "missing": "✗"}[g.level] }}</span>{{ g.title }}</h3>
+    {% for ck in g.checks %}{% if ck.level != "ok" or g.checks|length <= 3 %}
+    <div class="ck"><span class="mark {{ ck.level }}">{{ {"ok": "✓", "info": "·", "warn": "!", "missing": "✗"}[ck.level] }}</span>{{ ck.title }}
+      {% if ck.detail and ck.level != "ok" %}<div class="why">{{ ck.detail }}</div>{% endif %}
+      {% if ck.fix and ck.level != "ok" %}
+        {% for fx in ck.fix[:2] %}<code class="fix">{{ fx }}</code>{% endfor %}
+        {% if c.owned %}<div class="row" style="margin-top:4px">
+          {% if ck.safe %}<form class="act" method="post" action="/p/{{ q }}/compose"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="check" value="{{ ck.id }}"><button class="go" name="action" value="fix">Do it</button></form>{% endif %}
+          {% if shell_ok %}<button class="go" type="button" data-typeit="{{ ck.fix[0] }}">Type it</button>{% endif %}
+        </div>{% endif %}
+      {% endif %}
+    </div>
+    {% endif %}{% endfor %}
+    {% endfor %}
+  </aside>
+
+  <section>
+    <form id="compose" class="act panel" method="post" action="/p/{{ q }}/compose">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      <div class="row" style="margin-top:0;justify-content:space-between">
+        <h2 style="margin:0">{{ "Instruction" if c.mode == "setup" else "Instruction for batch " ~ (c.batch + 1) }}</h2>
+        <span class="muted" style="font-size:12px">Start from:
+          {% for t in c.templates %}<a href="/p/{{ q }}/compose?template={{ t }}">{{ t }}</a>{{ " · " if not loop.last }}{% endfor %}
+          {% if c.mode == "next" and c.last_instruction %} · <a href="/p/{{ q }}/compose?last=1">the last instruction</a>{% endif %}</span>
+      </div>
+      {% if c.from_template %}<p class="muted" style="font-size:12px">From the <code>{{ c.from_template }}</code> template; not saved yet.</p>{% endif %}
+      <textarea class="instr" name="instruction" {{ "readonly" if not c.owned }} placeholder="What the next step should do. Name the repo (work/…) and the plan in state/.">{{ c.instruction }}</textarea>
+      <p class="muted" style="font-size:12px">{% if c.mode == "setup" %}Saved to <code>prompt.md</code>; the first step's memento starts from it.{% else %}Saved as a draft (<code>.setup/next/</code>){% if c.draft %}, last {{ c.draft.saved }}{% endif %}. The packet does not change until you hand it off.{% endif %}
+        {{ c.instruction|length }} characters.</p>
+      {% if c.mode == "next" %}
+      <label><input type="checkbox" name="archive" value="1" {{ "checked" if (c.draft.archive_outline if c.draft and c.draft.archive_outline is not none else c.archive_default) }}> Move the finished <code>state/outline.md</code> to <code>state/history/</code></label><br>
+      <label><input type="checkbox" name="carry" value="1" {{ "checked" if c.draft and c.draft.carry_session }} {{ "disabled" if not c.carry }}> Resume the model's last session</label>
+      {% if c.carry %}<span class="muted" style="font-size:12px"> — it rereads about {{ c.carry.tokens|tok if c.carry.tokens else "?" }} tokens of context at the cache-write price (the cache has usually expired), in exchange for the model's memory of the work.</span>{% endif %}
+      {% endif %}
+      <label class="muted" for="note" style="display:block;margin-top:8px">Note for the next step (optional)</label>
+      <textarea id="note" name="note" {{ "readonly" if not c.owned }}>{{ c.draft.note if c.draft else "" }}</textarea>
+      {% if c.owned %}
+      <div class="row">
+        <button class="go" name="action" value="save">Save</button>
+        <button class="go primary" name="action" value="handoff" {{ "disabled" if c.missing }}>Hand off to the runner</button>
+        {% if c.missing %}<label class="muted"><input type="checkbox" name="force" value="1" data-enable="handoff"> hand off anyway ({{ c.missing }} missing)</label>{% endif %}
+        {% if shells %}<span class="muted" style="font-size:12px">Closes {{ shells|length }} open shell{{ "s" if shells|length != 1 }}.</span>{% endif %}
+        {% if not runner %}<span class="muted" style="font-size:12px">No runner here: run <code>wpk tick</code> after, or start the board with <code>--run</code>.</span>{% endif %}
+      </div>
+      {% endif %}
+    </form>
+
+    {% if shell_ok and c.owned %}
+    <div class="shellpane panel" id="shellpane" data-project="{{ e.name }}" data-csrf="{{ csrf or '' }}"
+         data-sids="{{ shells|map(attribute='sid')|join(',') }}">
+      <div class="row" style="margin-top:0;justify-content:space-between">
+        <h2 style="margin:0">Shell <span class="muted" style="font-weight:400;font-size:13px">in <code>{{ c.shell_dir }}</code></span></h2>
+        <button class="go" type="button" id="newshell">+ shell</button>
+      </div>
+      <div class="tabs" id="shelltabs"></div>
+      <div class="shellidle" id="shellidle"{% if shells %} hidden{% endif %}>
+        <button class="go" type="button" id="openshell">Open shell</button>
+        <span class="muted" style="font-size:12px">No shell is running. One starts when you open it or press Type it.</span>
+      </div>
+      <div class="term" id="term"{% if not shells %} hidden{% endif %}></div>
+      <p class="muted" style="font-size:12px">A shell on this machine as you. It keeps running if you leave the page (30 min), and closes when you hand off.</p>
+    </div>
+    {% elif c.owned %}
+    <p class="panel muted" style="font-size:13px">For a shell: <code>wpk shell {{ e.name }}</code>{% if c.mode == "next" %} (the packet is <code>{{ c.shell_dir }}</code>){% endif %}.</p>
+    {% endif %}
+
+    <details id="inputs" class="panel" style="margin-top:14px" {{ "open" if not c.inputs }}>
+      <summary>Inputs: {{ c.inputs|length }} file{{ "s" if c.inputs|length != 1 }} in {{ c.state_where }}</summary>
+      {% if c.inputs %}<table>
+        {% for f in c.inputs %}<tr><td><code>state/{{ f.rel }}</code></td><td>{{ f.size|bytes }}</td>
+          <td class="muted" style="font-size:12px">{{ "shown in the prompt" if f.shown else "listed by size" }}</td>
+          <td>{% if c.owned %}<form class="act" method="post" action="/p/{{ q }}/compose"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="path" value="{{ f.rel }}"><button class="go" name="action" value="rm-input">Remove</button></form>{% endif %}</td></tr>
+        {% endfor %}</table>{% endif %}
+      {% if c.owned %}
+      <form class="act row" method="post" enctype="multipart/form-data" action="/p/{{ q }}/compose/upload?csrf={{ csrf or '' }}">
+        <input type="file" name="files" multiple>
+        <label class="muted"><input type="checkbox" name="force" value="1"> replace</label>
+        <button class="go">Upload</button>
+      </form>
+      {% endif %}
+    </details>
+
+    <details id="settings" class="panel" style="margin-top:14px">
+      <summary>Settings: limits, model, allowed tools</summary>
+      {% if settings %}{{ sm.panel(e, settings, "compose") }}{% endif %}
+    </details>
+  </section>
+</div>
+<script src="/static/compose.js?v={{ asset_v }}"></script>
+{% if shell_ok and c.owned %}
+<script src="/static/vendor/xterm.js?v={{ asset_v }}"></script>
+<script src="/static/vendor/addon-fit.js?v={{ asset_v }}"></script>
+<script src="/static/shell.js?v={{ asset_v }}"></script>
+{% endif %}
+{% endblock %}

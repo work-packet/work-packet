@@ -1,18 +1,23 @@
 """``wpk step`` and ``wpk recover``: one step of one packet (stage1-plan §4)."""
 
+import dataclasses
 import difflib
+import functools
 import json
+import logging
 import os
 import shutil
+import time
 import uuid
 from dataclasses import dataclass
 
-from . import (clock, faults, frontmatter, fsutil, journal, model, prompt, registry,
-               schema, spawn)
+from . import (clock, faults, frontmatter, fsutil, harness, journal, model, notes, procs,
+               profiles, prompt, questions, registry, schema, spawn, workspace)
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, project_of, settings
 
+log = logging.getLogger("wpk")
 OK, FAILED, NOT_RUNNABLE, LEASED, USAGE = 0, 1, 2, 3, 4
 LEASE_MARGIN_S = 120
 
@@ -164,6 +169,7 @@ def _apply(pkt, st, rec):
         fsutil.rename(pend_state, pkt.state_dir)
     faults.point("after-state-swap-2")
 
+    notes.consume(pkt, [x["id"] for x in d.get("notes") or ()])
     pend_memento = os.path.join(pkt.pending_dir, "memento.md")
     if os.path.exists(pend_memento):
         fsutil.rename(pend_memento, pkt.memento_path)
@@ -225,12 +231,51 @@ def _scan(records):
     return begin, start
 
 
-def _move_failed(pkt, n, a):
+PENDING_KEPT = ("summary.md", "memento.md")
+
+
+def _keep_pending(pkt, dst):
+    if not os.path.isdir(dst):
+        return
+    for name in PENDING_KEPT:
+        src = os.path.join(pkt.pending_dir, name)
+        if os.path.isfile(src):
+            shutil.copyfile(src, os.path.join(dst, "pending-" + name))
+
+
+def _last_attempt(pkt, n):
+    """The prompt's "Last attempt" section for step ``n``, or "" if it has not failed.
+    Runs are numbered by folder, so a failure before a resume counts too."""
+    runs = pkt.failed_runs(n)
+    if not runs:
+        return ""
+    whys = {k: "it did not finish" for k in runs}
+    for r in journal.read(pkt.journal_path).records:
+        k = r.get("run", r.get("attempt"))
+        if r.get("type") == "step-failed" and r.get("step") == n and k in whys:
+            whys[k] = r.get("why") or whys[k]
+    last = runs[-1]
+    d = pkt.step_dir(n, last)
+    pending = []
+    for name in PENDING_KEPT:
+        text = fsutil.read_text(os.path.join(d, "pending-" + name)) if os.path.isfile(
+            os.path.join(d, "pending-" + name)) else None
+        if text and text.strip():
+            pending.append((name, text))
+    folders = [os.path.relpath(pkt.step_dir(n, k), pkt.path) for k in runs]
+    return prompt.last_attempt_section(last, whys[last], os.path.join(d, "transcript.jsonl"),
+                                       root=pkt.path, pending=pending,
+                                       earlier=[(k, whys[k]) for k in runs[:-1]],
+                                       folders=folders)
+
+
+def _move_failed(pkt, n):
+    """Move step ``n``'s folder to ``NNNN.failed-<run>``; returns the run."""
+    r = pkt.next_run(n)
     sd = pkt.step_dir(n)
     if os.path.isdir(sd):
-        dst = pkt.step_dir(n, a)
-        _rmtree(dst)
-        fsutil.rename(sd, dst)
+        fsutil.rename(sd, pkt.step_dir(n, r))
+    return r
 
 
 def _recover(pkt, st):
@@ -243,13 +288,15 @@ def _recover(pkt, st):
     msg = None
     if start is not None:
         n, a = start["step"], start["attempt"]
-        _move_failed(pkt, n, a)
+        r = _move_failed(pkt, n)
+        _keep_pending(pkt, pkt.step_dir(n, r))
         meta, body = pkt.load_status()
         if meta["step"] == n - 1 and meta["attempts"] < a:
             meta.update(attempts=a, updated=_ts())
             pkt.save_status(meta, body)
         journal.append(pkt.journal_path, {"type": "step-failed", "t": _ts(), "step": n,
-                                          "attempt": a, "why": "attempt did not finish"})
+                                          "attempt": a, "run": r,
+                                          "why": "attempt did not finish"})
         msg = "recorded step %d attempt %d as failed (it did not finish)" % (n, a)
     if os.path.lexists(pkt.pending_dir) or os.path.lexists(pkt.state_old_dir) or \
             any(n.startswith(".tmp-") for n in os.listdir(pkt.path)):
@@ -294,8 +341,10 @@ def _set_failed(pkt, meta, body, reason):
 
 
 def _fail(pkt, st, n, a, why):
-    """An attempt that did not commit: steps/NNNN.failed-<a>, attempts + 1."""
-    _move_failed(pkt, n, a)
+    """An attempt that did not commit: steps/NNNN.failed-<run>, attempts + 1.
+    The ``.pending/`` files it left are kept there for the retry's prompt."""
+    r = _move_failed(pkt, n)
+    _keep_pending(pkt, pkt.step_dir(n, r))
     meta, body = pkt.load_status()
     meta.update(attempts=a, updated=_ts())
     if a >= st.max_attempts:
@@ -303,7 +352,7 @@ def _fail(pkt, st, n, a, why):
                     reason="%d failed attempts at step %d; last: %s" % (a, n, why))
     pkt.save_status(meta, body)
     journal.append(pkt.journal_path, {"type": "step-failed", "t": _ts(), "step": n,
-                                      "attempt": a, "why": why})
+                                      "attempt": a, "run": r, "why": why})
     _rmtree(pkt.pending_dir)
     tail = "; packet is now FAILED" if a >= st.max_attempts else ""
     return Outcome(FAILED, "step %d attempt %d failed: %s%s" % (n, a, why, tail))
@@ -349,6 +398,56 @@ def _validate_pending(pkt):
     return mm, None
 
 
+def _carry_from(pkt, st, meta, n, a, now, limit, factor, asked=False):
+    """The previous step's ``meta.json`` if this step should resume its session,
+    or None to start fresh (context.md C4). ``asked``: a next-batch hand-off asked
+    for it (dash-tasks.md §6.5), which skips the setting, the state and the
+    cache checks; the model, harness and context limit still apply."""
+    if a != 1 or n < 2 or not harness.get(st.harness).caps.resume:
+        return None
+    if not asked and (not st.carry_session or meta["state"] != "RUNNABLE"
+                      or meta.get("resume_expr") != "now"):
+        return None
+    try:
+        with open(os.path.join(pkt.step_dir(n - 1), "meta.json"), encoding="utf-8") as fp:
+            prev = json.load(fp)
+        end = schema.parse_timestamp(prev["end"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if prev.get("model") != meta["model"] or not prev.get("session_id") or \
+            prev.get("harness", "claude") != st.harness:
+        return None
+    ctx = prev.get("context") or {}
+    peak, base = ctx.get("peak"), ctx.get("base")
+    if not asked:
+        if (now - end).total_seconds() > st.carry_ttl_s:
+            return None
+        if peak is None or base is None or peak >= factor * base:
+            return None
+    if limit > 0 and peak is not None and peak >= limit:
+        return None
+    return prev
+
+
+def _context_meta(res, prev):
+    """``meta.json``'s ``context``. ``base`` is the first call of the chain's fresh
+    session, about its orientation cost O; carry-over stops at a multiple of it."""
+    c = model.context_summary(res.context)
+    if c is not None:
+        c["base"] = (prev.get("context") or {}).get("base") if prev else c["first"]
+        c["cache_breaks"], c["cache_rewrite"] = res.cache_breaks, res.cache_rewrite
+    return c
+
+
+def _step_cost(res, prev, chain_total=True):
+    """This step's cost. Some harnesses (``Caps.cost_is_chain_total``) report the
+    cost of the whole chain for a resumed session."""
+    if res.cost_usd is None or prev is None or not chain_total:
+        return res.cost_usd
+    before = prev.get("session_cost_usd", prev.get("cost_usd")) or 0.0
+    return round(max(0.0, res.cost_usd - before), 6)
+
+
 def step(target, force=False):
     try:
         pkt, st = _context(target)
@@ -373,15 +472,98 @@ def step(target, force=False):
         now = clock.now()
         if not force and not _due(meta, now):
             when = " until %s" % meta["wake_at"] if meta["state"] == "SLEEPING" else ""
+            if meta["state"] == "NEEDS_INPUT":
+                when = " (%s); answer with `wpk handoff -m`" % meta.get("reason")
             return Outcome(NOT_RUNNABLE, "packet is %s%s" % (meta["state"], when))
-        return _run(pkt, st, meta, body, n, a, lease, now)
+        try:
+            prof = profiles.select(st.profiles, st.harness, meta["model"], st.profile)
+        except profiles.ProfileError as e:
+            return Outcome(USAGE, str(e))
+        return _run(pkt, st, meta, body, n, a, lease, now, prof)
     finally:
         lease.release()
+        _ide_owner(pkt)
 
 
-def _run(pkt, st, meta, body, n, a, lease, now):
+NUDGE = ("wpk: your turn ended, but the step is not finished: %s. Nothing you "
+         "started in the background is still running for you, and its result "
+         "will not arrive. Check what it left (its output file, `git status`), "
+         "then write `.pending/summary.md` and `.pending/memento.md` now. If the "
+         "work is not done, say so in the summary and give the exact next action "
+         "in the memento, with `resume: now`.")
+NUDGE_WAIT_S = 600          # wait this long for processes the first run left
+NUDGE_TIMEOUT_MIN = 300     # the nudge always gets at least this long
+NUDGE_BUDGET_MIN = 0.25     # ... and this much budget
+TIME_WARN = 0.7             # ctxhook warns when this much of step_timeout has gone
+
+
+def _model(pkt, st, h, spec, env, sd, lease, text, timeout_s, append=False):
+    lease.start_refresher()
+    try:
+        return model.run(h.command(spec), text, pkt.path, env, timeout_s,
+                         os.path.join(sd, "transcript.jsonl"), os.path.join(sd, "stderr.log"),
+                         h.parse, pid_path=os.path.join(sd, "model.pid"), append=append)
+    finally:
+        lease.stop_refresher()
+
+
+def _meta(n, a, now, end, h, prof, meta, session, carried, res, prev):
+    return {
+        "step": n, "attempt": a, "start": _ts(now), "end": _ts(end), "harness": h.name,
+        "profile": prof.id, "model": meta["model"],
+        "session_id": res.session_id or session, "carried_from": carried,
+        "exit_code": res.exit_code,
+        "timed_out": res.timed_out, "is_error": res.is_error,
+        "cost_usd": _step_cost(res, prev, h.caps.cost_is_chain_total),
+        "session_cost_usd": res.cost_usd,
+        "tokens": res.tokens, "context": _context_meta(res, prev),
+        "duration_s": res.duration_s, "api_s": res.api_s, "quota": res.quota or None}
+
+
+def _check(pkt, snap, res):
+    """(why the attempt cannot commit or None, the memento's meta)."""
+    after = _snapshot(pkt)
+    if after != snap:
+        changed = sorted(k for k in set(snap) | set(after) if snap.get(k) != after.get(k))
+        _restore(pkt, snap)
+        return "model wrote committed files: %s" % ", ".join(changed[:5]), None
+    why = res.failure()
+    if why:
+        return why, None
+    mm, why = _validate_pending(pkt)
+    return why, mm
+
+
+def _nudgeable(h, res, why):
+    """The model ended its turn cleanly but left ``.pending/`` incomplete."""
+    return (h.caps.resume and res.session_id is not None and res.failure() is None
+            and why.startswith(".pending/"))
+
+
+def _wait_for_leftovers(wpid, n, limit_s):
+    """Let processes the step started (and left running) finish, up to ``limit_s``."""
+    deadline = time.monotonic() + limit_s
+    while time.monotonic() < deadline:
+        found = procs.of_step(None, wpid, n)
+        if not found or not found["count"]:
+            return
+        time.sleep(5)
+
+
+def _run(pkt, st, meta, body, n, a, lease, now, prof):
     tz = clock.zone(st.tz)
-    # 4. Prepare.
+    limit = profiles.value(st, prof, "step_context_tokens")
+    factor = profiles.value(st, prof, "carry_factor")
+    # 4. Prepare. The root is filled from the project root first (docs/setup.md §10).
+    if pkt.wpid == st.root:
+        try:
+            workspace.prepare(pkt, st.project_dir, st.name, st.setup, first=meta["step"] == 0)
+        except workspace.WorkspaceError as e:
+            sd = pkt.step_dir(n)
+            _rmtree(sd)
+            os.makedirs(sd)
+            fsutil.atomic_write(os.path.join(sd, "stderr.log"), "workspace: %s\n" % e)
+            return _fail(pkt, st, n, a, "workspace: %s" % e)
     _rmtree(pkt.pending_dir)
     os.makedirs(pkt.pending_dir)
     shutil.copytree(pkt.state_dir, os.path.join(pkt.pending_dir, "state"), symlinks=True)
@@ -390,17 +572,29 @@ def _run(pkt, st, meta, body, n, a, lease, now):
     os.makedirs(sd)
     # 6. Prompt.
     _, instruction = pkt.load_memento()
+    queued = notes.queued(pkt)
+    if queued:
+        notes.mark(sd, queued, "prompt", _ts(now))
     agent = fsutil.read_text(st.agent_md) if st.agent_md else None
+    handoffs = journal.handoffs_since_commit(journal.read(pkt.journal_path).records)
     text = prompt.build(status=meta, last_summary=body, instruction=instruction, step=n,
                         attempt=a, max_attempts=st.max_attempts, now=now, tz=tz,
                         children=_children(pkt, meta), agent_md=agent,
-                        state_dir=pkt.state_dir)
+                        state_dir=pkt.state_dir,
+                        handoffs=handoffs,
+                        last_attempt=_last_attempt(pkt, n), notes=queued)
     fsutil.atomic_write(os.path.join(sd, "prompt.md"), text)
     # 7. step-start, then 5. snapshot (so the journal line is part of it).
-    session = str(uuid.uuid5(uuid.UUID(meta["wpid"]), "%d:%d" % (n, a)))
-    journal.append(pkt.journal_path, {"type": "step-start", "t": _ts(now), "step": n,
-                                      "attempt": a, "model": meta["model"],
-                                      "session_id": session})
+    run_no = pkt.next_run(n)     # not the attempt: that restarts at 1 on a resume
+    session = str(uuid.uuid5(uuid.UUID(meta["wpid"]), "%d:%d" % (n, run_no)))
+    prev = _carry_from(pkt, st, meta, n, a, now, limit, factor,
+                       asked=any(r.get("carry_session") for r in handoffs))
+    carried = prev["session_id"] if prev else None
+    start = {"type": "step-start", "t": _ts(now), "step": n, "attempt": a,
+             "model": meta["model"], "session_id": session}
+    if carried:
+        start["carried_from"] = carried
+    journal.append(pkt.journal_path, start)
     snap = _snapshot(pkt)
     # 8. The model.
     add_dirs = []
@@ -409,42 +603,70 @@ def _run(pkt, st, meta, body, n, a, lease, now):
             t = os.path.realpath(os.path.join(pkt.identity_dir, name))
             if os.path.isdir(t):
                 add_dirs.append(t)
-    argv = model.command(meta["model"], session, st.permission_mode, st.allowed_tools,
-                         st.step_budget_usd, add_dirs)
+    add_dirs += [d for d in workspace.linked_dirs(pkt) if d not in add_dirs]
+    h = harness.get(st.harness)
+    system = os.path.join(sd, "system.md")
+    system_text = prompt.system(tz, h.name, prof.sizing)
+    fsutil.atomic_write(system, system_text)
+    if not h.caps.system_slot:      # no system prompt slot: the protocol leads the prompt
+        text = system_text + "\n\n" + text
+        fsutil.atomic_write(os.path.join(sd, "prompt.md"), text)
+    spec = harness.StepSpec(
+        model=meta["model"], session_id=session, permission_mode=st.permission_mode,
+        allowed_tools=st.allowed_tools, budget_usd=st.step_budget_usd, add_dirs=add_dirs,
+        system_file=system if h.caps.system_slot else None,
+        context_limit=limit if h.caps.inject else 0,
+        marker=os.path.join(sd, "ctxhook.fired"), resume_from=carried,
+        notes=(notes.inbox(pkt), os.path.join(sd, notes.SEEN)) if h.caps.inject else None)
     env = dict(os.environ, WPK_WPID=meta["wpid"], WPK_STEP=str(n), WPK_ATTEMPT=str(a))
-    lease.start_refresher()
-    try:
-        res = model.run(argv, text, pkt.path, env, st.step_timeout_s,
-                        os.path.join(sd, "transcript.jsonl"), os.path.join(sd, "stderr.log"))
-    finally:
-        lease.stop_refresher()
+    t0 = time.time()        # for ctxhook's time warning; the timeout is wall-clock too
+    env.update(WPK_STARTED_AT="%.0f" % t0, WPK_DEADLINE="%.0f" % (t0 + st.step_timeout_s),
+               WPK_WARN_AT="%.0f" % (t0 + TIME_WARN * st.step_timeout_s))
+    env.update(h.env(spec))
+    run = functools.partial(_model, pkt, st, h, spec, env, sd, lease)
+    res = run(text, st.step_timeout_s)
     end = clock.now()
     faults.point("after-model")
-    # 10. meta.json.
-    fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps({
-        "step": n, "attempt": a, "start": _ts(now), "end": _ts(end), "model": meta["model"],
-        "session_id": res.session_id or session, "exit_code": res.exit_code,
-        "timed_out": res.timed_out, "is_error": res.is_error, "cost_usd": res.cost_usd,
-        "tokens": res.tokens, "duration_s": res.duration_s}, indent=2) + "\n")
-    # 9. Verify the snapshot.
-    after = _snapshot(pkt)
-    if after != snap:
-        changed = sorted(k for k in set(snap) | set(after) if snap.get(k) != after.get(k))
-        _restore(pkt, snap)
-        return _fail(pkt, st, n, a,
-                     "model wrote committed files: %s" % ", ".join(changed[:5]))
-    why = res.failure()
-    if why:
-        return _fail(pkt, st, n, a, why)
-    # 11. Validate.
-    mm, why = _validate_pending(pkt)
-    if why:
+    meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev)
+    fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(meta_out, indent=2) + "\n")
+    why, mm = _check(pkt, snap, res)
+    if why is not None and _nudgeable(h, res, why):
+        # One more turn in the same session: the work is all in its context,
+        # only the two files are missing (docs/experiments/dvs-enh-steps.md).
+        journal.append(pkt.journal_path, {"type": "step-nudge", "t": _ts(), "step": n,
+                                          "attempt": a, "why": why})
+        snap = _snapshot(pkt)       # the journal line is part of it, as at step-start
+        lease.start_refresher()
+        try:
+            _wait_for_leftovers(meta["wpid"], n, NUDGE_WAIT_S)
+        finally:
+            lease.stop_refresher()
+        first = res
+        nspec = dataclasses.replace(spec, resume_from=res.session_id, session_id=str(
+            uuid.uuid5(uuid.UUID(meta["wpid"]), "%d:%d:nudge" % (n, run_no))),
+            budget_usd=max(spec.budget_usd - (res.cost_usd or 0.0), NUDGE_BUDGET_MIN))
+        run = functools.partial(_model, pkt, st, h, nspec, env, sd, lease)
+        res = run(NUDGE % why, max(st.step_timeout_s - res.duration_s, NUDGE_TIMEOUT_MIN),
+                  append=True)
+        if not h.caps.cost_is_chain_total and None not in (res.cost_usd, first.cost_usd):
+            res.cost_usd += first.cost_usd
+        res.duration_s = round(first.duration_s + res.duration_s, 3)
+        end = clock.now()
+        meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev)
+        meta_out["nudged"] = why
+        fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(meta_out, indent=2) + "\n")
+        why, mm = _check(pkt, snap, res)
+    if why is not None:
         return _fail(pkt, st, n, a, why)
     # 12. Resolve.
     try:
         state, wake = clock.resolve(mm["resume"], end, tz)
     except clock.ResumeError as e:
         return _fail(pkt, st, n, a, "resume: %s" % e)
+    asked = questions.normalise(mm.get("ask"))
+    ask = questions.summary(asked) if asked else None
+    if ask:                         # the questions wait for a hand-off; resume is the record
+        state, wake = "NEEDS_INPUT", None
     summary = fsutil.read_text(os.path.join(pkt.pending_dir, "summary.md"))
     pend_state = os.path.join(pkt.pending_dir, "state")
     fsutil.atomic_write(os.path.join(sd, "state.diff"), state_diff(pkt.state_dir, pend_state))
@@ -453,17 +675,24 @@ def _run(pkt, st, meta, body, n, a, lease, now):
     decision = {
         "state": state, "resume_expr": " ".join(mm["resume"].split()),
         "wake_at": _ts(wake) if wake else None,
-        "reason": mm.get("reason") if state == "FAILED" else None,
+        "reason": ask if ask else mm.get("reason") if state == "FAILED" else None,
         "model": meta["model"], "summary": summary,
         "spawn": spawn.decision_entries(meta["wpid"], n, mm.get("spawn")),
     }
+    seen = notes.committed(sd, pkt)
+    if seen:
+        decision["notes"] = seen
+    hd = workspace.heads(pkt)
+    if hd:
+        decision["heads"] = hd
     # 13-18. Commit.
     rec = {"type": "commit-begin", "t": _ts(end), "step": n, "decision": decision}
     journal.append(pkt.journal_path, rec)
     faults.point("after-commit-begin")
     _apply(pkt, st, rec)
-    return Outcome(OK, "step %d committed: %s%s" % (
-        n, state, " until %s" % decision["wake_at"] if wake else ""))
+    return Outcome(OK, "step %d committed: %s%s%s" % (
+        n, state, " until %s" % decision["wake_at"] if wake else "",
+        ": %s" % ask if ask else ""))
 
 
 # --- pause and resume ------------------------------------------------------------
@@ -478,11 +707,56 @@ def _who():
     return "%s@%s" % (user, socket.gethostname())
 
 
-def admin(pkt, op):
-    """``pause``: RUNNABLE or SLEEPING to PAUSED. ``resume``: PAUSED or FAILED to RUNNABLE.
+CONTINUE_FROM = ("COMPLETED", "NEEDS_INPUT", "PAUSED", "FAILED")
 
-    Takes the lease, so it never races a running step, and records an
-    ``admin`` line in the journal.
+
+def last_heads(records):
+    """The work repo heads the last committed step recorded (``decision.heads``)."""
+    for r in reversed(records):
+        if r.get("type") == "commit-begin":
+            return (r.get("decision") or {}).get("heads") or {}
+    return {}
+
+
+def batch_of(records):
+    """The batch the packet is on: 1, plus one for each next-batch hand-off."""
+    return 1 + sum(1 for r in records if r.get("type") == "handoff" and "instruction" in r)
+
+
+def _archive_outline(pkt, batch):
+    """``state/outline.md`` to ``state/history/outline-<batch>.md``; the new path or None."""
+    src = os.path.join(pkt.state_dir, "outline.md")
+    if not os.path.isfile(src):
+        return None
+    rel = os.path.join("history", "outline-%d.md" % batch)
+    dst = os.path.join(pkt.state_dir, rel)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    n = 1
+    while os.path.exists(dst):           # a retried hand-off, or a hand-made file
+        n += 1
+        rel = os.path.join("history", "outline-%d.%d.md" % (batch, n))
+        dst = os.path.join(pkt.state_dir, rel)
+    os.rename(src, dst)
+    return "state/" + rel
+
+
+def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
+          archive_outline=None, carry_session=False, force=False):
+    """``pause``: RUNNABLE or SLEEPING to PAUSED. ``wake``: SLEEPING to RUNNABLE
+    (a note that should not wait, docs/interaction.md §6a). ``resume``: NEEDS_INPUT, PAUSED or
+    FAILED to RUNNABLE. ``handoff``: the same as ``resume``, with an optional note
+    for the next step (long-running.md §1); it records a ``handoff`` line, which
+    the step prompt shows, instead of an ``admin`` line. ``answers`` maps question
+    ids to text (docs/interaction.md §3).
+
+    ``continue``: the next batch of work (docs/dash-tasks.md §6). From
+    ``COMPLETED`` too; ``instruction`` replaces the memento, the outline is
+    archived (``archive_outline``, default: only from ``COMPLETED``), and the
+    ``handoff`` record gets ``instruction`` and ``batch``. Work repos with
+    uncommitted changes refuse it unless ``force``. ``carry_session``: the
+    next step resumes the last step's session (§6.5).
+
+    Takes the lease, so it never races a running step.
     """
     try:
         meta, body = pkt.load_status()
@@ -499,16 +773,77 @@ def admin(pkt, op):
             if old not in ("RUNNABLE", "SLEEPING"):
                 return Outcome(NOT_RUNNABLE, "%s is %s; nothing to pause" % (pkt.wpid[:8], old))
             meta.update(state="PAUSED", reason="by hand", wake_at=None)
-        elif op == "resume":
-            if old not in ("PAUSED", "FAILED"):
-                return Outcome(NOT_RUNNABLE, "%s is %s; nothing to resume" % (pkt.wpid[:8], old))
+        elif op == "wake":
+            if old != "SLEEPING":
+                return Outcome(NOT_RUNNABLE, "%s is %s; nothing to wake" % (pkt.wpid[:8], old))
+            meta.update(state="RUNNABLE", wake_at=None)
+        elif op in ("resume", "handoff", "continue"):
+            allowed = CONTINUE_FROM if op == "continue" else ("NEEDS_INPUT", "PAUSED", "FAILED")
+            if old not in allowed:
+                return Outcome(NOT_RUNNABLE, "%s is %s; nothing to %s" % (pkt.wpid[:8], old, op))
+            asked = meta.get("reason") if old == "NEEDS_INPUT" else None
+            qs = questions.of_packet(pkt) if old == "NEEDS_INPUT" else []
+            records = journal.read(pkt.journal_path).records
+            extra = {}
+            if op == "continue":
+                text = (instruction or "").strip()
+                if not text:
+                    return Outcome(USAGE, "the next batch needs an instruction")
+                if text.startswith("---"):
+                    return Outcome(USAGE, "write the instruction without front matter")
+                dirt = workspace.dirty(pkt)
+                if dirt and not force:
+                    return Outcome(USAGE, "uncommitted changes in %s: commit or stash them "
+                                   "first, so the next step starts from a clean tree" % ", ".join(
+                                       "work/%s (%d)" % (n, len(v)) for n, v in dirt.items()))
+                batch = batch_of(records) + 1
+                if archive_outline is None:
+                    archive_outline = old == "COMPLETED"
+                moved = _archive_outline(pkt, batch - 1) if archive_outline else None
+                fsutil.atomic_write(pkt.memento_path, text + "\n")
+                extra = {"batch": batch, "instruction": text}
+                if moved:
+                    extra["outline"] = moved
+                if carry_session:
+                    extra["carry_session"] = True
             meta.update(state="RUNNABLE", reason=None, wake_at=None, attempts=0)
         else:
             raise ValueError(op)
         meta["updated"] = _ts()
         pkt.save_status(meta, body)
-        journal.append(pkt.journal_path, {"type": "admin", "t": _ts(), "op": op, "by": _who(),
-                                          "from": old, "to": meta["state"]})
+        if op in ("handoff", "continue"):
+            rec = {"type": "handoff", "t": _ts(), "by": by or _who(), "from": old,
+                   "to": meta["state"]}
+            rec.update(extra)
+            hd = workspace.heads(pkt)
+            if hd:
+                rec["heads"] = hd
+                since = workspace.commits_since(pkt, last_heads(records))
+                if since:
+                    rec["commits"] = since
+            if asked:
+                rec["asked"] = asked
+            if qs:
+                rec["questions"] = qs
+            if answers:
+                rec["answers"] = dict(answers)
+            if note and note.strip():
+                rec["note"] = note.strip()
+        else:
+            rec = {"type": "admin", "t": _ts(), "op": op, "by": by or _who(),
+                   "from": old, "to": meta["state"]}
+        journal.append(pkt.journal_path, rec)
         return Outcome(OK, "%s: %s -> %s" % (pkt.wpid[:8], old, meta["state"]))
     finally:
         lease.release()
+        _ide_owner(pkt)
+
+
+def _ide_owner(pkt):
+    """Read-only in VS Code while the runner owns the packet (docs/vscode-plan.md
+    §5). Only a packet someone opened has a workspace file; never fails a step."""
+    from . import ide
+    try:
+        ide.set_owner(pkt)
+    except Exception as e:          # noqa: BLE001: the editor's file is not the packet
+        log.warning("%s: VS Code workspace not updated: %s", pkt.wpid[:8], e)

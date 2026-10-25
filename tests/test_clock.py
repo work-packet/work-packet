@@ -36,7 +36,7 @@ def test_parse_resume(expr, want):
     ("on 10 Jan", "Stage 2"),
     ("every monday 08:00", "Stage 2"),
     ("wait: child", "Stage 3"),
-    ("ask", "Stage 3"),
+    ("ask", "not a resume value"),
     (5, "must be a string"),
     (None, "must be a string"),
 ])

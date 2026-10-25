@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% from "_note.html" import box with context %}
+{% import "_log.html" as lg %}
+{% block title %}live · {{ l.short }} · {{ e.name }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <a href="/p/{{ e.name|urlencode }}/{{ l.wpid }}"><code>{{ l.short }}</code></a> / live{% endblock %}
+{% block head %}
+<style>
+.livegrid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
+@media (max-width: 900px) { .livegrid { grid-template-columns: minmax(0, 1fr); } }
+.now { display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline; }
+.now .big { font-size: 15px; font-weight: 600; }
+.feed { list-style: none; margin: 0; padding: 0; }
+.feed li { border-left: 3px solid var(--line); padding: 3px 0 3px 10px; margin: 4px 0; }
+.feed li.text { border-left-color: var(--link); }
+.feed li.tool { border-left-color: var(--SLEEPING); }
+.feed li.err { border-left-color: var(--FAILED); }
+.feed li.waiting { border-left-color: var(--running); }
+.feed .tn { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; margin-right: 6px; }
+.feed .res { color: var(--muted); font-size: 12.5px; margin-top: 1px; word-break: break-word; }
+.feed code { word-break: break-all; }
+.tasks { list-style: none; margin: 0; padding: 0; }
+.tasks li { padding: 2px 0; }
+.tasks .mark { display: inline-block; width: 1.4em; text-align: center; }
+.tasks .done { color: var(--muted); } .tasks .done .mark { color: var(--COMPLETED); }
+.tasks .current { font-weight: 600; } .tasks .current .mark { color: var(--running); }
+.tasks .deferred { color: var(--muted); text-decoration: line-through; }
+.bar { height: 6px; background: var(--code); border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
+.bar span { display: block; height: 100%; background: var(--COMPLETED); }
+table.procs { width: 100%; table-layout: fixed; font-size: 12px; }
+table.procs td.cmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.procs td.cmd code { font-size: 11px; }
+</style>
+{% endblock %}
+{% block main %}
+{% set f = l.feed %}
+<div class="panel now" style="margin-bottom:14px">
+  {% if l.running %}<span class="state running pulse">RUNNING</span>
+  <span class="big">Step {{ l.running.step }}{% if l.running.attempt and l.running.attempt > 1 %}, attempt {{ l.running.attempt }}{% endif %}</span>
+  <span>{{ l.elapsed or "" }}</span>
+  {% else %}<span class="state {{ l.meta.state }}">{{ l.meta.state }}</span>
+  <span class="big">{% if l.step %}Last step {{ l.step.n }} ({{ l.step.outcome }}){% else %}No steps yet{% endif %}</span>
+  {% endif %}
+  {% if f %}<span class="muted">{{ f.calls }} calls{% if f.context %} · context {{ "{:,}".format(f.context) }}{% endif %} · {{ "{:,}".format(f.output_tokens) }} output tokens</span>{% endif %}
+  {% if l.step %}<a href="/p/{{ e.name|urlencode }}/{{ l.wpid }}/{{ l.step.dir }}">full transcript</a>
+  · <a href="/p/{{ e.name|urlencode }}/{{ l.wpid }}/{{ l.step.dir }}/raw">raw</a>{% endif %}
+</div>
+{% if l.questions %}<div class="flash bad">It is waiting for you: <a href="/p/{{ e.name|urlencode }}/{{ l.wpid }}#answer">answer {{ l.questions|length }} question{{ "s" if l.questions|length > 1 }}</a>.</div>{% endif %}
+
+{{ box(e, l.wpid, l.meta.state, l.running, l.notes, back="live") }}
+<div class="livegrid">
+  <section>
+    {% set base = "/p/%s/%s/live" % (e.name|urlencode, l.wpid) %}
+    <div class="viewbar"><h2>{{ "What it is doing" if l.running else "What it did" }}</h2>
+      {{ lg.bar(base, view, [("feed", "Feed"), ("log", "Log")],
+                "/p/%s/%s/%s" % (e.name|urlencode, l.wpid, l.step.dir) if l.step else None, "log") }}</div>
+    {% if view == "log" %}
+    {% if l.log %}{{ lg.console(l.log, l.running) }}{% else %}<p class="muted">Nothing in the transcript yet.</p>{% endif %}
+    {% elif not f or not f.events %}<p class="muted">Nothing in the transcript yet.</p>{% else %}
+    <ul class="feed pane box" id="feed">
+      {% for ev in f.events %}
+      {% if ev.kind == "text" %}
+      <li class="text"><span class="tn">model</span>{{ ev.label }}</li>
+      {% else %}
+      <li class="tool {{ 'err' if ev.error }} {{ 'waiting' if ev.result is none and l.running }}"><span class="tn">{{ ev.name }}</span><code>{{ ev.label }}</code>
+        {% if ev.detail %}<div class="res"><code>{{ ev.detail }}</code></div>{% endif %}
+        {% if ev.result is not none %}<div class="res">→ {{ ev.result }}</div>
+        {% elif l.running %}<div class="res">… running</div>{% endif %}</li>
+      {% endif %}
+      {% endfor %}
+    </ul>
+    {% if f.ended %}<p class="muted">Session ended{% if f.ended.error %} with an error{% endif %}{% if f.ended.cost is not none %}: {{ f.ended.cost|money }}, {{ f.ended.turns }} turns{% endif %}.</p>{% endif %}
+    {% endif %}
+  </section>
+  <section>
+    {% set pr = l.procs %}
+    {% if pr %}
+    <h2 id="procs">Processes{% if pr.procs %} <span class="muted" style="font-weight:400;font-size:13px">{{ pr.count }} · {{ pr.rss|bytes }} · {{ pr.cpu_s|secs }} CPU</span>{% endif %}</h2>
+    {% if pr.remote %}<p class="muted">The step runs on <code>{{ pr.remote }}</code>; its processes show only on a board running there.</p>
+    {% elif not pr.procs %}<p class="muted">None found.</p>
+    {% else %}
+    <div class="panel wrap"><table class="procs">
+      <colgroup><col style="width:4.5em"><col><col style="width:2em"><col style="width:4.5em"><col style="width:5.5em"><col style="width:5em"></colgroup>
+      <tr><th class="num">PID</th><th>Command</th><th></th><th class="num">CPU</th><th class="num">Memory</th><th class="num">Age</th></tr>
+      {% for p in pr.procs[:procs_max] %}
+      <tr><td class="num muted">{{ p.pid }}</td>
+        <td class="cmd" style="padding-left:{{ 4 + p.depth * 14 }}px" title="{{ p.cmd }}">{% if p.depth %}<span class="muted">└ </span>{% endif %}<code>{{ p.cmd }}</code></td>
+        <td class="muted" title="state">{{ p.state }}</td>
+        <td class="num">{{ p.cpu_s|secs }}</td><td class="num">{{ p.rss|bytes }}</td><td class="num muted">{{ p.age_s|secs }}</td></tr>
+      {% endfor %}
+      {% if pr.count > procs_max %}<tr><td></td><td class="muted" colspan="5">… and {{ pr.count - procs_max }} more</td></tr>{% endif %}
+    </table></div>
+    {% endif %}
+    {% endif %}
+    {% if f and f.todos %}
+    <h2>This step's tasks</h2>
+    <ul class="tasks panel">
+      {% for t in f.todos %}
+      <li class="{{ 'done' if t.status == 'completed' else 'current' if t.status == 'in_progress' }}"><span class="mark">{{ "✓" if t.status == "completed" else "▶" if t.status == "in_progress" else "○" }}</span>{{ t.active if t.status == "in_progress" and t.active else t.content }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <h2>Outline{% if l.outline %} <span class="muted" style="font-weight:400;font-size:13px">{{ l.outline.done }} of {{ l.outline.total }} done · <code>{{ l.outline.file }}</code></span>{% endif %}</h2>
+    {% if l.outline %}
+    <div class="bar"><span style="width:{{ (100 * l.outline.done / l.outline.total)|round(1) }}%"></span></div>
+    <ul class="tasks panel">
+      {% for i in l.outline.entries %}
+      <li class="{{ i.state }} {{ 'current' if i.current }}" style="padding-left:{{ i.depth * 1.2 }}em"><span class="mark">{{ {"done": "✓", "active": "▶", "deferred": "–", "added": "+", "partial": "◐"}.get(i.state, "▶" if i.current else "○") }}</span>{{ i.text }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">No checklist in <code>state/</code> (an <code>outline.md</code> with <code>- [ ]</code> lines shows here).</p>{% endif %}
+
+    <h2>Steps done</h2>
+    {% if l.history %}
+    <table>
+      {% for s in l.history %}
+      <tr><td class="num"><a href="/p/{{ e.name|urlencode }}/{{ l.wpid }}/{{ s.dir }}">{{ s.n }}</a></td>
+        <td class="num muted">{{ s.cost_usd|money }}</td><td>{{ s.summary }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted">None yet.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

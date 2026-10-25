@@ -24,19 +24,32 @@ def projects_dir(h=None):
     return os.path.join(h or home(), "projects")
 
 
+def load_config_file(h=None):
+    """``config.toml`` as written (validated); ``{}`` if there is none."""
+    path = os.path.join(h or home(), "config.toml")
+    if not os.path.exists(path):
+        return {}
+    try:
+        got = load_toml(path)
+    except (OSError, ValueError) as e:
+        raise ConfigError("%s: %s" % (path, e)) from None
+    probs = [p for p in schema.validate_config(got) if p.level == "error"]
+    if probs:
+        raise ConfigError("%s: %s: %s" % (path, probs[0].field, probs[0].msg))
+    return got
+
+
 def load_config(h=None):
     """``config.toml`` merged over the defaults. A missing file is all defaults."""
-    path = os.path.join(h or home(), "config.toml")
     d = dict(schema.CONFIG_DEFAULTS)
-    if os.path.exists(path):
-        try:
-            got = load_toml(path)
-        except (OSError, ValueError) as e:
-            raise ConfigError("%s: %s" % (path, e)) from None
-        probs = [p for p in schema.validate_config(got) if p.level == "error"]
-        if probs:
-            raise ConfigError("%s: %s: %s" % (path, probs[0].field, probs[0].msg))
-        d.update(got)
+    d.update(load_config_file(h))
+    return d
+
+
+def load_server_config(h=None):
+    """The ``[server]`` table of ``config.toml`` over its defaults."""
+    d = dict(schema.SERVER_DEFAULTS)
+    d.update(load_config_file(h).get("server") or {})
     return d
 
 

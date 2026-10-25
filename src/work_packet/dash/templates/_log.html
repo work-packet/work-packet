@@ -1,0 +1,23 @@
+{#- The transcript as a CI-style log (data.log): numbered lines, a group per tool call. -#}
+{% macro console(lg, running, id="log", follow=True) -%}
+<div class="console pane" id="{{ id }}" data-follow="{{ 'yes' if follow else 'no' }}">
+{%- if not lg.groups %}<div class="ln meta"><span class="n"></span><span class="t">Empty so far.</span></div>{% endif %}
+{%- for g in lg.groups %}
+{%- if g.title %}
+<details id="{{ g.id }}" class="grp {{ g.kind }}{{ ' err' if g.error }}"{{ " open" if g.error or (running and g.kind == "tool" and not g.done) }}>
+<summary class="ln" id="L{{ g.n }}"><a class="n" href="#L{{ g.n }}">{{ g.n }}</a><span class="t">{{ g.title }}{% if g.kind == "tool" and not g.done %}<span class="dim">{{ "  … running" if running else "  (no result)" }}</span>{% endif %}</span></summary>
+{%- for n, t, c in g.lines %}<div class="ln {{ c }}" id="L{{ n }}"><a class="n" href="#L{{ n }}">{{ n }}</a><span class="t">{{ t }}</span></div>{% endfor %}
+</details>
+{%- else %}
+{%- for n, t, c in g.lines %}<div class="ln {{ g.kind }}{{ ' err' if g.error }}" id="L{{ n }}"><a class="n" href="#L{{ n }}">{{ n }}</a><span class="t">{{ t }}</span></div>{% endfor %}
+{%- endif %}
+{%- endfor %}
+</div>
+{%- endmacro %}
+
+{#- Tabs and buttons above a transcript. -#}
+{% macro bar(base, view, views, step_url, target) -%}
+<span class="tabs">{% for v, label in views %}<a class="{{ 'on' if v == view }}" href="{{ base }}{{ '?view=log' if v == 'log' }}">{{ label }}</a>{% endfor %}</span>
+{%- if view == "log" %} <button type="button" class="mini" data-expand="all" data-target="#{{ target }}">Expand all</button><button type="button" class="mini" data-expand="none" data-target="#{{ target }}">Collapse all</button>{% endif %}
+{%- if step_url %} <a class="mini" href="{{ step_url }}/log.txt">plain text</a> <a class="mini" href="{{ step_url }}/raw">raw JSONL</a>{% endif %}
+{%- endmacro %}

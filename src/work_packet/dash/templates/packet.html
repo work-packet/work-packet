@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% from "_note.html" import box with context %}
+{% import "_tokens.html" as tkm %}
 {% block title %}{{ p.short }} · {{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <code>{{ p.short }}</code>{% endblock %}
 {% block main %}
@@ -9,9 +11,72 @@
 {% if p.running %}
 <div class="panel" style="margin-bottom:12px">Running step {{ p.running.step }}, attempt {{ p.running.attempt }},
   since {{ p.running.since|when }}.
-  {% if p.steps and p.steps[0].outcome == "running" %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/{{ p.steps[0].dir }}">Watch its transcript</a>.{% endif %}</div>
+  <a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live"><strong>Live view</strong></a> · <a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live#procs">processes</a>{% if p.steps and p.steps[0].outcome == "running" %} · <a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/{{ p.steps[0].dir }}">full transcript</a>{% endif %}.</div>
 {% endif %}
 
+{% set st = p.meta.state %}
+{% if p.wpid == e.root and not p.running and st in ("COMPLETED", "NEEDS_INPUT", "PAUSED", "FAILED") %}
+<div class="panel row" style="margin:0 0 12px">
+  {% if p.meta.reason == "setup" %}<a href="/p/{{ e.name|urlencode }}/compose"><strong>Set it up</strong></a><span class="muted">: instruction, inputs, settings and a shell, then hand it off.</span>
+  {% else %}<a href="/p/{{ e.name|urlencode }}/compose"><strong>Next batch</strong></a><span class="muted">: {{ "it is done; " if st == "COMPLETED" }}give it a new instruction, change files in a shell, and hand it off.</span>{% endif %}
+</div>
+{% endif %}
+{% if p.questions and not p.running %}
+<form id="answer" class="act panel ask" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:14px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <h2 style="margin-top:0">{{ "It asks" if p.questions|length == 1 else "It asks " ~ p.questions|length ~ " questions" }}</h2>
+  {% for q in p.questions %}
+  <div class="q">
+    <div class="text">{% if p.questions|length > 1 %}<code>{{ q.id }}</code> {% endif %}{{ q.q }}</div>
+    {% if q.choices %}
+    <div class="opts">{% for c in q.choices %}
+      <label><input type="radio" name="a.{{ q.id }}" value="{{ c }}" {{ "checked" if c == q.recommend }}> {{ c }}</label>
+    {% endfor %}</div>
+    {% else %}
+    <input type="text" name="a.{{ q.id }}" placeholder="{{ q.recommend or 'your answer' }}" aria-label="answer to {{ q.id }}">
+    {% endif %}
+    <div class="muted" style="font-size:12px">
+      {% if q.recommend %}Recommends: <strong>{{ q.recommend }}</strong>.{% endif %}
+      {% if q.grants %}A yes allows {% for t in q.grants %}<code>{{ t }}</code>{{ ", " if not loop.last }}{% endfor %}.{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  <label class="muted" for="note">Note for the next step (optional)</label>
+  <textarea id="note" name="note"></textarea>
+  <div class="row">
+    <button class="go primary" name="action" value="answer">Send answers</button>
+    <button class="go" name="action" value="recommend">Take the recommendations</button>
+    <span class="muted" style="font-size:12px">Blank answers are sent as unanswered, unless you take the recommendations.</span>
+  </div>
+</form>
+{% elif st in ("PAUSED", "FAILED", "NEEDS_INPUT") and not p.running %}
+<form class="act panel" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:14px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <h2 style="margin-top:0">Hand off</h2>
+  {% if p.meta.reason %}<p class="{{ 'err' if st == 'FAILED' }}">{{ p.meta.reason }}</p>{% endif %}
+  <label class="muted" for="note">Note for the next step (optional)</label>
+  <textarea id="note" name="note"></textarea>
+  <div class="row"><button class="go primary" name="action" value="handoff">Hand off to the runner</button></div>
+</form>
+{% elif st in ("RUNNABLE", "SLEEPING") %}
+<form class="act row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:12px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <button class="go" name="action" value="pause">Pause</button>
+</form>
+{% endif %}
+
+{% if ide.desktop %}
+<form class="act row" method="post" action="/p/{{ e.name|urlencode }}/ide" style="margin-bottom:12px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="wpid" value="{{ p.wpid }}">
+  {% if st in ("RUNNABLE", "SLEEPING") %}<button class="go" name="pause" value="1"{% if p.running %} disabled title="a step is running: pause after it ends"{% endif %}>Pause and open</button>
+  {% endif %}<button class="go" name="go" value="desktop">Open in VS Code</button>
+  {% if ide_web %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
+  <span class="muted" style="font-size:12px">{% if p.running or st in ("RUNNABLE", "SLEEPING") %}The runner owns it: files open read-only until you pause it.{% else %}Its worktrees, <code>state/</code> and the packet folder.{% endif %}</span>
+</form>
+{% endif %}
+{{ box(e, p.wpid, st, p.running, p.notes) }}
+{% if not p.running %}<p><a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live">Live view</a>: the last step's activity, the outline and the steps done.</p>{% endif %}
 <div class="grid2">
   <section>
     <h2>Status</h2>
@@ -48,10 +113,22 @@
   </section>
 </div>
 
+{% if tk %}
+<h2 id="tokens">Tokens</h2>
+<div class="panel">
+  {{ tkm.summary(tk.figures, tk.steps) }}
+  {{ tkm.chart(tk.chart, "Context read per step (failed attempts marked red)") }}
+  {{ tkm.chart(tk.chart_out, "Output per step") }}
+</div>
+{% if tk.by_item %}<h3>By plan item</h3>{{ tkm.table(tk.by_item, "Item") }}{% endif %}
+{% if tk.tools %}<h3 id="context">Where the context went</h3>{{ tkm.tools(tk.tools) }}{% endif %}
+{% endif %}
+
 <h2>Steps</h2>
 {% if p.steps %}
 <div class="wrap"><table>
-  <tr><th>Step</th><th>Outcome</th><th>Started</th><th class="num">Time</th><th class="num">Cost</th><th>Summary</th></tr>
+  <tr><th>Step</th><th>Outcome</th><th>Started</th><th class="num">Time</th><th class="num">Cost</th><th class="num">Context</th><th class="num">Output</th>{% if p.steps|selectattr("item")|list %}<th>Item</th>{% endif %}<th>Summary</th></tr>
+  {% set items = p.steps|selectattr("item")|list %}
   {% for s in p.steps %}
   <tr>
     <td><a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/{{ s.dir }}">{{ s.n }}{% if s.outcome == "failed" %} attempt {{ s.attempt }}{% endif %}</a></td>
@@ -59,6 +136,9 @@
     <td style="white-space:nowrap">{{ s.start|when }}</td>
     <td class="num">{{ s.duration_s|secs }}</td>
     <td class="num">{{ s.cost_usd|money }}</td>
+    <td class="num">{{ s.context_tokens|tok if s.context_tokens is not none }}</td>
+    <td class="num">{{ s.output_tokens|tok if s.output_tokens is not none }}</td>
+    {% if items %}<td>{{ s.item or "" }}</td>{% endif %}
     <td>{% if s.why %}<span class="err">{{ s.why }}</span>{% else %}{{ s.summary }}{% endif %}</td>
   </tr>
   {% endfor %}

@@ -29,6 +29,13 @@ dash = [
     "starlette >= 0.37",
     "jinja2 >= 3.1",
     "uvicorn >= 0.29",
+    "websockets >= 12",           # the browser shell (docs/dash-tasks.md §5)
+    "python-multipart >= 0.0.9",  # Compose's file upload
+    "httpx >= 0.27",              # web VS Code's proxy (docs/vscode-plan.md §4.1)
+]
+tui = [
+    "textual >= 0.80",
+    "pyte >= 0.8",
 ]
 
 [project.scripts]
@@ -44,7 +51,7 @@ version = {attr = "work_packet.__about__.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-work_packet = ["prompts/*.md", "dash/templates/*.html"]
+work_packet = ["prompts/*.md", "dash/templates/*.html", "dash/live.js", "dash/pane.js", "dash/compose.js", "dash/shell.js", "dash/new.js", "dash/ide.js", "dash/vendor/*", "profiles.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

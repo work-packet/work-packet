@@ -2,7 +2,7 @@
 {% block title %}Board{% endblock %}
 {% block head %}
 <style>
-.board { display: grid; grid-template-columns: repeat(6, minmax(200px, 1fr)); gap: 12px;
+.board { display: grid; grid-template-columns: repeat(7, minmax(180px, 1fr)); gap: 12px;
   overflow-x: auto; }
 @media (max-width: 1100px) { .board { grid-template-columns: repeat(3, minmax(200px, 1fr)); } }
 @media (max-width: 640px) { .board { grid-template-columns: minmax(0, 1fr); } }
@@ -12,7 +12,7 @@
   border-left: 4px solid var(--unknown); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
 .card:hover { text-decoration: none; border-color: var(--link); }
 .card.Running { border-left-color: var(--running); } .card.Ready { border-left-color: var(--RUNNABLE); }
-.card.Sleeping { border-left-color: var(--SLEEPING); } .card.Paused { border-left-color: var(--PAUSED); }
+.card.Needs { border-left-color: var(--NEEDS_INPUT); } .card.Sleeping { border-left-color: var(--SLEEPING); } .card.Paused { border-left-color: var(--PAUSED); }
 .card.Failed { border-left-color: var(--FAILED); } .card.Done { border-left-color: var(--COMPLETED); }
 .card .name { font-weight: 700; display: flex; justify-content: space-between; gap: 6px; }
 .card .line { font-size: 12.5px; margin-top: 3px; }
@@ -23,7 +23,7 @@
 .counts { font-size: 11.5px; margin-top: 5px; display: flex; gap: 6px; flex-wrap: wrap; }
 .counts span::before { content: "●"; margin-right: 2px; }
 .counts .RUNNABLE::before { color: var(--RUNNABLE); } .counts .SLEEPING::before { color: var(--SLEEPING); }
-.counts .PAUSED::before { color: var(--PAUSED); } .counts .FAILED::before { color: var(--FAILED); }
+.counts .NEEDS_INPUT::before { color: var(--NEEDS_INPUT); } .counts .PAUSED::before { color: var(--PAUSED); } .counts .FAILED::before { color: var(--FAILED); }
 .counts .COMPLETED::before { color: var(--COMPLETED); }
 </style>
 {% endblock %}
@@ -32,7 +32,7 @@
 {% if total == 0 and not broken %}
 <div class="panel">
   <p>No projects are registered in <code>{{ home }}</code>.</p>
-  <p class="muted">Create one with <code>wpk new &lt;name&gt; --prompt "…"</code>, then run <code>wpk tick</code>.</p>
+  <p class="muted"><a href="/new"><strong>New task</strong></a> here, or <code>wpk setup</code> (a guided setup in a terminal), or <code>wpk new &lt;name&gt;</code> and then <code>wpk doctor &lt;name&gt;</code>.</p>
 </div>
 {% endif %}
 <div class="board">
@@ -40,20 +40,30 @@
   <section class="col">
     <h2><span>{{ col }}</span><span class="muted">{{ cols[col]|length }}</span></h2>
     {% for c in cols[col] %}
-    <a class="card {{ c.column }}" href="/p/{{ c.name|urlencode }}">
+    <a class="card {{ c.column }}" href="/p/{{ c.name|urlencode }}{% if c.running %}/{{ c.running.wpid }}/live{% elif c.setup %}/compose{% elif c.column == 'Needs you' and c.root %}/{{ c.root.wpid }}#answer{% endif %}">
       <div class="name"><span>{{ c.name }}</span>
         {% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</div>
       {% if c.running %}
         <div class="line"><span class="state running pulse">RUNNING</span>
           {{ c.running.name or c.running.short }} step {{ c.running.step }}{% if c.running.for %}, {{ c.running.for }}{% endif %}</div>
+        {% if c.running.now %}<div class="line muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.running.now }}</div>{% endif %}
       {% elif c.column == "Ready" %}
-        <div class="line">due now, waiting for <code>wpk tick</code></div>
+        <div class="line">due now, waiting for {{ "the runner" if runner else "<code>wpk tick</code>"|safe }}</div>
       {% elif c.column == "Sleeping" %}
         <div class="line">wakes {{ c.root.next }}</div>
+      {% elif c.column == "Needs you" and c.root and c.root.reason %}
+        <div class="line"><strong>Asks:</strong> {{ c.root.reason }}</div>
+        <div class="line muted">open to answer, or <code>wpk answer {{ c.name }}</code></div>
+      {% elif c.setup %}
+        <div class="line"><strong>Setting up:</strong>
+          {% if c.setup.missing is none %}<span class="err">{{ c.setup.next }}</span>
+          {% elif c.setup.missing %}{{ c.setup.missing }} missing{% if c.setup.warnings %}, {{ c.setup.warnings }} warning{{ "s" if c.setup.warnings != 1 }}{% endif %}
+          {% else %}ready to hand off{% endif %}</div>
+        {% if c.setup.missing is not none %}<div class="line muted">next: <code>{{ c.setup.next }}</code></div>{% endif %}
       {% elif c.column in ("Paused", "Failed") and c.root and c.root.reason %}
         <div class="line {{ 'err' if c.column == 'Failed' }}">{{ c.root.reason }}</div>
       {% elif c.column == "Done" %}
-        <div class="line">finished {{ c.finished }}</div>
+        <div class="line">finished {{ c.finished }}; open it to give it the next batch</div>
       {% endif %}
       {% if c.root and c.root.summary %}<div class="sum">{{ c.root.summary }}</div>{% endif %}
       <div class="counts">
@@ -66,6 +76,24 @@
   </section>
 {% endfor %}
 </div>
+{% if burn.rows or burn.quota %}
+{% import "_tokens.html" as tkm %}
+<h2>Tokens, last 7 days</h2>
+{{ tkm.quota(burn.quota) }}
+{% if burn.rows %}
+<div class="wrap"><table>
+  <tr><th>Project</th><th>Per day</th><th class="num">Steps</th><th class="num">Cost</th><th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
+  {% for r in burn.rows %}
+  <tr><td><a href="/p/{{ r.name|urlencode }}#tokens">{{ r.name }}</a></td>
+    <td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>
+    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.quota_week|pct }}</td>
+    <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
+    <td class="num">{{ r.output_tokens|tok }}</td><td class="num">{{ r.thinking_share|pct }}</td>
+    <td class="num {{ 'err' if r.failed_share and r.failed_share > 0.1 }}">{{ r.failed_share|pct }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+{% endif %}
 {% if broken %}
 <h2>Projects that could not be read</h2>
 <table>{% for b in broken %}<tr><td>{{ b.name }}</td><td class="err">{{ b.why }}</td></tr>{% endfor %}</table>

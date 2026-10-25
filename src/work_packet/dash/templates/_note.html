@@ -1,0 +1,17 @@
+{#- The note box (docs/interaction.md §6a) and the notes still queued. -#}
+{% macro box(e, wpid, state, running, queued, back="") -%}
+{%- if state != "COMPLETED" %}
+<form class="act panel" method="post" action="/p/{{ e.name|urlencode }}/{{ wpid }}/act" style="margin-bottom:14px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  {% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
+  <label class="muted" for="note-text">{% if running %}Note to the running step: it gets it after its next tool call{% elif state in ("NEEDS_INPUT", "PAUSED", "FAILED") %}Note for the next step: it waits until the packet is handed off{% else %}Note for the next step{% endif %}</label>
+  <textarea id="note-text" name="note" placeholder="e.g. add a pytest.ini that limits collection to tests/"></textarea>
+  <div class="row"><button class="go primary" name="action" value="note">Send note</button>
+    {% if state == "SLEEPING" and not running %}<label class="muted"><input type="checkbox" name="wake" value="1"> and wake it now</label>{% endif %}</div>
+  {% if queued %}
+  <div class="muted" style="font-size:12px;margin-top:6px">Queued, until a step that saw them commits:</div>
+  <ul style="margin:4px 0 0 0;font-size:13px">{% for n in queued %}<li><span class="muted">{{ n.t }} {{ n.by }}:</span> {{ n.text }}</li>{% endfor %}</ul>
+  {% endif %}
+</form>
+{%- endif %}
+{%- endmacro %}

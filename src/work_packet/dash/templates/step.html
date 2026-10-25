@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% import "_tokens.html" as tkm %}
+{% import "_log.html" as lg %}
 {% block title %}step {{ s.label }} · {{ s.short }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <a href="/p/{{ e.name|urlencode }}/{{ s.wpid }}"><code>{{ s.short }}</code></a> / step {{ s.label }}{% endblock %}
 {% block head %}
@@ -28,16 +30,33 @@ pre.diff .hunk { background: var(--hunk); color: var(--muted); }
 
 <div class="grid2">
   <section>
+    {% if tk %}
+    <h2 id="tokens">Tokens</h2>
+    <div class="panel">
+      <dl class="kv">
+        <dt>context read</dt><dd><strong>{{ tk.context|tok }}</strong> over {{ tk.calls or "?" }} calls: cache read {{ tk.cache_read|tok }} ({{ tk.hit|pct }}), cache write {{ tk.cache_write|tok }}{% if tk.write_5m %} ({{ tk.write_5m|tok }} at 5 min){% endif %}, uncached {{ tk.new|tok }}</dd>
+        <dt>output</dt><dd><strong>{{ tk.output|tok }}</strong>{% if tk.thinking is not none %}, {{ tk.thinking|tok }} of it thinking{% endif %}</dd>
+        <dt>context per call</dt><dd>first {{ tk.first|tok }}, peak {{ tk.peak|tok }}{% if tk.cache_breaks %}, <span class="err">{{ tk.cache_breaks }} cache break{{ "s" if tk.cache_breaks > 1 }}</span>{% endif %}</dd>
+        {% if tk.quota %}<dt>quota</dt><dd>{% for q in tk.quota %}{{ q.label }} {{ q.first|pct }} → <strong>{{ q.last|pct }}</strong>{{ ", " if not loop.last }}{% endfor %} <span class="muted">(whole percents, any use of the account counts)</span></dd>{% endif %}
+        {% if tk.api_s %}<dt>API time</dt><dd>{{ tk.api_s|secs }}{% if s.meta.duration_s %} of {{ s.meta.duration_s|secs }}{% endif %}</dd>{% endif %}
+      </dl>
+      {{ tkm.chart(tk.chart, "Context of each call") }}
+    </div>
+    {% endif %}
     <h2>Meta</h2>
     {% if s.meta %}
     <dl class="kv panel">
       {% for k, v in s.meta.items() %}<dt>{{ k }}</dt><dd>{% if k == "tokens" and v is mapping %}{% for tk, tv in v.items() %}{{ tk }} {{ tv }}{{ ", " if not loop.last }}{% endfor %}{% elif k == "cost_usd" %}{{ v|money }}{% elif k == "duration_s" %}{{ v|secs }}{% else %}{{ v }}{% endif %}</dd>{% endfor %}
     </dl>
     {% else %}<p class="muted">No <code>meta.json</code> yet{% if s.info.outcome == "running" %}: the model is still running{% endif %}.</p>{% endif %}
+    {% if s.notes %}
+    <h2>Notes from the owner</h2>
+    <ul class="panel" style="font-size:13px">{% for n in s.notes %}<li><span class="muted">{{ "in the prompt" if n.how == "prompt" else "mid-step" }}{% if n.at %}, {{ n.at }}{% endif %}{% if n.by %}, from {{ n.by }}{% endif %}:</span> {{ n.text or "(text not kept)" }}</li>{% endfor %}</ul>
+    {% endif %}
     {% if s.fork %}
     <h2>Open in Claude Code</h2>
     <div class="copy"><pre id="fork">{{ s.fork }}</pre>
-      <button type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(document.getElementById('fork').textContent)">Copy</button></div>
+      <button type="button" data-copy="fork">Copy</button></div>
     <p class="muted" style="font-size:12px">Forks the session, so the recorded history stays as it was.</p>
     {% endif %}
   </section>
@@ -47,12 +66,24 @@ pre.diff .hunk { background: var(--hunk); color: var(--muted); }
   </section>
 </div>
 
+{% if tk and tk.tools %}
+<h2 id="context">Where the context went</h2>
+{{ tkm.tools(tk.tools, one=True) }}
+{% endif %}
+
 <h2>State changes</h2>
 {% if s.diff is none %}<p class="muted">No <code>state.diff</code> (only committed steps have one).</p>
 {% elif not s.diff %}<p class="muted">No changes to <code>state/</code>.</p>
 {% else %}<pre class="diff">{% for kind, ln in s.diff %}<div class="{{ kind }}">{{ ln }}</div>{% endfor %}</pre>{% endif %}
 
-<h2>Transcript</h2>
+{% set base = "/p/%s/%s/%s" % (e.name|urlencode, s.wpid, s.dir) %}
+{% set running = s.info.outcome == "running" %}
+<div class="viewbar"><h2>Transcript</h2>
+  {{ lg.bar(base, view, [("blocks", "Blocks"), ("log", "Log")], base, "log") }}
+  <a class="mini" href="/p/{{ e.name|urlencode }}/{{ s.wpid }}/live">live view</a></div>
+{% if view == "log" %}{{ lg.console(s.log, running, follow=running) }}
+{% else %}
+<div class="pane box" id="transcript" data-follow="{{ 'yes' if running else 'no' }}">
 {% if not s.blocks %}<p class="muted">Empty so far.</p>{% endif %}
 {% for b in s.blocks %}
   {% if b.kind == "tool_use" %}
@@ -67,6 +98,8 @@ pre.diff .hunk { background: var(--hunk); color: var(--muted); }
   <div class="blk text"><span class="who">model</span><pre>{{ b.text }}</pre></div>
   {% endif %}
 {% endfor %}
+</div>
+{% endif %}
 
 <details id="prompt"><summary>Prompt as sent</summary><pre>{{ s.prompt or "(missing)" }}</pre></details>
 {% if s.stderr %}<details id="stderr"><summary>stderr</summary><pre>{{ s.stderr }}</pre></details>{% endif %}

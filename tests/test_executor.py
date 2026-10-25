@@ -12,7 +12,7 @@ from work_packet.check import check
 from work_packet.cli import main
 from work_packet.packet import Packet
 
-STEP_FILES = {"prompt.md", "transcript.jsonl", "stderr.log", "meta.json", "result.md",
+STEP_FILES = {"prompt.md", "system.md", "transcript.jsonl", "stderr.log", "meta.json", "result.md",
               "summary.md", "state.diff"}
 
 
@@ -93,7 +93,10 @@ def test_prompt_contents(fresh):
     assert "Step 2, attempt 1 of 3" in text
     assert "Count is 1" in text                    # last summary
     assert "Read state/count.md" in text           # the instruction
-    assert "Write **only**" in text and "$" not in text.split("## This step")[1]
+    assert "$" not in text and "Write **only**" not in text
+    system = open(os.path.join(root.step_dir(2), "system.md")).read()
+    assert "Write **only**" in system and "Keeping the context small" in system
+    assert "$" not in system and "(no offset: UTC)" in system
     assert NOW in text
     assert "## State files\n\n- `state/count.md`:\n\n```\n1\n```" in text
 
@@ -112,9 +115,26 @@ def test_state_files_section(tmp_path):
     assert "- `state/a.md`:\n\n````\nhas ``` inside\n````" in got
     assert "- `state/big.txt` (%d bytes, not shown)" % (FILE_MAX + 1) in got
     assert "- `state/bin.dat` (3 bytes, not shown)" in got
-    assert "- `state/sub/n.md`:\n\n```\nno newline\n```" in got
+    assert "- `state/sub/n.md` (10 bytes, not shown)" in got
     assert "- `state/empty.md`:\n\n```\n```" in got
     assert got.index("a.md") < got.index("empty.md") < got.index("sub/n.md")
+
+
+def test_state_files_env_and_outline_first_archive_hidden(tmp_path):
+    from work_packet.prompt import state_files
+    d = tmp_path / "state"
+    (d / "archive" / "old").mkdir(parents=True)
+    (d / "a.md").write_text("a\n")
+    (d / "outline.md").write_text("- [ ] 1\n")
+    (d / "env.md").write_text("PATH=x\n")
+    (d / "archive" / "questions.md").write_text("answered\n")
+    (d / "archive" / "old" / "q.md").write_text("answered\n")
+    got = state_files(str(d))
+    assert got.index("env.md") < got.index("outline.md") < got.index("a.md")
+    assert "answered" not in got
+    assert "- `state/archive/`: 2 files, not shown" in got
+    (d / "a.md").unlink(); (d / "outline.md").unlink(); (d / "env.md").unlink()
+    assert state_files(str(d)) == "- `state/archive/`: 2 files, not shown"
 
 
 def test_step_passes_settings_to_model(fresh, monkeypatch, tmp_path):
@@ -214,6 +234,26 @@ def test_three_failures_give_failed(fresh, fake):
                                                   "0001.failed-3"]
     assert executor.step(proj).code == 2
     assert_clean(proj)
+
+
+def test_resume_after_failed_never_reuses_a_folder_or_session(fresh, fake):
+    """A resume restarts the attempt count; the run number goes on."""
+    proj, root = fresh
+    fake(fault="crash")
+    for _ in range(3):
+        executor.step(proj)
+    assert executor.admin(root, "resume").code == 0
+    assert executor.step(proj).code == 1
+    assert status(root)["attempts"] == 1
+    assert sorted(os.listdir(root.steps_dir)) == ["0001.failed-%d" % k for k in (1, 2, 3, 4)]
+    sids = [r["session_id"] for r in records(root, "step-start")]
+    assert len(set(sids)) == 4
+    assert [r["run"] for r in records(root, "step-failed")] == [1, 2, 3, 4]
+    fake(fault=None)
+    assert executor.step(proj).code == 0
+    text = open(os.path.join(root.step_dir(1), "prompt.md")).read()
+    assert "Attempt 4 of this step failed" in text and "- Attempt 1 failed" in text
+    assert "`steps/0001.failed-4/`" in text
 
 
 def test_write_outside_pending_is_rejected(fresh, fake):
@@ -345,3 +385,61 @@ def test_step_outside_project(tmp_path, fake):
     loose = str(tmp_path / ROOT)
     shutil.move(root.path, loose)
     assert executor.step(loose).code == 4
+
+
+def test_state_files_env_and_outline_shown_up_to_first_max(tmp_path):
+    from work_packet.prompt import FILE_MAX, FIRST_MAX, state_files
+    d = tmp_path / "state"
+    d.mkdir()
+    (d / "env.md").write_text("e" * (FILE_MAX + 500))
+    (d / "outline.md").write_text("o" * (FIRST_MAX + 1))
+    (d / "notes.md").write_text("n" * (FILE_MAX + 500))
+    got = state_files(str(d))
+    assert "- `state/env.md`:\n\n```\n" in got
+    assert "- `state/outline.md` (%d bytes, not shown)" % (FIRST_MAX + 1) in got
+    assert "- `state/notes.md` (%d bytes, not shown)" % (FILE_MAX + 500) in got
+
+
+def test_nudge_saves_an_attempt_that_forgot_the_memento(fresh, fake, tmp_path, monkeypatch):
+    proj, root = fresh
+    argv = tmp_path / "argv.jsonl"
+    monkeypatch.setenv("WPK_FAKE_ARGV", str(argv))
+    fake(fault="forgetful")
+    out = executor.step(proj)
+    assert out.code == 0, out.msg
+    nudge = records(root, "step-nudge")
+    assert len(nudge) == 1 and nudge[0]["why"] == ".pending/memento.md was not written"
+    first, second = [json.loads(x) for x in argv.read_text().splitlines()]
+    sid = first[first.index("--session-id") + 1]
+    assert second[second.index("--resume") + 1] == sid and "--fork-session" in second
+    meta = json.loads(open(os.path.join(root.step_dir(1), "meta.json")).read())
+    assert meta["nudged"] == nudge[0]["why"] and meta["session_id"] != sid
+    tr = open(os.path.join(root.step_dir(1), "transcript.jsonl")).read()
+    assert tr.count('"type": "result"') == 2          # both runs, one transcript
+    assert status(root)["step"] == 1
+    assert_clean(proj)
+
+
+def test_retry_prompt_tells_what_the_last_attempt_did(fresh, fake):
+    proj, root = fresh
+    fake(fault="silent")
+    assert executor.step(proj).code == 1
+    assert len(records(root, "step-nudge")) == 1      # nudged once, then failed
+    fake(fault="bad-memento")
+    assert executor.step(proj).code == 1
+    assert os.path.isfile(os.path.join(root.step_dir(1, 2), "pending-memento.md"))
+    fake(fault=None)
+    assert executor.step(proj).code == 0
+    text = open(os.path.join(root.step_dir(1), "prompt.md")).read()
+    assert "## Last attempt" in text
+    assert "Attempt 2 of this step failed: .pending/memento.md" in text
+    assert "The `.pending/memento.md` it left:" in text
+    assert "Earlier attempts at this step:\n\n- Attempt 1 failed: .pending/memento.md was not written" in text
+    assert "each failed attempt is in `steps/0001.failed-1/`, `steps/0001.failed-2/`" in text
+    text1 = open(os.path.join(root.step_dir(1, 2), "prompt.md")).read()
+    assert "Attempt 1 of this step failed: .pending/memento.md was not written" in text1
+    assert "$ make check (in the background)" in text1
+    assert "Waiting for the background job." in text1
+    assert "Earlier attempts" not in text1
+    assert "that attempt is in `steps/0001.failed-1/`" in text1
+    assert "## Last attempt" not in open(os.path.join(root.step_dir(1, 1), "prompt.md")).read()

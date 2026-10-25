@@ -288,7 +288,8 @@ template does not silently change a project that is already running.
 
 `wpk dash` starts a local web server (default `127.0.0.1:7878`). It
 binds to localhost only and has no login. Remote access goes through an SSH
-tunnel. A terminal version (`wpk top`) can come later, built on the
+tunnel. *(Superseded for remote access by `docs/server.md`: the board
+listens on the tailnet and checks Tailscale identity.)* A terminal version (`wpk top`) can come later, built on the
 same queries.
 
 ### Kanban board (home page)
@@ -409,7 +410,8 @@ written to `events.jsonl`, so they never change packet state.
 - Credentials are never copied into `state/`. They stay in the user's
   environment or behind `identity/` links.
 - The dashboard binds to localhost and checks the `Host` header, so a page in
-  the browser cannot drive it from another site.
+  the browser cannot drive it from another site. Off localhost it needs
+  authentication, plus Origin and CSRF checks: `docs/server.md` §4.
 
 ## Failure cases
 

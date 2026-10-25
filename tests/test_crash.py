@@ -53,7 +53,9 @@ def normalised(proj):
                         for r in recs if r["type"] in ("commit-begin", "commit-end")]
                 data = repr(recs)
             if n in ("prompt.md", "transcript.jsonl"):
-                data = re.sub(r"attempt \d+ of", "attempt N of", data)
+                data = re.sub(r"attempt \d+ of \d+", "attempt N of M", data)
+                data = re.sub(r"## Last attempt\n.*?(?=## Last step's summary)", "", data,
+                              flags=re.S)
                 data = UUID.sub("<uuid>", data)
             out[rel] = data
     return out
@@ -84,6 +86,12 @@ def test_kill_at_fault_point(tmp_path, fake, clean_tree, point):
 def test_external_sigkill(tmp_path, fake, clean_tree):
     """Kill `wpk step` from outside at random moments; the run still ends the same."""
     proj, root = make_project(tmp_path)
+    # Each kill can cost an attempt. Whether three land on one step depends on
+    # timing, and FAILED after max_attempts is tested elsewhere; this test is
+    # about the end state, so give the random kills room.
+    os.makedirs(os.environ["WPK_HOME"], exist_ok=True)
+    with open(os.path.join(os.environ["WPK_HOME"], "config.toml"), "w") as fp:
+        fp.write("max_attempts = 30\n")
     rng = random.Random(1234)
     kills = 0
     for _ in range(30):

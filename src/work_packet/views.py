@@ -7,7 +7,7 @@ from . import clock, frontmatter, schema
 from .packet import Packet
 from .project import ProjectError, load_project
 
-ACTIVE = ("RUNNABLE", "SLEEPING", "PAUSED")
+ACTIVE = ("RUNNABLE", "SLEEPING", "NEEDS_INPUT", "PAUSED")
 
 
 def relative(seconds):
@@ -87,7 +87,7 @@ def ps(entries, show_all=False, now=None):
                 continue
             line = (body or "").strip().splitlines()
             summary = line[0] if line else ""
-            if meta["state"] in ("PAUSED", "FAILED") and meta.get("reason"):
+            if meta["state"] in ("NEEDS_INPUT", "PAUSED", "FAILED") and meta.get("reason"):
                 summary = "[%s] %s" % (meta["reason"], summary)
             rows.append((e["name"], "  " * depth + pkt.wpid[:8], meta["state"],
                          str(meta["step"]), _next(meta, now, tz), summary))
@@ -106,6 +106,21 @@ def show(pkt):
         out.append("%-12s %s" % (k + ":", meta.get(k)))
     if body.strip():
         out += ["", body.rstrip()]
+    from . import questions
+    qs = questions.of_packet(pkt)
+    if qs:
+        out += ["", "## open questions (answer with `wpk answer`)", ""]
+        for q in qs:
+            out.append("%s: %s" % (q["id"], q["q"]))
+            extra = []
+            if q["recommend"]:
+                extra.append("recommend: %s" % q["recommend"])
+            if q["choices"]:
+                extra.append("choices: %s" % " / ".join(q["choices"]))
+            if q["grants"]:
+                extra.append("yes grants: %s" % ", ".join(q["grants"]))
+            if extra:
+                out.append("    " + "; ".join(extra))
     out += ["", "## memento.md", "", open(pkt.memento_path, encoding="utf-8").read().rstrip()]
     kids = meta.get("children") or []
     out += ["", "## children", ""]
@@ -126,7 +141,7 @@ def _detail(r):
     t = r.get("type")
     if t == "step-start":
         return "attempt %s, %s" % (r.get("attempt"), r.get("model"))
-    if t == "step-failed":
+    if t in ("step-failed", "step-nudge"):
         return "attempt %s: %s" % (r.get("attempt"), r.get("why"))
     if t == "commit-begin":
         d = r.get("decision") or {}

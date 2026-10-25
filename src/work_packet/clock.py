@@ -24,7 +24,6 @@ LATER = {
     "on": "Stage 2",
     "every": "Stage 2",
     "wait": "Stage 3",
-    "ask": "Stage 3",
 }
 
 _IN_RX = re.compile(r"^in\s+(\d+)\s+([a-z]+)$")
@@ -73,6 +72,9 @@ def parse_resume(expr):
     if low in ("now", "done", "fail"):
         return Resume(low)
     head = low.split(" ", 1)[0].rstrip(":")
+    if head == "ask":
+        raise ResumeError("'%s' is not a resume value: ask a question with the memento key "
+                          "'ask: <question>' next to resume" % e)
     if head in LATER:
         raise ResumeError("'%s' is not supported yet: %s adds it" % (e, LATER[head]))
     if head == "in":

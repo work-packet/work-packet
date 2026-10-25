@@ -1,0 +1,37 @@
+{#- The Settings panel: allowed tools, limits and model (interaction.md §5). -#}
+{% macro panel(e, settings, back="") -%}
+<div class="grid2">
+  <section class="panel">
+    <h3 style="margin-top:0">Allowed tools</h3>
+    {% for t in settings.tools %}
+    <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/settings" style="margin-top:4px">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">{% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}<input type="hidden" name="tool" value="{{ t }}">
+      <code style="flex:1">{{ t }}</code><button class="go" name="action" value="deny" title="remove">Remove</button>
+    </form>
+    {% endfor %}
+    <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/settings">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">{% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
+      <input type="text" name="tool" placeholder="Bash, or Bash(git commit *)" style="flex:1" aria-label="tool to allow">
+      <button class="go primary" name="action" value="allow">Allow</button>
+    </form>
+  </section>
+  <section class="panel">
+    <h3 style="margin-top:0">Limits and model</h3>
+    <table>
+      <tr><th>Key</th><th>In project.toml</th><th>In effect</th><th></th></tr>
+      {% for r in settings.rows %}
+      <tr><td><code>{{ r.key }}</code></td>
+        <td colspan="3">
+          <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/settings" style="margin:0">
+            <input type="hidden" name="csrf" value="{{ csrf or '' }}">{% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}<input type="hidden" name="key" value="{{ r.key }}">
+            <input type="text" name="value" value="{{ '' if r.value is none else r.value }}" placeholder="default" style="flex:1" aria-label="{{ r.key }}">
+            <span class="muted" style="min-width:8em">{{ r.effective }}{{ " s" if r.key == "step_timeout" }}</span>
+            <button class="go" name="action" value="set">Set</button>
+          </form>
+        </td></tr>
+      {% endfor %}
+    </table>
+    <p class="muted" style="font-size:12px">Empty means the default. Strings such as <code>30m</code> need no quotes.</p>
+  </section>
+</div>
+{%- endmacro %}

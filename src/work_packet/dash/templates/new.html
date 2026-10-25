@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}New task{% endblock %}
+{% block crumbs %}/ new task{% endblock %}
+{% block main %}
+<h1>New task</h1>
+<form class="act panel" method="post" action="/new" style="max-width:640px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <label for="name">Name</label>
+  <input type="text" id="name" name="name" value="{{ new_name }}" required pattern="[a-z0-9][a-z0-9_-]{0,63}" placeholder="fw-uart16550" autofocus>
+  <p class="muted" style="font-size:12px;margin:2px 0 10px">Lower case, digits, <code>-</code> and <code>_</code>.</p>
+  <label for="dir">In directory</label>
+  <input type="text" id="dir" name="dir" value="{{ base }}">
+  <p class="muted" style="font-size:12px;margin:2px 0 10px">The project is made in <code>&lt;directory&gt;/&lt;name&gt;</code>.</p>
+  <label for="harness">Harness</label>
+  <select id="harness" name="harness" style="font:inherit;padding:4px;display:block;margin-bottom:10px">
+    {% for h in choices %}<option value="{{ h }}" {{ "selected" if h == harness }}>{{ h }}{{ " (the default)" if h == harness }}</option>{% endfor %}
+  </select>
+  <label for="model">Model</label>
+  <input type="text" id="model" name="model" list="models-{{ harness }}" placeholder="{{ model }} (the default)" autocomplete="off">
+  {% for h, ms in choices.items() %}
+  <datalist id="models-{{ h }}">{% for m in ms %}<option value="{{ m.id }}">{{ m.label }}</option>{% endfor %}</datalist>
+  {% endfor %}
+  <p class="muted" style="font-size:12px;margin:2px 0 10px">Pick one, or type any model the harness takes. Empty: the default. An alias (<code>opus</code>, <code>sonnet</code>…) follows the newest model; a full name stays fixed. The list cannot be checked against your account: Claude Code has no way to list the models you may use.</p>
+  {% if projects %}
+  <label for="from">Copy the setup of</label>
+  <select id="from" name="from" style="font:inherit;padding:4px">
+    <option value="">nothing (start empty)</option>
+    {% for p in projects %}<option value="{{ p.name }}">{{ p.name }}</option>{% endfor %}
+  </select>
+  <p class="muted" style="font-size:12px;margin:2px 0 10px">Its <code>[setup]</code>, limits and permissions: repos to clone, inputs, smoke tests.</p>
+  {% endif %}
+  <div class="row"><button class="go primary">Create and set up</button>
+    <span class="muted" style="font-size:12px">It is held for setup: nothing runs until you hand it off.</span></div>
+</form>
+<script src="/static/new.js?v={{ asset_v }}"></script>
+{% endblock %}

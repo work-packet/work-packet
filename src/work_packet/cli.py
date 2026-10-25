@@ -1,6 +1,7 @@
 """The ``wpk`` command line. Stage 1 subcommands land here (docs/stage1-plan.md)."""
 import argparse
 import os
+import re
 import sys
 
 from .__about__ import __version__
@@ -63,11 +64,17 @@ def cmd_new(args) -> int:
             return _err(str(e))
     else:
         prompt = args.prompt
-    if prompt is None:
-        return _err("give --prompt or --prompt-file")
+    copy = None
+    if args.from_setup:
+        from . import setup
+        try:
+            src = _project_dir(args.from_setup)
+            copy = setup.copy_setup(project.load_project(src), args.name, src)
+        except (ValueError, project.ProjectError) as e:
+            return _err(str(e))
     try:
         plan = project.new(args.name, prompt, path=args.dir, model=args.model, tz=args.tz,
-                           paused=args.paused, dry_run=args.dry_run)
+                           paused=args.paused, dry_run=args.dry_run, extra=copy)
     except (project.ProjectError, OSError) as e:
         return _err(str(e))
     verb = "Would create" if args.dry_run else "Created"
@@ -77,7 +84,19 @@ def cmd_new(args) -> int:
     print("Root packet %s, model %s, zone %s" % (plan.root, plan.model, plan.tz or "local"))
     print("Steps run with --permission-mode %s --allowedTools %s" % (
         plan.permission_mode, ",".join(plan.allowed_tools)))
-    if not args.dry_run:
+    if args.dry_run:
+        return 0
+    if prompt is None:
+        print("The root is held for setup. Fill in %s:" % plan.path)
+        print("  prompt.md   the first instruction (or `wpk instruct %s --template outline`)"
+              % plan.name)
+        print("  work/       what the task works on: git clones (steps get a worktree of "
+              "each), or any directory")
+        print("  state/      plans and notes the steps read (copied in at the first step)")
+        print("  identity/   links to read-only material")
+        print("Next: `wpk setup %s` (a guided setup), or `wpk doctor %s` (what is missing)."
+              % (plan.name, plan.name))
+    else:
         print("Run `wpk tick` to start it%s." % (" (it is PAUSED: `wpk resume %s` first)"
                                                  % plan.name if args.paused else ""))
     return 0
@@ -157,18 +176,463 @@ def cmd_admin(args) -> int:
         except registry.LookupFailed as ex:
             return _err(str(ex))
     else:
-        want = ("RUNNABLE", "SLEEPING") if op == "pause" else ("PAUSED",)
+        want = {"pause": ("RUNNABLE", "SLEEPING"), "resume": ("NEEDS_INPUT", "PAUSED"),
+                "handoff": ("NEEDS_INPUT", "PAUSED", "FAILED")}[op]
         pkts = [p for _, p, m, _ in views.packets(e["path"], e["root"])
                 if m is not None and m["state"] in want]
         if not pkts:
             print("wpk: nothing to %s in %s" % (op, e["name"]), file=sys.stderr)
             return 0
+    note = None
+    if op == "handoff":
+        if args.note_file == "-":
+            note = sys.stdin.read()
+        elif args.note_file:
+            try:
+                with open(args.note_file, encoding="utf-8") as fp:
+                    note = fp.read()
+            except OSError as ex:
+                return _err(str(ex))
+        else:
+            note = args.message
+    if op in ("resume", "handoff") and not args.force:
+        refused = _setup_guard(pkts)
+        if refused:
+            return refused
     code = 0
     for p in pkts:
-        out = executor.admin(Packet(p.path), op)
+        out = executor.admin(Packet(p.path), op, note=note)
         print("wpk: %s" % out.msg, file=sys.stderr)
         code = max(code, out.code)
     return code
+
+
+def _setup_guard(pkts):
+    """``resume``/``handoff`` of a root held for setup: refuse while doctor finds
+    something missing (docs/setup.md §7)."""
+    from . import setup
+    from .project import held_for_setup
+    for p in pkts:
+        try:
+            meta, _ = p.load_status()
+            if not held_for_setup(meta):
+                continue
+            tg = setup.target(p.path)
+        except Exception:
+            continue
+        checks = setup.readiness(tg, tools=False)
+        miss = setup.missing(checks)
+        if miss:
+            print("wpk: %s is not set up yet:" % tg.name, file=sys.stderr)
+            for c in miss:
+                print("  %s %s" % (MARK["missing"], c.title), file=sys.stderr)
+                for f in c.fix[:1]:
+                    print("      " + f, file=sys.stderr)
+            print("wpk: `wpk doctor %s` shows all checks; --force hands it off anyway"
+                  % tg.name, file=sys.stderr)
+            return 1
+    return 0
+
+
+# --- setup (docs/setup.md) -------------------------------------------------------
+
+MARK = {"ok": "\u2713", "info": "\u00b7", "warn": "!", "missing": "\u2717"}
+
+
+def _target(t):
+    from . import setup
+    return setup.target(t)
+
+
+def _doctor_lines(tg, checks, verbose=False):
+    from . import setup
+    meta = tg.status() or {}
+    st = meta.get("state", "?") + (": %s" % meta["reason"] if meta.get("reason") else "")
+    out = ["%s  %s   root %s  (%s)" % (tg.name, setup.tilde(tg.proj), tg.packet.wpid[:8], st)]
+    for g in setup.GROUPS:
+        cs = [c for c in checks if c.group == g]
+        if not cs:
+            continue
+        head = g
+        if g == "work":
+            head += "      " + setup.tilde(tg.work)
+        out.append("")
+        out.append(head)
+        for c in cs:
+            out.append("  %s %s" % (MARK[c.level], c.title))
+            if c.level in ("warn", "missing") or verbose:
+                if c.detail and (verbose or c.level == "missing"):
+                    out.append("      " + c.detail)
+                for f in c.fix:
+                    out.append("      $ " + f)
+    nm = len(setup.missing(checks))
+    nw = sum(1 for c in checks if c.level == "warn")
+    out.append("")
+    out.append("%d missing, %d warning%s.  Next: %s" % (
+        nm, nw, "" if nw == 1 else "s", setup.next_step(tg, checks)))
+    return out
+
+
+def cmd_doctor(args) -> int:
+    import json
+    from . import registry, setup
+    if args.target is None:
+        checks = setup._tools()
+        rows = []
+        for e in registry.entries():
+            try:
+                tg = setup.target(e["name"])
+            except setup.SetupError as ex:
+                rows.append({"name": e["name"], "error": str(ex)})
+                continue
+            cs = setup.readiness(tg, tools=False)
+            rows.append({"name": tg.name, "missing": len(setup.missing(cs)),
+                         "warnings": sum(1 for c in cs if c.level == "warn"),
+                         "state": (tg.status() or {}).get("state"),
+                         "next": setup.next_step(tg, cs)})
+        if args.json:
+            print(json.dumps({"tools": [c.to_json() for c in checks], "projects": rows},
+                             indent=1))
+        else:
+            for c in checks:
+                print("%s %s" % (MARK[c.level], c.title))
+                for f in c.fix:
+                    print("    $ " + f)
+            for r in rows:
+                if "error" in r:
+                    print("%s %s: %s" % (MARK["missing"], r["name"], r["error"]))
+                else:
+                    print("%s %-20s %-10s %d missing, %d warnings%s" % (
+                        MARK["missing" if r["missing"] else "ok"], r["name"], r["state"],
+                        r["missing"], r["warnings"],
+                        ("   next: " + r["next"]) if r["missing"] else ""))
+        return 1 if any(c.level == "missing" for c in checks) else 0
+    try:
+        tg = _target(args.target)
+        if args.run:
+            setup.run_smoke(tg, echo=lambda m: print(m, file=sys.stderr))
+    except setup.SetupError as e:
+        return _err(str(e))
+    checks = setup.readiness(tg)
+    if args.fix:
+        did = False
+        for c in checks:
+            if c.safe and c.level in ("warn", "missing") and c.fix:
+                for f in c.fix:
+                    r = setup.run_fix(f)
+                    print("wpk: %s %s" % ("ran" if r.returncode == 0 else "FAILED:", f),
+                          file=sys.stderr)
+                    if r.returncode:
+                        print((r.stderr or r.stdout).rstrip(), file=sys.stderr)
+                        break
+                did = True
+        if did:
+            checks = setup.readiness(tg)
+    if args.json:
+        print(json.dumps({"project": tg.name, "path": tg.proj, "packet": tg.packet.path,
+                          "checks": [c.to_json() for c in checks],
+                          "next": setup.next_step(tg, checks)}, indent=1))
+    else:
+        for line in _doctor_lines(tg, checks, verbose=args.verbose):
+            print(line)
+    return 1 if setup.missing(checks) else 0
+
+
+def cmd_path(args) -> int:
+    from . import setup
+    try:
+        tg = _target(args.target)
+    except setup.SetupError as e:
+        return _err(str(e))
+    if args.packet:
+        print(tg.packet.path)
+    elif args.state:
+        print(tg.state)
+    elif args.work is not None:
+        if args.work == "":
+            print(tg.work)
+        else:
+            if args.work not in tg.entries():
+                return _err("no %r in %s's work/ (there is: %s)" % (
+                    args.work, tg.name, ", ".join(tg.entries()) or "nothing"))
+            print(os.path.join(tg.work, args.work))
+    else:
+        print(tg.proj)
+    return 0
+
+
+def cmd_shell(args) -> int:
+    from . import setup
+    try:
+        tg = _target(args.target)
+    except setup.SetupError as e:
+        return _err(str(e))
+    repo = args.repo
+    if repo is None and len(tg.entries()) == 1:
+        repo = tg.entries()[0]
+    if repo and repo not in tg.entries():
+        return _err("no %r in %s's work/" % (repo, tg.name))
+    d = setup.shell_dir(tg, repo)
+    print("wpk: a shell in %s (exit to leave)" % setup.tilde(d), file=sys.stderr)
+    import subprocess
+    return subprocess.call(setup.shell_argv(tg), cwd=d, env=setup.shell_env(tg))
+
+
+def _helper(args, fn) -> int:
+    from . import setup
+    try:
+        tg = _target(args.target)
+        msgs = fn(tg)
+    except setup.SetupError as e:
+        return _err(str(e))
+    for m in msgs:
+        print("wpk: %s" % m, file=sys.stderr)
+    return 0
+
+
+def cmd_add_input(args) -> int:
+    from . import setup
+    return _helper(args, lambda tg: setup.add_input(tg, args.files, force=args.force))
+
+
+def cmd_add_smoke(args) -> int:
+    from . import setup
+    return _helper(args, lambda tg: setup.add_smoke(tg, args.command, args.repo))
+
+
+def cmd_instruct(args) -> int:
+    from . import setup
+
+    def run(tg):
+        if args.file == "-":
+            text = sys.stdin.read()
+        elif args.file:
+            with open(args.file, encoding="utf-8") as fp:
+                text = fp.read()
+        else:
+            body, _ = setup.instruction(tg)
+            start = setup.template_text(tg, args.template) if args.template else body
+            text = _edit(start, tg)
+            if text is None:
+                return ["unchanged"]
+        return setup.instruct(tg, text)
+    try:
+        return _helper(args, run)
+    except OSError as e:
+        return _err(str(e))
+
+
+def _edit(text, tg):
+    """``text`` edited in ``$VISUAL``/``$EDITOR``; None if unchanged."""
+    import shlex
+    import subprocess
+    import tempfile
+    ed = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+    with tempfile.NamedTemporaryFile("w", suffix=".md", prefix="wpk-%s-" % tg.name,
+                                     delete=False) as fp:
+        fp.write(text)
+    try:
+        if subprocess.call(shlex.split(ed) + [fp.name]):
+            return None
+        with open(fp.name, encoding="utf-8") as f:
+            new = f.read()
+    finally:
+        os.unlink(fp.name)
+    return None if new == text else new
+
+
+def cmd_setup(args) -> int:
+    from . import setup
+    if args.apply:
+        if args.target is None:
+            return _err("--apply needs a project")
+        r = _helper(args, setup.apply)
+        if r:
+            return r
+        args.run = args.fix = args.json = args.verbose = False
+        return cmd_doctor(args)
+    try:
+        from .tui import setup_app
+    except ImportError as e:
+        return _err("wpk setup needs the tui extra: pip install 'work-packet[tui]' (%s)" % e)
+    return setup_app.main(args.target)
+
+
+def cmd_note(args) -> int:
+    from . import actions, registry
+    if args.note_file == "-":
+        text = sys.stdin.read()
+    elif args.note_file:
+        try:
+            with open(args.note_file, encoding="utf-8") as fp:
+                text = fp.read()
+        except OSError as ex:
+            return _err(str(ex))
+    else:
+        text = args.message
+    try:
+        pkt = _packet(args.target)
+    except registry.LookupFailed as ex:
+        return _err(str(ex))
+    out = actions.note(pkt, text, wake=args.wake)
+    print("wpk: %s" % out.msg, file=sys.stderr)
+    return out.code
+
+
+def cmd_answer(args) -> int:
+    from . import actions, registry
+    answers = {}
+    for kv in args.answers:
+        if "=" not in kv:
+            return _err("expected id=answer, got %r" % kv)
+        k, v = kv.split("=", 1)
+        answers[k.strip()] = v.strip()
+    try:
+        pkt = _packet(args.target)
+    except registry.LookupFailed as e:
+        return _err(str(e))
+    return _outcome(actions.answer(pkt, answers, note=args.message,
+                                   take_recommendations=args.take_recommendations))
+
+
+def cmd_next(args) -> int:
+    """The next batch of work (docs/dash-tasks.md §6)."""
+    from . import actions, registry
+    from .packet import Packet
+    e = registry.get(args.target)
+    try:
+        pkt = Packet(os.path.join(e["path"], "packets", e["root"])) if e else _packet(args.target)
+    except registry.LookupFailed as ex:
+        return _err(str(ex))
+    draft = actions.load_draft(pkt) if args.draft else None
+    if args.draft and draft is None:
+        return _err("no saved draft for %s (the board's Next batch saves one)" % pkt.wpid[:8])
+    if args.file == "-":
+        text = sys.stdin.read()
+    elif args.file:
+        try:
+            with open(args.file, encoding="utf-8") as fp:
+                text = fp.read()
+        except OSError as ex:
+            return _err(str(ex))
+    elif draft:
+        text = draft["instruction"]
+    else:
+        return _err("give the instruction with --file F (- for stdin), or --draft")
+    note = args.message if args.message is not None else (draft or {}).get("note")
+    archive = args.archive if args.archive is not None else (draft or {}).get("archive_outline")
+    carry = args.carry_session or bool((draft or {}).get("carry_session"))
+    return _outcome(actions.continue_(pkt, text, note=note, archive_outline=archive,
+                                      carry_session=carry, force=args.force))
+
+
+def _project_dir(target):
+    """A registered project name, a project directory, or a packet in one."""
+    from . import registry
+    from .project import project_of
+    e = registry.get(target)
+    if e is not None:
+        return e["path"]
+    if os.path.isfile(os.path.join(target, "project.toml")):
+        return os.path.abspath(target)
+    try:
+        proj = project_of(registry.resolve(target))
+    except registry.LookupFailed as ex:
+        raise ValueError(str(ex)) from None
+    if proj is None:
+        raise ValueError("%s is not in a project" % target)
+    return proj
+
+
+def cmd_config(args) -> int:
+    """allow / deny / set: change project.toml (long-running.md §6)."""
+    from . import executor, project
+    try:
+        proj = _project_dir(args.target)
+        if args.cmd == "allow":
+            changes = project.allow(proj, args.tools, executor._who())
+        elif args.cmd == "deny":
+            changes = project.deny(proj, args.tools, executor._who())
+        else:
+            pairs = []
+            for kv in args.pairs:
+                if "=" not in kv:
+                    return _err("expected key=value, got %r" % kv)
+                k, v = kv.split("=", 1)
+                pairs.append((k.strip(), v.strip()))
+            changes = project.set_values(proj, pairs, executor._who())
+    except (ValueError, project.ProjectError) as e:
+        return _err(str(e))
+    for c in changes:
+        print("wpk: %s" % c, file=sys.stderr)
+    if not changes:
+        print("wpk: nothing to change", file=sys.stderr)
+    return 0
+
+
+def cmd_stats(args) -> int:
+    import json
+    from datetime import timedelta
+    from . import clock, registry, schema, stats
+    es = registry.entries()
+    projects = []
+    for t in args.targets or [e["name"] for e in es]:
+        hit = [e for e in es if e["name"] == t]
+        if hit:
+            projects.append((t, hit[0]["path"]))
+        elif os.path.isfile(os.path.join(t, "project.toml")):
+            projects.append((os.path.basename(os.path.abspath(t)), os.path.abspath(t)))
+        else:
+            return _err("no registered project or project directory %r" % t)
+    since = None
+    if args.since:
+        m = re.match(r"^(\d+)([smhd])$", args.since)
+        if not m:
+            return _err("--since: expected a duration like 12h or 7d, got %r" % args.since)
+        secs = int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+        since = schema.format_timestamp(clock.now() - timedelta(seconds=secs))
+    steps, finished = stats.collect(projects, since)
+    if args.tools:
+        from . import toolcost
+        attrs = []
+        for s in steps:
+            a = toolcost.of_step(s.dir) if s.dir and s.harness == "claude" else None
+            if a:
+                a["label"] = stats.ROLLUPS["step"](s)
+                attrs.append(a)
+        if args.json:
+            print(json.dumps({"rows": toolcost.rollup(attrs, args.tools),
+                              "repeats": toolcost.repeats(attrs),
+                              "top": toolcost.top(attrs)}, indent=2))
+        elif not attrs:
+            print("No transcripts found.", file=sys.stderr)
+        else:
+            for line in toolcost.report(attrs, args.tools):
+                print(line)
+            print("\nBiggest single results:")
+            for x in toolcost.top(attrs):
+                print("  %9s carried  %-6s %s  (%s)" % (
+                    stats._k(x["carried"]), x["tool"], x["target"][:70], x["step"]))
+        return 0
+    if args.by:
+        rows = stats.rollup(steps, args.by)
+        if args.json:
+            print(json.dumps([dict(f, label=k, steps=n) for k, n, f in rows], indent=2))
+        elif not rows:
+            print("No steps found.", file=sys.stderr)
+        else:
+            for line in stats.rollup_report(rows):
+                print(line)
+        return 0
+    gs = stats.groups(steps, finished)
+    if args.json:
+        print(json.dumps(stats.as_json(gs, args.min), indent=2))
+    elif not gs:
+        print("No steps found.", file=sys.stderr)
+    else:
+        for line in stats.report(gs, args.min):
+            print(line)
+    return 0
 
 
 def cmd_tick(args) -> int:
@@ -200,14 +664,106 @@ def cmd_tick(args) -> int:
 
 def cmd_dash(args) -> int:
     try:
-        from .dash.app import serve
+        from .dash.server import Board, ServeError
     except ImportError as e:
         return _err("wpk dash needs the dash extra: pip install 'work-packet[dash]' (%s)" % e)
-    if args.host not in ("127.0.0.1", "localhost", "::1"):
-        print("wpk: warning: the board has no login; %s exposes it beyond this machine"
-              % args.host, file=sys.stderr)
-    print("wpk dash: http://%s:%d/ (Ctrl-C to stop)" % (args.host, args.port), file=sys.stderr)
-    serve(args.host, args.port)
+    import asyncio
+    import logging
+    from . import registry
+    logging.basicConfig(format="wpk dash: %(message)s", level=logging.WARNING)
+    try:
+        cfg = registry.load_server_config()
+    except registry.ConfigError as e:
+        return _err(str(e))
+    if args.port is not None:
+        cfg["port"] = args.port
+    if args.tailnet is not None:
+        cfg["tailnet"] = args.tailnet
+    if args.run is not None:
+        cfg["run"] = args.run
+    runner = None
+    if cfg["run"]:
+        from .dash.runner import Runner, RunnerBusy
+        runner = Runner(jobs=args.jobs)
+        try:
+            runner.acquire()
+        except RunnerBusy as e:
+            return _err("%s; is another `wpk dash --run` up?" % e)
+
+    def ready(board):
+        for url in board.urls["loopback"]:
+            print("wpk dash: %s (Ctrl-C to stop)" % url, file=sys.stderr)
+        if runner is not None:
+            print("wpk dash: running due packets (one runner for %s)" % runner.home,
+                  file=sys.stderr)
+        if board.tailnet is not None:
+            print("wpk dash: tailnet: only %s; see `wpk url`" % (
+                ", ".join(cfg["allow"]) or board.tailnet.owner() or "this node's owner"),
+                file=sys.stderr)
+    try:
+        asyncio.run(Board(cfg, host=args.host, runner=runner).run(ready))
+    except ServeError as e:
+        return _err(str(e))
+    return 0
+
+
+def cmd_ide(args) -> int:
+    import json
+    from . import ide, registry, setup
+    try:
+        op = ide.resolve(args.target, args.repo, packet=args.packet)
+        cfg = ide.load_config()
+    except (ide.IdeError, registry.ConfigError) as e:
+        return _err(str(e))
+    web = None
+    if cfg["web"]:
+        try:
+            from .dash.server import read_state
+            st = read_state(registry.home())
+        except ImportError:
+            st = None
+        if st and st.get("urls"):
+            web = st["urls"][0].rstrip("/") + ide.web_path(op)
+    ts = None
+    try:
+        from .dash.tailscale import Tailnet
+        ts = Tailnet()
+    except ImportError:
+        pass
+    links = {"remote": ide.desktop_url(op, ide.ssh_host(cfg, ts)),
+             "local": ide.desktop_url(op), "web": web}
+    if args.json:
+        print(json.dumps(dict(op.to_json(), links=links), indent=1))
+    else:
+        print("%s: %s" % (op.label, setup.tilde(op.path)))
+        if op.note:
+            print("  note: " + op.note)
+        if op.owner == "runner":
+            print("  the runner owns this packet: edits may race a step")
+        print("  desktop  %s" % links["remote"])
+        print("  here     %s" % links["local"])
+        if web:
+            print("  web      %s" % web)
+    if args.open:
+        try:
+            argv = ide.launch(op)
+        except ide.IdeError as e:
+            return _err(str(e))
+        print("wpk: opened with %s" % " ".join(argv), file=sys.stderr)
+    return 0
+
+
+def cmd_url(args) -> int:
+    try:
+        from .dash.server import read_state
+        from . import registry
+    except ImportError as e:
+        return _err("wpk url needs the dash extra: pip install 'work-packet[dash]' (%s)" % e)
+    st = read_state(registry.home())
+    if st is None:
+        return _err("the board is not running (start it with `wpk dash`)")
+    for url in st.get("urls", []):
+        print(url)
     return 0
 
 
@@ -227,11 +783,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("new", help="create and register a project",
                        description="Create a project with the blank template: the prompt "
-                       "becomes the root packet's first instruction.")
+                       "becomes the root packet's first instruction. Without a prompt the "
+                       "root is PAUSED for setup, with no instruction yet.")
     p.add_argument("name")
     g = p.add_mutually_exclusive_group()
-    g.add_argument("--prompt", help="the task, as text")
+    g.add_argument("--prompt", help="the task, as text (without one, the root is held "
+                   "for setup: see `wpk setup` and `wpk doctor`)")
     g.add_argument("--prompt-file", help="the task, from a file")
+    p.add_argument("--from-setup", metavar="PROJECT",
+                   help="copy [setup] (with the clones in its work/ and the links in its "
+                   "identity/), [permissions] and "
+                   "limits from another project; `wpk setup NAME --apply` then clones")
     p.add_argument("--dir", help="project directory (default ./<name>)")
     p.add_argument("--model", help="model for the root packet")
     p.add_argument("--tz", help="IANA zone for resume times (default: local)")
@@ -252,6 +814,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project", help="only this project")
     p.set_defaults(func=cmd_ps)
 
+    p = sub.add_parser("stats", help="step statistics per harness, model and profile, "
+                                     "with advice")
+    p.add_argument("targets", nargs="*", help="project names or directories (default: all)")
+    p.add_argument("--since", help="only steps that ended in this long, e.g. 7d or 12h")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p.add_argument("--min", type=int, default=30, help="steps a group needs for advice")
+    p.add_argument("--by", choices=("project", "packet", "item", "model", "day", "step"),
+                   help="instead, a table of token use and cost per project, packet, "
+                        "plan item (the memento's item), model, day or step")
+    p.add_argument("--tools", nargs="?", const="tool", choices=("tool", "kind", "target"),
+                   help="instead, what used up context inside steps: by tool (default), "
+                        "by kind (a shell command's program) or by target (file or command)")
+    p.set_defaults(func=cmd_stats)
+
     p = sub.add_parser("show", help="print a packet's status, memento and children")
     p.add_argument("target", help="WPID (or unique prefix), project name or directory")
     p.set_defaults(func=cmd_show)
@@ -261,10 +837,156 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--step", type=int, help="show this step's summary, diff and meta")
     p.set_defaults(func=cmd_log)
 
-    for op, h in (("pause", "set PAUSED"), ("resume", "set PAUSED or FAILED back to RUNNABLE")):
+    for op, h in (("pause", "set PAUSED"),
+                  ("resume", "set NEEDS_INPUT, PAUSED or FAILED back to RUNNABLE")):
         p = sub.add_parser(op, help=h + " (a WPID, or every packet of a project)")
         p.add_argument("target", help="WPID (or unique prefix), project name or directory")
-        p.set_defaults(func=cmd_admin)
+        if op == "resume":
+            p.add_argument("--force", action="store_true",
+                           help="resume a root held for setup even if doctor finds "
+                                "something missing")
+        p.set_defaults(func=cmd_admin, force=False)
+
+    p = sub.add_parser("note", help="send a note to a packet, running or not",
+                       description="Queue a note from the owner (docs/interaction.md §6a). "
+                       "A running step gets it after its next tool call; otherwise the next "
+                       "step's prompt shows it. The packet's state does not change.")
+    p.add_argument("target", help="WPID (or unique prefix)")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("-m", "--message", help="the note")
+    g.add_argument("--note-file", help="the note, from a file (- for stdin)")
+    p.add_argument("--wake", action="store_true", help="a SLEEPING packet runs now")
+    p.set_defaults(func=cmd_note)
+
+    p = sub.add_parser("handoff", help="hand a packet back to the runner, with a note",
+                       description="Answer a packet's question (NEEDS_INPUT), or hand back a "
+                       "PAUSED or FAILED one: it becomes RUNNABLE, and the next step's prompt "
+                       "shows the question and your note. A project name hands off each of "
+                       "its NEEDS_INPUT, PAUSED and FAILED packets.")
+    p.add_argument("target", help="WPID (or unique prefix), project name or directory")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("-m", "--message", help="the note for the next step, e.g. the answer")
+    g.add_argument("--note-file", help="the note, from a file (- for stdin)")
+    p.add_argument("--force", action="store_true",
+                   help="hand off a root held for setup even if doctor finds something missing")
+    p.set_defaults(func=cmd_admin)
+
+    p = sub.add_parser("next", help="give a stopped packet its next batch of work",
+                       description="Replace a stopped packet's instruction (COMPLETED, "
+                       "NEEDS_INPUT, PAUSED or FAILED) and hand it to the runner. From "
+                       "COMPLETED the finished state/outline.md moves to state/history/. "
+                       "Work repos with uncommitted changes refuse it (docs/dash-tasks.md §6).")
+    p.add_argument("target", help="project name (its root), or WPID (or unique prefix)")
+    p.add_argument("-f", "--file", help="the new instruction, from a file (- for stdin)")
+    p.add_argument("--draft", action="store_true",
+                   help="use the draft saved on the board (its note and options too)")
+    p.add_argument("-m", "--message", help="a note for the next step")
+    p.add_argument("--archive-outline", dest="archive", action=argparse.BooleanOptionalAction,
+                   default=None, help="move state/outline.md to state/history/ "
+                   "(default: only from COMPLETED)")
+    p.add_argument("--carry-session", action="store_true",
+                   help="the first step resumes the last step's session (its cache has "
+                   "usually expired, so the first call costs the whole context again)")
+    p.add_argument("--force", action="store_true", help="hand off with uncommitted changes")
+    p.set_defaults(func=cmd_next)
+
+    p = sub.add_parser("answer", help="answer a packet's open questions and hand it off",
+                       description="Answer the questions of a NEEDS_INPUT packet (`wpk show` "
+                       "lists them) as id=answer pairs. A yes to a question that grants tools "
+                       "allows them first. Then the packet is handed off, and the next step "
+                       "sees each question with its answer.")
+    p.add_argument("target", help="WPID (or unique prefix), project name, or a packet directory")
+    p.add_argument("answers", nargs="*", metavar="id=answer")
+    p.add_argument("-r", "--take-recommendations", action="store_true",
+                   help="answer every question not given with its recommendation")
+    p.add_argument("-m", "--message", help="a note for the next step as well")
+    p.set_defaults(func=cmd_answer)
+
+    for op, h in (("allow", "add tools to a project's allowed_tools"),
+                  ("deny", "remove tools from a project's allowed_tools")):
+        p = sub.add_parser(op, help=h, description=h.capitalize() + ", e.g. Bash or "
+                           "'Bash(git commit *)'. Fails while a step is running.")
+        p.add_argument("target", help="project name or directory, or a packet in it")
+        p.add_argument("tools", nargs="+", metavar="tool")
+        p.set_defaults(func=cmd_config)
+
+    p = sub.add_parser("set", help="change a project setting",
+                       description="Set project.toml keys: model, harness, profile, tz, "
+                       "step_timeout, max_attempts, step_budget_usd, step_context_tokens, "
+                       "carry_session, carry_ttl, carry_factor, permission_mode. Values are "
+                       "TOML (3, 2.5, true, \"30m\") or plain strings; key= removes a key. "
+                       "A new model also goes to the root packet and to packets on the old one.")
+    p.add_argument("target", help="project name or directory, or a packet in it")
+    p.add_argument("pairs", nargs="+", metavar="key=value")
+    p.set_defaults(func=cmd_config)
+
+    p = sub.add_parser("doctor", help="what a project's setup has, what it lacks, and "
+                       "what to do", description="Check a project's setup (docs/setup.md "
+                       "§3): tools, work repos, inputs, the instruction, limits. Each missing "
+                       "item comes with a command to fix it. Exit status 0 when nothing is "
+                       "missing. With no project: the tools, and a line per project.")
+    p.add_argument("target", nargs="?", help="project name or directory, or a packet in it")
+    p.add_argument("--json", action="store_true", help="print the checks as JSON")
+    p.add_argument("--run", action="store_true", help="run the [setup] smoke commands first")
+    p.add_argument("--fix", action="store_true", help="run the fixes marked safe")
+    p.add_argument("-v", "--verbose", action="store_true", help="details for every check")
+    p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("setup", help="set a project up, in a guided TUI with a shell",
+                       description="The setup wizard (docs/setup.md §6). With --apply, do "
+                       "what [setup] in project.toml asks that is not done yet (clones, "
+                       "inputs, links), then print the doctor's report.")
+    p.add_argument("target", nargs="?", help="project name or directory (none: a new one)")
+    p.add_argument("--apply", action="store_true", help="no TUI: apply [setup], then doctor")
+    p.set_defaults(func=cmd_setup)
+
+    p = sub.add_parser("path", help="print a project's directory, or a part of it",
+                       description="Print the project's directory (where you set it up), "
+                       "its work/ or an entry in it, where inputs go now (--state: the "
+                       "root's state/ until the first step, then the root packet's), or "
+                       "the root packet. For example: cd $(wpk path dvs-enh --work dv-solve)")
+    p.add_argument("target", help="project name or directory, or a packet")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--work", nargs="?", const="", metavar="NAME", help="work/, or work/NAME")
+    g.add_argument("--state", action="store_true", help="the state/ that inputs go to now")
+    g.add_argument("--packet", action="store_true", help="the root packet")
+    p.set_defaults(func=cmd_path)
+
+    p = sub.add_parser("shell", help="a shell at a project's root",
+                       description="Start $SHELL in the project's directory (in work/<name> "
+                       "when there is exactly one entry), with WPK_PROJECT, WPK_PROJECT_DIR, "
+                       "WPK_WPID, WPK_PACKET and WPK_WORK set.")
+    p.add_argument("target", help="project name or directory, or a packet")
+    p.add_argument("--repo", help="start in work/REPO")
+    p.set_defaults(func=cmd_shell)
+
+    p = sub.add_parser("add-input", help="copy files into a project's state/",
+                       description="Copy plan documents and other inputs into state/ (the "
+                       "project's until the first step, then the root packet's; never into a "
+                       "repo), and record them in [setup].")
+    p.add_argument("target", help="project name or directory")
+    p.add_argument("files", nargs="+")
+    p.add_argument("--force", action="store_true", help="replace a file that differs")
+    p.set_defaults(func=cmd_add_input)
+
+    p = sub.add_parser("add-smoke", help="add a build or test command for doctor --run",
+                       description="Add a [[setup.smoke]] command: `wpk doctor --run` runs "
+                       "it in the work repo and times it before the hand-off.")
+    p.add_argument("target", help="project name or directory")
+    p.add_argument("command")
+    p.add_argument("--repo", help="run in work/REPO (default: the only work repo)")
+    p.set_defaults(func=cmd_add_smoke)
+
+    p = sub.add_parser("instruct", help="write a project's first instruction",
+                       description="Edit the first instruction in $EDITOR, or set it from a "
+                       "file: the project's prompt.md until the first step (it becomes the "
+                       "memento then), the root packet's memento.md after. --template starts "
+                       "from one of: list, outline, plan-only.")
+    p.add_argument("target", help="project name or directory, or a packet")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--file", help="the instruction, from a file (- for stdin)")
+    g.add_argument("--template", choices=("list", "outline", "plan-only"))
+    p.set_defaults(func=cmd_instruct)
 
     p = sub.add_parser("tick", help="run every due packet once (one scheduler pass)",
                        description="Find due packets in every registered project and run "
@@ -277,13 +999,43 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project", help="only this project")
     p.set_defaults(func=cmd_tick)
 
-    p = sub.add_parser("dash", help="serve the read-only web board on localhost",
+    p = sub.add_parser("dash", help="serve the web board",
                        description="Serve the board: every registered project by state, "
-                       "with packet trees, timelines and step transcripts. Read-only, no "
-                       "login; reach it remotely through an SSH tunnel.")
-    p.add_argument("--host", default="127.0.0.1", help="address to bind (default 127.0.0.1)")
-    p.add_argument("--port", type=int, default=7878, help="port (default 7878)")
+                       "with packet trees, timelines and step transcripts, and forms to create, "
+                       "set up, answer and hand off tasks (docs/dash-tasks.md). "
+                       "Listens on 127.0.0.1 and, with --tailnet or [server] tailnet = true "
+                       "in config.toml, on this node's tailnet addresses, where only your "
+                       "tailnet login gets in (docs/server.md).")
+    p.add_argument("--host", help="listen only on this address instead; not loopback "
+                   "means tailnet identity is checked")
+    p.add_argument("--port", type=int, help="port (default [server] port, 7878)")
+    p.add_argument("--tailnet", action=argparse.BooleanOptionalAction, default=None,
+                   help="also listen on the tailnet (default [server] tailnet)")
+    p.add_argument("--run", action=argparse.BooleanOptionalAction, default=None,
+                   help="run due packets in this process, as `wpk tick` would, and start "
+                   "a step as soon as the board hands a packet off (default [server] run)")
+    p.add_argument("-j", "--jobs", type=int, help="with --run: steps at once "
+                   "(default: max_concurrent)")
     p.set_defaults(func=cmd_dash)
+
+    p = sub.add_parser("ide", help="open a packet or a work folder in VS Code",
+                       description="Write or refresh the packet's VS Code workspace and print "
+                       "links that open it: desktop VS Code over Remote-SSH, VS Code on this "
+                       "machine, and web VS Code under the board's /ide/ ([ide] web = true). "
+                       "With REPO, open that folder of work/ instead: your clone, or with "
+                       "--packet the packet's worktree of it. See docs/vscode-plan.md.")
+    p.add_argument("target", help="project name or directory, or a packet")
+    p.add_argument("repo", nargs="?", help="an entry of the project's work/")
+    p.add_argument("--packet", action="store_true",
+                   help="with REPO: the packet's worktree, not your clone")
+    p.add_argument("--open", action="store_true",
+                   help="open it with `code` (in a VS Code terminal, or with a display)")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p.set_defaults(func=cmd_ide)
+
+    p = sub.add_parser("url", help="print the running board's URLs",
+                       description="Print the URLs the running `wpk dash` listens on.")
+    p.set_defaults(func=cmd_url)
 
     p = sub.add_parser("step", help="run one step of a packet",
                        description="Run exactly one step. Exit status: 0 committed, "

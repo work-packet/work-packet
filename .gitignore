@@ -5,3 +5,10 @@ __pycache__/
 /.venv/
 *.log
 slides/node_modules/
+/packages/
+
+.agents/
+.claude/
+.codex/
+.cursor/
+

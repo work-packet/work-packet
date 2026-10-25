@@ -3,6 +3,8 @@
 import json
 import os
 import socket
+import subprocess
+import time
 
 import pytest
 
@@ -57,6 +59,10 @@ def tree(tmp_path_factory):
     p["failed"] = _new("failed")
     _tick(p["failed"][0])
     mp.delenv("WPK_FAKE_FAULT")
+    mp.setenv("WPK_FAKE_BEHAVIOR", "asker")
+    p["asking"] = _new("asking")
+    _tick(p["asking"][0])
+    mp.setenv("WPK_FAKE_BEHAVIOR", "add_one")
     yield p
     mp.undo()
 
@@ -65,7 +71,8 @@ def test_every_state_in_its_column(tree):
     cols, broken = data.board(now=data._ts(NOW))
     got = {c["name"]: col for col, cards in cols.items() for c in cards}
     assert got == {"done": "Done", "ready": "Ready", "paused": "Paused",
-                   "running": "Running", "sleeping": "Sleeping", "failed": "Failed"}
+                   "running": "Running", "sleeping": "Sleeping", "failed": "Failed",
+                   "asking": "Needs you"}
     assert broken == []
 
 
@@ -80,6 +87,8 @@ def test_cards(tree):
     assert sleep["root"]["next"].startswith("2026-10-31")
     failed = data.card(tree["failed"][0], now)
     assert failed["root"]["reason"]
+    asking = data.card(tree["asking"][0], now)
+    assert asking["root"]["reason"].startswith("Which colour")
 
 
 def test_registry_entry_with_missing_directory_is_listed_as_broken(tree, tmp_path):
@@ -154,6 +163,7 @@ def test_pages(tree, client):
     assert r.status_code == 200
     for name in tree:
         assert ">%s<" % name in r.text
+    assert "Needs you" in r.text and "Which colour" in r.text and "wpk answer asking" in r.text
     r = client.get("/p/done")
     assert r.status_code == 200 and "<svg" in r.text and "hello" in r.text
     r = client.get("/p/done/" + root)
@@ -163,6 +173,36 @@ def test_pages(tree, client):
     assert 'id="live"' not in r.text                   # a finished step does not refresh
     r = client.get("/p/failed/%s/0001.failed-1" % tree["failed"][1].wpid)
     assert r.status_code == 200 and "failed" in r.text
+
+
+def test_token_panels(tree, client):
+    from work_packet.dash import tokens
+    e, root = tree["done"]
+    tk = tokens.packet(e, root.wpid)
+    assert tk["steps"] >= 2 and tk["figures"]["context_tokens"] > 0
+    bar = tk["chart"]["bars"][0]
+    assert bar["link"].endswith("/0001") and [g["cls"] for g in bar["segs"]] == ["tk-new"]  # the fake: uncached only
+    assert tokens.chart([], tokens.CONTEXT) is None
+    r = client.get("/")
+    assert "Tokens, last 7 days" in r.text and 'href="/p/done#tokens"' in r.text
+    r = client.get("/p/done")
+    assert 'id="tokens"' in r.text and "Context read per day" in r.text and "By packet" in r.text
+    r = client.get("/p/done/" + root.wpid)
+    assert "Context read per step" in r.text and "<th class=\"num\">Context</th>" in r.text
+    r = client.get("/p/done/%s/0001" % root.wpid)
+    assert "Context of each call" in r.text and "over 2 calls" in r.text
+    assert tokens.step(root.step_dir(1), {}) is None
+
+
+def test_where_the_context_went(tree, client):
+    from test_toolcost import transcript
+    e, root = tree["done"]
+    transcript(os.path.join(root.step_dir(1), "transcript.jsonl"))
+    for url in ("/p/done", "/p/done/" + root.wpid, "/p/done/%s/0001" % root.wpid):
+        r = client.get(url)
+        assert "Where the context went" in r.text and "python -m pytest" in r.text, url
+        assert "Lines read again in the same step" in r.text, url
+    assert 'href="/p/done/%s/0001"' % root.wpid in client.get("/p/done/" + root.wpid).text
 
 
 def test_missing_pages_are_404(tree, client):
@@ -176,3 +216,247 @@ def test_file_contents_are_escaped(tree, client):
     r = client.get("/p/paused/" + tree["paused"][1].wpid)
     assert "<script>alert(1)" not in r.text
     assert "&lt;script&gt;alert(1)" in r.text
+
+
+# --- actions (docs/interaction.md §5) --------------------------------------
+
+@pytest.fixture
+def acting(tmp_path, monkeypatch):
+    """A fresh home with one project that asked two questions."""
+    import shlex
+    import sys
+    from conftest import FAKE
+    monkeypatch.setenv("WPK_CLAUDE", "%s %s" % (shlex.quote(sys.executable), shlex.quote(FAKE)))
+    monkeypatch.setenv("WPK_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("WPK_NOW", NOW)
+    monkeypatch.delenv("WPK_FAKE_FAULT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WPK_FAKE_BEHAVIOR", "multi_asker")
+    e, root = _new("q", extra={"permissions": {           # no Bash, so it can be granted
+        "allowed_tools": ["Read", "Write", "Edit", "Glob", "Grep"]}})
+    _tick(e)
+    from starlette.testclient import TestClient
+    from work_packet.dash.app import create_app
+    return e, root, TestClient(create_app())
+
+
+def _journal(root, t):
+    return [r for r in root.journal().records if r["type"] == t]
+
+
+def test_answer_form_and_recommendations(acting):
+    e, root, client = acting
+    r = client.get("/p/q/" + root.wpid)
+    assert r.status_code == 200 and 'id="answer"' in r.text
+    assert 'name="a.bash"' in r.text and 'value="per sub-item"' in r.text and "allows" in r.text
+    r = client.post("/p/q/%s/act" % root.wpid, data={"action": "recommend", "note": "go"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and "ok=1" in r.headers["location"]
+    h = _journal(root, "handoff")[-1]
+    assert h["answers"] == {"bash": "yes", "cadence": "per item"} and h["note"] == "go"
+    from work_packet.tomlio import load_toml
+    assert "Bash" in load_toml(os.path.join(e["path"], "project.toml"))["permissions"][
+        "allowed_tools"]
+    page = client.get(r.headers["location"])
+    assert "answered 2 of 2" in page.text and "granted Bash" in page.text
+    assert 'id="answer"' not in page.text and "Pause" in page.text
+
+
+def test_answer_form_with_typed_answers(acting):
+    e, root, client = acting
+    r = client.post("/p/q/%s/act" % root.wpid,
+                    data={"action": "answer", "a.bash": "no", "a.cadence": "per sub-item"})
+    assert r.status_code == 200 and "answered 2 of 2" in r.text
+    assert _journal(root, "handoff")[-1]["answers"] == {"bash": "no", "cadence": "per sub-item"}
+    assert _journal(root, "config") == []
+
+
+def test_answer_nothing_is_refused(acting):
+    e, root, client = acting
+    r = client.post("/p/q/%s/act" % root.wpid, data={"action": "answer"})
+    assert "nothing to send" in r.text and 'class="flash bad"' in r.text
+    assert root.load_status()[0]["state"] == "NEEDS_INPUT"
+
+
+def test_pause_and_handoff_buttons(acting):
+    e, root, client = acting
+    client.post("/p/q/%s/act" % root.wpid, data={"action": "recommend"})
+    client.post("/p/q/%s/act" % root.wpid, data={"action": "pause"})
+    assert root.load_status()[0]["state"] == "PAUSED"
+    r = client.get("/p/q/" + root.wpid)
+    assert "Hand off to the runner" in r.text
+    client.post("/p/q/%s/act" % root.wpid, data={"action": "handoff", "note": "carry on"})
+    assert root.load_status()[0]["state"] == "RUNNABLE"
+    assert _journal(root, "handoff")[-1]["note"] == "carry on"
+
+
+def test_note_box(acting):
+    from work_packet import notes
+    e, root, client = acting
+    r = client.post("/p/q/%s/act" % root.wpid,
+                    data={"action": "note", "note": "add a pytest.ini", "back": "live"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and "/live?" in r.headers["location"] and "ok=1" in r.headers["location"]
+    assert [n["text"] for n in notes.queued(root)] == ["add a pytest.ini"]
+    page = client.get("/p/q/" + root.wpid)
+    assert "Send note" in page.text and "Queued, until a step" in page.text
+    assert "until the packet is handed off" in page.text          # it is NEEDS_INPUT
+    live = client.get("/p/q/%s/live" % root.wpid)
+    assert "Send note" in live.text and "add a pytest.ini" in live.text
+    r = client.post("/p/q/%s/act" % root.wpid, data={"action": "note", "note": ""})
+    assert 'class="flash bad"' in r.text and "empty" in r.text
+
+
+def test_settings_panel(acting):
+    e, root, client = acting
+    r = client.get("/p/q")
+    assert 'id="settings"' in r.text and 'name="tool" value="Read"' in r.text
+    client.post("/p/q/settings", data={"action": "allow", "tool": "Bash(git commit *)"})
+    client.post("/p/q/settings", data={"action": "deny", "tool": "Glob"})
+    r = client.post("/p/q/settings", data={"action": "set", "key": "step_timeout", "value": "45m"})
+    assert "set step_timeout" in r.text
+    r = client.post("/p/q/settings", data={"action": "set", "key": "carry_session", "value": "true"})
+    assert 'value="true"' in r.text
+    r = client.post("/p/q/settings", data={"action": "set", "key": "max_attempts", "value": "0"})
+    assert 'class="flash bad"' in r.text
+    from work_packet.tomlio import load_toml
+    d = load_toml(os.path.join(e["path"], "project.toml"))
+    assert d["step_timeout"] == "45m" and d["carry_session"] is True and "max_attempts" not in d
+    assert "Bash(git commit *)" in d["permissions"]["allowed_tools"]
+    assert "Glob" not in d["permissions"]["allowed_tools"]
+
+
+def test_needs_you_card_links_to_the_answer(acting):
+    e, root, client = acting
+    r = client.get("/")
+    assert "/p/q/%s#answer" % root.wpid in r.text
+
+
+# --- the live view -----------------------------------------------------------
+
+def _line(**e):
+    return json.dumps(e) + "\n"
+
+
+@pytest.fixture
+def live_pkt(acting):
+    """The asking project, handed off, with a running step 2 whose transcript we write."""
+    e, root, client = acting
+    client.post("/p/q/%s/act" % root.wpid, data={"action": "recommend"})
+    sd = root.step_dir(2)
+    os.makedirs(os.path.join(root.pending_dir, "state"))
+    with open(os.path.join(root.pending_dir, "state", "outline.md"), "w") as fp:
+        fp.write("# Outline\n- [x] 0a. benches\n- [ ] 0b. unit test\n  - [ ] 0b.1 xfail\n"
+                 "- [-] 6. later\n")
+    os.makedirs(sd)
+    use = {"type": "tool_use", "id": "t1", "name": "Bash",
+           "input": {"command": "pytest -q > t.log", "description": "Run the unit tests"}}
+    todo = {"type": "tool_use", "id": "t2", "name": "TodoWrite", "input": {"todos": [
+        {"content": "Write the test", "status": "completed", "activeForm": "Writing"},
+        {"content": "Run it", "status": "in_progress", "activeForm": "Running the test"}]}}
+    with open(os.path.join(sd, "transcript.jsonl"), "w") as fp:
+        fp.write(_line(type="system", subtype="init", model="m", tools=["Bash"]))
+        fp.write(_line(type="assistant", message={"content": [{"type": "text", "text": "Starting 0b."}, use],
+                       "usage": {"input_tokens": 5, "cache_read_input_tokens": 20000,
+                                 "output_tokens": 30}}))
+        fp.write(_line(type="user", message={"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "...\n3 passed in 1.2s\n"}]}))
+        fp.write(_line(type="assistant", message={"content": [todo], "usage": {
+            "input_tokens": 5, "cache_read_input_tokens": 21000, "output_tokens": 10}}))
+        fp.write(_line(type="assistant", message={"content": [
+            {"type": "tool_use", "id": "t3", "name": "Read", "input": {"file_path": "src/x.c"}}]}))
+    with open(root.lease_path, "w") as fp:
+        json.dump({"host": socket.gethostname(), "pid": os.getpid(), "step": 2, "attempt": 1,
+                   "expires": "2999-01-01T00:00:00Z"}, fp)
+    from work_packet import journal
+    journal.append(root.journal_path, {"type": "step-start", "t": NOW, "step": 2, "attempt": 1,
+                                       "model": "m", "session_id": "s"})
+    return e, root, client
+
+
+def test_activity_feed(live_pkt):
+    e, root, client = live_pkt
+    a = data.activity(os.path.join(root.step_dir(2), "transcript.jsonl"))
+    assert [ev["kind"] for ev in a["events"]] == ["text", "tool", "tool", "tool"]
+    bash = a["events"][1]
+    assert bash["label"] == "Run the unit tests" and bash["detail"] == "pytest -q > t.log"
+    assert bash["result"] == "3 passed in 1.2s"
+    assert a["pending"]["name"] == "Read" and a["context"] == 21005 and a["calls"] == 2
+    assert [t["status"] for t in a["todos"]] == ["completed", "in_progress"]
+
+
+def test_outline_reads_pending_first(live_pkt):
+    e, root, client = live_pkt
+    o = data.outline(root)
+    assert o["file"] == ".pending/state/outline.md" and (o["done"], o["total"]) == (1, 4)
+    assert [i["text"] for i in o["entries"] if i.get("current")] == ["0b. unit test"]
+    assert o["entries"][2]["depth"] == 1 and o["entries"][3]["state"] == "deferred"
+
+
+def test_live_page_and_raw(live_pkt):
+    e, root, client = live_pkt
+    r = client.get("/p/q/%s/live" % root.wpid)
+    assert r.status_code == 200 and "RUNNING" in r.text and "Run the unit tests" in r.text
+    assert "3 passed in 1.2s" in r.text and "… running" in r.text
+    assert "Running the test" in r.text and "1 of 4 done" in r.text
+    assert 'data-refresh-ms="3000"' in r.text
+    assert "Steps done" in r.text and "Asked two questions." in r.text
+    raw = client.get("/p/q/%s/0002/raw" % root.wpid)
+    assert raw.status_code == 200 and raw.text.count("\n") == 5
+    assert client.get("/p/q/%s/0009/raw" % root.wpid).status_code == 404
+    board = client.get("/")
+    assert "/p/q/%s/live" % root.wpid in board.text and "Read: src/x.c" in board.text
+    proj = client.get("/p/q")
+    assert "Live view" in proj.text and "/p/q/%s/live#procs" % root.wpid in proj.text
+    os.remove(root.lease_path)
+
+
+def test_live_page_processes(live_pkt):
+    e, root, client = live_pkt
+    sh = subprocess.Popen(["sh", "-c", "sleep 30 & wait"], start_new_session=True)
+    try:
+        with open(os.path.join(root.step_dir(2), "model.pid"), "w") as fp:
+            fp.write("%d\n" % sh.pid)
+        for _ in range(100):
+            r = client.get("/p/q/%s/live" % root.wpid)
+            if "sleep 30</code>" in r.text:
+                break
+            time.sleep(0.05)
+        assert 'id="procs"' in r.text and "sleep 30</code>" in r.text
+        assert "%d" % sh.pid in r.text
+    finally:
+        os.killpg(sh.pid, 9)
+        sh.wait()
+    # Another host's step: say so, don't scan.
+    with open(root.lease_path) as fp:
+        lz = json.load(fp)
+    assert data.processes(root, dict(lz, host="elsewhere"), {"dir": "0002"}) == {
+        "remote": "elsewhere"}
+    os.remove(root.lease_path)
+
+
+def test_log_view(live_pkt):
+    e, root, client = live_pkt
+    lg = data.log(os.path.join(root.step_dir(2), "transcript.jsonl"))
+    tools = [g for g in lg["groups"] if g["kind"] == "tool"]
+    bash = tools[0]
+    assert bash["title"].startswith("Bash  Run the unit tests") and bash["done"]
+    assert bash["lines"][0][1:] == ("$ pytest -q > t.log", "cmd")
+    assert ("3 passed in 1.2s", "") in [ln[1:] for ln in bash["lines"]]
+    assert not tools[-1]["done"]                       # the Read is still running
+    ns = [n for g in lg["groups"] for n in ([g["n"]] if g.get("n") else []) + [x[0] for x in g["lines"]]]
+    assert ns == sorted(ns) == list(range(1, lg["lines"] + 1))
+    r = client.get("/p/q/%s/live?view=log" % root.wpid)
+    assert r.status_code == 200 and 'class="console pane"' in r.text
+    assert "$ pytest -q &gt; t.log" in r.text and "… running" in r.text
+    assert 'href="#L1"' in r.text and 'data-expand="all"' in r.text
+    assert 'class="feed pane box"' in client.get("/p/q/%s/live" % root.wpid).text
+    st = client.get("/p/q/%s/0002?view=log" % root.wpid)
+    assert st.status_code == 200 and "$ pytest -q &gt; t.log" in st.text
+    assert 'id="transcript"' in client.get("/p/q/%s/0002" % root.wpid).text
+    txt = client.get("/p/q/%s/0002/log.txt" % root.wpid)
+    assert txt.status_code == 200 and txt.headers["content-type"].startswith("text/plain")
+    assert "▶ Bash  Run the unit tests\n$ pytest -q > t.log\n" in txt.text
+    assert client.get("/p/q/%s/0009/log.txt" % root.wpid).status_code == 404
+    assert client.get("/static/pane.js").status_code == 200
+    os.remove(root.lease_path)

@@ -1,0 +1,22 @@
+# Built-in profiles (docs/harness.md §4). The runner's config.toml may add
+# [profiles.<name>] tables, which are checked first. The first profile whose
+# harness matches and one of whose `models` globs matches the packet's model
+# is used, unless the project names one with `profile`.
+#
+# Keys: version, harness, models, sizing (prompts/sizing-<name>.md), and
+# optionally step_context_tokens, carry_factor and price (USD per million
+# tokens: input, output, cache_write, cache_read; for harnesses that do not
+# report cost). A key set in config.toml or project.toml wins over the profile.
+
+[profiles.claude-haiku]
+version = 1
+harness = "claude"
+models = ["claude-haiku-*", "haiku"]
+sizing = "bounded"
+carry_factor = 4.0              # measured on E7, context.md status log
+
+[profiles.claude]
+version = 1
+harness = "claude"
+models = ["*"]
+sizing = "bounded"

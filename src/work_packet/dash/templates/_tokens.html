@@ -1,0 +1,99 @@
+{#- Token use (dash/tokens.py, docs/token-dashboard.md). -#}
+{% macro summary(f, steps) -%}
+<div class="tkline">
+  <span><strong>{{ f.context_tokens|tok }}</strong> context read <span class="muted">({{ f.cache_hit|pct }} from the cache)</span></span>
+  <span><strong>{{ f.output_tokens|tok }}</strong> output <span class="muted">({{ f.thinking_share|pct }} thinking)</span></span>
+  <span><strong>{{ f.cost_usd|money or "-" }}</strong></span>
+  {% if f.quota_week is not none %}<span><strong>{{ f.quota_week|pct }}</strong> of the weekly quota</span>{% endif %}
+  <span class="{{ 'err' if f.failed_share and f.failed_share > 0.1 }}">{{ f.failed_share|pct }} on failed attempts</span>
+  {% if f.cache_breaks %}<span class="err">{{ f.cache_breaks }} cache break{{ "s" if f.cache_breaks > 1 }}</span>{% endif %}
+  <span class="muted">{{ steps }} step{{ "s" if steps != 1 }}</span>
+</div>
+{%- endmacro %}
+
+{#- The subscription quota as of the newest step (tokens.quota). -#}
+{% macro quota(q) -%}
+{%- if q %}
+<div class="tkline">
+  {% for w in q %}<span>{{ w.label }} quota <strong class="{{ 'err' if w.used >= 0.8 and not w.reset }}">{{ w.used|pct }}</strong> used <span class="muted">{% if w.reset %}(reset {{ w.resets }}; no step has run since){% else %}(resets {{ w.resets }}, in {{ w.left }}){% endif %}</span></span>
+  {% endfor %}<span class="muted">as of the step that ended {{ q[0].at[:16]|replace("T", " ") }} UTC</span>
+</div>
+{%- endif %}
+{%- endmacro %}
+
+{% macro chart(c, title, legend=True) -%}
+{%- if c %}
+<svg class="tk" viewBox="0 0 {{ c.width }} {{ c.height }}" role="img" aria-label="{{ title }}">
+  {% if c.left %}<text class="axis" x="0" y="10">{{ c.max|tok }}</text>
+  <line class="base" x1="{{ c.left }}" x2="{{ c.width }}" y1="{{ c.plot_h }}" y2="{{ c.plot_h }}"></line>{% endif %}
+  {% for b in c.bars %}
+  {% if b.link %}<a href="{{ b.link }}">{% endif %}<g class="{{ 'failed' if b.failed }}"><title>{{ b.title }}</title>
+    <rect class="hit" x="{{ b.x }}" y="0" width="{{ b.w }}" height="{{ c.plot_h }}"></rect>
+    {% for s in b.segs %}<rect class="{{ s.cls }}" x="{{ b.x }}" y="{{ s.y }}" width="{{ b.w }}" height="{{ s.h }}"></rect>{% endfor %}
+    {% if b.failed %}<rect class="failmark" x="{{ b.x }}" y="{{ c.plot_h - 3 }}" width="{{ b.w }}" height="3"></rect>{% endif %}
+    {% if b.label %}<text class="axis" x="{{ b.x + b.w / 2 }}" y="{{ c.height - 3 }}" text-anchor="middle">{{ b.label }}</text>{% endif %}
+  </g>{% if b.link %}</a>{% endif %}
+  {% endfor %}
+</svg>
+{%- if legend %}<div class="tklegend">{{ title }}: {% for cls, name in c.legend %}<span><i class="{{ cls }}"></i>{{ name }}</span>{% endfor %}</div>{% endif %}
+{%- endif %}
+{%- endmacro %}
+
+{% macro table(rows, first, link=None) -%}
+<div class="wrap"><table>
+  <tr><th>{{ first }}</th><th class="num">Steps</th><th class="num">Cost</th><th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Cache write</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
+  {% for r in rows %}
+  <tr><td>{% if link and r.wpid %}<a href="{{ link }}/{{ r.wpid }}">{{ r.label }}</a>{% else %}{{ r.label }}{% endif %}</td>
+    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.quota_week|pct }}</td>
+    <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
+    <td class="num">{{ r.cache_write|tok }}</td><td class="num">{{ r.output_tokens|tok }}</td>
+    <td class="num">{{ r.thinking_share|pct }}</td><td class="num">{{ r.failed_share|pct }}</td></tr>
+  {% endfor %}
+</table></div>
+{%- endmacro %}
+
+{#- Where the context went (view 5, toolcost.py). Carried = size × the calls that read it. -#}
+{% macro _share(r) -%}
+<td class="num">{{ r.share|pct }}</td><td class="tkshare"><span style="width: {{ ((r.share or 0) * 100)|round(1) }}%"></span></td>
+{%- endmacro %}
+
+{% macro tools(t, one=False) -%}
+{%- if t %}
+<p class="muted">Each call reads the whole context so far, so a tool result costs its size times the calls after it ("carried"). Carried adds up to the context read{% if not one %} over {{ t.steps }} step{{ "s" if t.steps != 1 }} with transcripts{% endif %}.</p>
+<div class="grid2">
+<div class="wrap"><table>
+  <tr><th>Tool</th><th class="num">Results</th><th class="num">Errors</th><th class="num">Size</th><th class="num">Carried</th><th class="num" colspan="2">Share</th></tr>
+  {% for r in t.by_tool %}
+  <tr><td>{{ r.label }}</td><td class="num">{{ r.n if r.tool or r.label[0] != "(" else "" }}</td><td class="num">{{ r.errors or "" }}</td>
+    <td class="num">{{ r.tokens|tok }}</td><td class="num">{{ r.carried|tok }}</td>{{ _share(r) }}</tr>
+  {% endfor %}
+</table></div>
+<div class="wrap"><table>
+  <tr><th>Command or file</th><th>Tool</th><th class="num">Results</th><th class="num">Carried</th><th class="num" colspan="2">Share</th></tr>
+  {% for r in t.by_kind %}
+  <tr><td class="path" title="{{ r.label }}">{{ r.label|truncate(48, True, "…") }}</td><td>{{ r.tool }}</td><td class="num">{{ r.n }}</td>
+    <td class="num">{{ r.carried|tok }}</td>{{ _share(r) }}</tr>
+  {% endfor %}
+</table></div>
+</div>
+<h3>Biggest single results</h3>
+<div class="wrap"><table>
+  <tr>{% if not one %}<th>Step</th>{% endif %}<th>Tool</th><th>Target</th><th class="num">Call</th><th class="num">Size</th><th class="num">Carried</th></tr>
+  {% for x in t.top %}
+  <tr>{% if not one %}<td>{% if x.link %}<a href="{{ x.link }}">{{ x.step }}</a>{% else %}{{ x.step }}{% endif %}</td>{% endif %}
+    <td>{{ x.tool }}{% if x.error %} <span class="err">error</span>{% endif %}</td><td class="path" title="{{ x.target }}">{{ x.target|truncate(80, True, "…") }}</td>
+    <td class="num">{{ x.call }}</td><td class="num">{{ x.tokens|tok }}</td><td class="num">{{ x.carried|tok }}</td></tr>
+  {% endfor %}
+</table></div>
+{% if t.repeats %}
+<h3>Lines read again in the same step</h3>
+<div class="wrap"><table>
+  <tr><th>File</th><th class="num">Reads again</th>{% if not one %}<th class="num">Steps</th>{% endif %}<th class="num">Carried</th></tr>
+  {% for r in t.repeats %}
+  <tr><td class="path">{{ r.target }}</td><td class="num">{{ r.n }}</td>{% if not one %}<td class="num">{{ r.steps }}</td>{% endif %}<td class="num">{{ r.carried|tok }}</td></tr>
+  {% endfor %}
+</table></div>
+<p class="muted">A read after an edit to the same lines is expected; the rest is context the step paid for twice.</p>
+{% endif %}
+{%- endif %}
+{%- endmacro %}

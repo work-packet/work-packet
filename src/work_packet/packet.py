@@ -34,6 +34,22 @@ class Packet:
             name += ".failed-%d" % failed_attempt
         return os.path.join(self.steps_dir, name)
 
+    def failed_runs(self, n):
+        """The numbers of step ``n``'s failed folders (``NNNN.failed-<run>``), in order."""
+        try:
+            names = os.listdir(self.steps_dir)
+        except OSError:
+            return []
+        return sorted(f for s, f in filter(None, map(schema.parse_step_dir, names))
+                      if s == n and f is not None)
+
+    def next_run(self, n):
+        """The number of step ``n``'s next run: one past its last failed folder.
+        Unlike the attempt count, it never goes back when the packet is resumed,
+        so a run's folder and session ID are never reused."""
+        runs = self.failed_runs(n)
+        return runs[-1] + 1 if runs else 1
+
     def load_status(self):
         """(meta, body). Raises FrontMatterError or OSError."""
         return frontmatter.load(self.status_path)

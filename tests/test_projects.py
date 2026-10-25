@@ -270,7 +270,8 @@ def test_cli_new_prints_permissions(home, capsys, tmp_path):
     assert main(["new", "demo", "--prompt-file", str(tmp_path / "p.md"), "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "Would create project demo" in out
-    assert "--permission-mode acceptEdits --allowedTools Read,Write,Edit,Glob,Grep" in out
-    assert main(["new", "demo"]) == 4
+    assert "--permission-mode acceptEdits --allowedTools Read,Write,Edit,Glob,Grep,Bash" in out
     assert main(["new", "demo", "--prompt", "Go."]) == 0
     assert "wpk tick" in capsys.readouterr().out
+    assert main(["new", "held"]) == 0               # no prompt: held for setup
+    assert "wpk setup held" in capsys.readouterr().out

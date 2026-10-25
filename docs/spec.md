@@ -40,10 +40,19 @@ All keys are optional. Unknown keys are errors.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `model` | string | `claude-haiku-4-5-20251001` | model for new projects |
+| `harness` | string | `claude` | the agent CLI that runs steps (harness.md §3) |
 | `max_concurrent` | int ≥ 1 | 1 | steps `wpk tick` runs at once |
-| `step_timeout` | duration | `20m` | wall-clock limit for one model run |
+| `step_timeout` | duration | `120m` | wall-clock limit for one model run |
 | `max_attempts` | int ≥ 1 | 3 | failed attempts before a packet becomes `FAILED` |
 | `step_budget_usd` | number > 0 | 1.00 | `--max-budget-usd` for one attempt |
+| `step_context_tokens` | int ≥ 0 | 80000 | context at which a step is told to wrap up; 0 = off (context.md C3) |
+| `carry_session` | bool | false | resume the previous step's session when allowed (context.md C4) |
+| `carry_ttl` | duration | `55m` | longest gap after which a session is carried over |
+| `carry_factor` | number > 1 | 4 | start fresh once a carried session's context reaches this multiple of its base |
+| `[profiles.<name>]` | table | built-ins | extra profiles, checked before the built-in ones (harness.md §4) |
+
+`step_context_tokens` and `carry_factor` may also come from the step's
+profile; a value written in `config.toml` or `project.toml` wins over it.
 
 A **duration** is a string `<int><unit>`, unit `s`, `m` or `h`: `90s`,
 `20m`, `2h`.
@@ -65,7 +74,14 @@ A **name** matches `[a-z0-9][a-z0-9_-]{0,63}`.
 ```
 <project>/
   project.toml
-  prompt.md        the prompt the project was created from; never read by the executor
+  prompt.md        the first instruction; copied into the root's memento.md at its first step
+                   if that has none (docs/setup.md §10)
+  state/           created by `wpk new`; copied into the root's state/ at its first step
+  identity/        created by `wpk new`; links, added to the root's identity/ when a step starts
+  work/            created by `wpk new`; what the task works on; the root's work/ references each entry
+                   (a git worktree on wpk/<project> for a git repository, else a link)
+  .setup/          setup records: smoke worktrees, logs and results, shell history; never
+                   read by the executor
   agent.md         optional standing instructions added to every step's prompt
   packets/
     <WPID>/        one per packet, flat
@@ -81,15 +97,17 @@ A **name** matches `[a-z0-9][a-z0-9_-]{0,63}`.
 | `created` | timestamp | yes | |
 | `template` | string | no | as in the registry |
 | `tz` | IANA zone | no | zone for resolving `resume:`; default is the local zone |
-| `model` | string | no | overrides `config.toml` |
-| `step_timeout`, `max_attempts`, `step_budget_usd` | as §2.1 | no | override `config.toml` |
+| `model`, `harness` | string | no | override `config.toml`. Each packet keeps its own `model` in `status.md` (§4.1), copied when it is created; `wpk set model=` also passes the new model to the root packet and to every packet on the old one, but editing this file does not |
+| `profile` | name | no | the profile to use; default: chosen by harness and model |
+| `step_timeout`, `max_attempts`, `step_budget_usd`, `step_context_tokens`, `carry_session`, `carry_ttl`, `carry_factor` | as §2.1 | no | override `config.toml` |
 | `[permissions]` | table | no | see below |
+| `[setup]` | table | no | what the setup should contain: `[[setup.repo]]`, `[[setup.input]]`, `[[setup.link]]`, `[[setup.smoke]]`, `smoke_timeout` (docs/setup.md §4). Ignored by the executor |
 
 `[permissions]`:
 
 | Key | Type | Default | Passed as |
 |---|---|---|---|
-| `allowed_tools` | list of strings | `["Read", "Write", "Edit", "Glob", "Grep"]` | `--allowedTools` |
+| `allowed_tools` | list of strings | `["Read", "Write", "Edit", "Glob", "Grep", "Bash"]` | `--allowedTools` |
 | `permission_mode` | string | `acceptEdits` | `--permission-mode` |
 
 `permission_mode` is one of the `claude --permission-mode` choices:
@@ -106,19 +124,24 @@ Roots get a random (v4) WPID; children get a deterministic (v5) one (§6).
   memento.md         the next instruction (§4.2)
   state/             private working files
   identity/          symlinks to outside resources; read-only by convention
+  work/              the root only: one entry per entry of the project's work/, a git
+                     worktree or a relative link (docs/setup.md §10)
   children/          one symlink per child: <child WPID> -> ../../<child WPID>
   journal.jsonl      append-only, executor-owned (§4.3)
   steps/
     0001/            one folder per committed step (§4.4)
     0002.failed-1/   an attempt at step 2 that did not commit
+  mailbox/           notes from the owner, waiting for a step (interaction.md §6a)
   .lease             present while a step runs (§4.5)
   .pending/          the model's proposal for the step in progress (§4.6)
   .state.old/        transient, during a commit only
 ```
 
 Required: `status.md`, `memento.md`, `state/`, `journal.jsonl` (may be
-empty). Optional: `identity/`, `children/`, `steps/`, and the dot entries.
-Reserved and not created in Stage 1: `stack/`, `mailbox/`. Anything else at
+empty). Optional: `identity/`, `children/`, `steps/`, `work/`, and the dot
+entries. An entry of `work/` that is neither a git repository or worktree nor a
+link is a warning.
+Reserved and not created in Stage 1: `stack/`. `mailbox/` holds notes from the owner (`<id>.json`, docs/interaction.md §6a); it is outside the committed files, so it may change while a step runs. Anything else at
 the top level is a warning.
 
 ### 4.1 `status.md`
@@ -132,7 +155,7 @@ present, unknown keys are errors.
 | `wpk` | string `"0.2"` | format version |
 | `wpid` | WPID | equals the directory name |
 | `project` | name | equals `project.toml: name` |
-| `state` | enum | `RUNNABLE`, `SLEEPING`, `PAUSED`, `COMPLETED`, `FAILED` |
+| `state` | enum | `RUNNABLE`, `SLEEPING`, `NEEDS_INPUT`, `PAUSED`, `COMPLETED`, `FAILED` |
 | `step` | int ≥ 0 | last committed step; 0 = never run |
 | `attempts` | int ≥ 0 | failed attempts at step `step + 1` so far |
 | `parent` | WPID or null | |
@@ -140,11 +163,15 @@ present, unknown keys are errors.
 | `children` | list of WPID | in spawn order, no duplicates |
 | `resume_expr` | string or null | what the model last wrote for `resume`, e.g. `in 10 days` |
 | `wake_at` | timestamp or null | resolved instant; required when `SLEEPING`, null otherwise |
-| `model` | string | model for the next step |
-| `reason` | string or null | required when `PAUSED` or `FAILED` |
+| `model` | string | model for the next step; a step may change it, and `wpk set model=` may (§3.1) |
+| `reason` | string or null | required when `NEEDS_INPUT` (the question), `PAUSED` or `FAILED` |
 | `updated` | timestamp | when the executor last wrote this file |
 
-`WAITING` and `NEEDS_INPUT` are reserved for Stage 3 and rejected in v0.2.
+`NEEDS_INPUT` means the last step asked a question (`ask:`, §4.2) and the
+packet waits for a hand-off (`wpk handoff`); nothing runs it until then.
+`WAITING` is reserved for Stage 3 and rejected in v0.2. When spec v0.3
+replaces `PAUSED` and `FAILED` with `HELD` (long-running.md §7),
+`NEEDS_INPUT` reads as `HELD` with `held_for: question`.
 
 ```markdown
 ---
@@ -176,7 +203,9 @@ instruction for the next step.
 |---|---|---|---|
 | `resume` | resume expression (§5) | yes | when the packet runs next |
 | `reason` | string | with `resume: fail` | why the work cannot be done |
+| `ask` | non-empty string, or a list of questions (docs/interaction.md §2: `id`, `q`, optional `recommend`, `choices`, `grants`) | no | questions for the owner: the step commits as `NEEDS_INPUT` with this as `reason`, whatever `resume` says; `resume` is kept in `resume_expr` as a record |
 | `spawn` | list of spawn entries | no | children to create (§6) |
+| `item` | string, number or a list of them | no | the plan item this step worked on (such as `2a`); it only labels the step for `wpk stats --by item` and the board. Missing or malformed is never an error: the step is just not charged to an item. A failed attempt is charged to its own pending memento's item, else to the item its step committed |
 
 A spawn entry:
 
@@ -191,7 +220,10 @@ Rules:
 
 - With `resume: done` or `fail` the body may be empty; otherwise it must not
   be.
-- Keys of later stages (`every`, `wait`, `ask`) are rejected with a message
+- With `ask`, `resume` must not be `done` or `fail`, and the body must not
+  be empty: it is the instruction for after the answer, which arrives as
+  the hand-off note (§4.3, `handoff`) in the next step's prompt.
+- Keys of later stages (`every`, `wait`) are rejected with a message
   naming the stage that adds them.
 - A **committed** `memento.md` keeps the front matter of the step that wrote
   it, as a record; it has already been applied and is not re-read. A packet
@@ -219,17 +251,25 @@ a warning, not an error; the executor ignores it.
 | `type` | Written when | Further required keys |
 |---|---|---|
 | `step-start` | after the lease is taken | `step`, `attempt`, `model`, `session_id` |
-| `step-failed` | an attempt ends without committing | `step`, `attempt`, `why` |
+| `step-failed` | an attempt ends without committing | `step`, `attempt`, `why`; `run`, the folder's number (§4.4), since it was added |
+| `step-nudge` | the model's turn ended with `.pending/` incomplete; the session is resumed once | `step`, `attempt`, `why` |
 | `commit-begin` | before any committed file changes | `step`, `decision` (below) |
 | `commit-end` | after every committed file is in place | `step`; optional `cost_usd`, `tokens`, `duration_s` |
-| `admin` | `pause`, `resume`, other changes made through `wpk` | `op`, `by` |
+| `admin` | `pause`, `resume`, `wake` (a note's `--wake`), other changes made through `wpk` | `op`, `by` |
+| `handoff` | `wpk handoff`: `NEEDS_INPUT`, `PAUSED` or `FAILED` to `RUNNABLE`; `wpk next` (the next batch, docs/dash-tasks.md §6): those or `COMPLETED` to `RUNNABLE`, with a new instruction | `by`, `from`, `to`; optional `asked` (the one-line summary, from `NEEDS_INPUT`), `questions` (the normalised list), `answers` (`{id: text}`), `note`, `heads` (`{repo: sha}` of the packet's `work/` repos) and `commits` (`{repo: ["sha subject", …]}` since the last step's `heads`). A next batch adds `batch` (2, 3, …), `instruction`, `outline` (where the finished `state/outline.md` went) and `carry_session`. The step prompt shows every `handoff` after the last `commit-end` under "Hand-off" |
+| `config` | `wpk allow`, `deny`, `set` changed `project.toml` (root packet only) | `by`, `changes` (a list of strings) |
+| `seed` | the root's first step copied the project's `state/` and `prompt.md` into it (docs/setup.md §10); at most once, and only if something was copied | `files` (the paths written) |
 | `note` | anything else worth recording (stale lease removed, ...) | `msg` |
 
 `decision` holds everything needed to finish the commit without the model:
 the new status fields (`state`, `resume_expr`, `wake_at`, `reason`,
 `model`), the summary text, and `spawn`, a list of
 `{name, wpid, spawn_key, instruction, copy, model}` with child WPIDs already
-computed.
+computed. When the step saw notes from the owner (docs/interaction.md §6a),
+`notes` lists them (`id`, `t`, `by`, `text`, `how`: `prompt` or `hook`); the
+commit removes them from `mailbox/`. When the packet has git repos under
+`work/`, `heads` holds each one's `HEAD` at the end of the step
+(`{repo: sha}`); a later hand-off lists the commits made after it.
 
 Ordering rules the checker enforces: `step` values of `commit-end` records
 increase by one starting at 1; every `commit-end` follows a `commit-begin`
@@ -244,16 +284,21 @@ journal ends in an unfinished commit (a warning: run `wpk recover`).
 | File | Content |
 |---|---|
 | `prompt.md` | exactly what the model was sent |
+| `system.md` | the protocol, appended to Claude Code's system prompt |
+| `ctxhook.fired` | levels the context hook has sent (only if it fired) |
 | `transcript.jsonl` | raw `claude -p --output-format stream-json` output |
 | `stderr.log` | the model process's stderr |
 | `result.md` | the proposed `memento.md` |
 | `summary.md` | the proposed `summary.md` |
 | `state.diff` | `diff -ruN` of `state/` before and after |
-| `meta.json` | start, end, model, session id, exit code, cost, tokens |
+| `meta.json` | start, end, harness, profile (`name@version`), model, session id, `carried_from`, exit code, cost (this step's; `session_cost_usd` is what Claude Code reported for the session), tokens (summed over the step's runs: `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`, `thinking_tokens`, `cache_write_1h`, `cache_write_5m`), `context` (`first`, `peak`, `last`, `calls`, `base`, `cache_breaks`, `cache_rewrite`), `duration_s`, `api_s` |
 
 For every committed step `1..status.step` a folder `NNNN` exists, except
 steps with no model run (none in Stage 1). Failed attempts are
-`NNNN.failed-<attempt>` and may hold any subset of the files.
+`NNNN.failed-<run>` and may hold any subset of the files. The run counts
+every start of the step, so unlike the attempt it does not go back to 1 when
+a FAILED packet is resumed; it also picks the run's session ID
+(`uuid5(WPID, "<step>:<run>")`), which Claude Code refuses to reuse.
 
 ### 4.5 `.lease`
 
@@ -301,7 +346,8 @@ runner's local zone (`$TZ`, else `/etc/localtime`, else UTC).
 `wake_at` is stored in UTC and truncated to whole seconds.
 
 Rejected with the stage that adds them: `on <date>` and `every`
-(Stage 2), `wait` and `ask` (Stage 3).
+(Stage 2), `wait` (Stage 3). `ask` is not a resume value but a memento key
+(§4.2).
 
 ## 6. Children
 
@@ -336,13 +382,30 @@ Each sub-step can tell whether it already happened, so recovery reads the
 last `commit-begin` and redoes whatever is missing.
 
 A step that does not reach `commit-begin` is a **failed attempt**: its
-folder becomes `steps/NNNN.failed-<attempt>`, `status.md` gets `attempts`
-set to that attempt's number, `step-failed` is appended, and `.pending/` is
+folder becomes `steps/NNNN.failed-<run>`, `status.md` gets `attempts`
+set to that attempt's number, `step-failed` (with `run`) is appended, and `.pending/` is
 removed. If the model changed any committed file, those files are restored
 first. When `attempts` reaches `max_attempts` the packet becomes `FAILED`
 with a reason naming the step and the last failure. A `step-start` with no
 outcome (the executor died) is recorded the same way by the next `wpk step`
 or `wpk recover`.
+
+Before giving up on an attempt whose model ended its turn cleanly but left
+`.pending/` incomplete (no memento, a memento that does not parse, no
+summary), the executor **nudges** it once: it appends `step-nudge`, waits
+up to 10 minutes for processes the step left running, then resumes the
+session (forked, as in carry-over) with a message naming what is missing.
+The second run is added to the same transcript, and `meta.json` gets
+`nudged`. A timeout, a crash or a write to committed files is not nudged.
+
+The failed folder keeps the `.pending/summary.md` and `memento.md` the
+attempt left, as `pending-summary.md` and `pending-memento.md`. The retry's
+prompt then has a "Last attempt" section: why it failed, its last 25 tool
+calls, its last message and those files. That way it can pick up from what
+the attempt left in `work/` rather than start again. The section also lists
+why each earlier attempt at the step failed, one line each, and names every
+failed attempt's folder, so the retry can grep a full `transcript.jsonl`
+when the digest is not enough.
 
 ## 8. Changes from v0.1 (`prototype/agent-proc.md`)
 

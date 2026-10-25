@@ -9,16 +9,18 @@
   --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #667085; --line: #dde1e8;
   --code: #f1f3f6; --link: #2457c5;
   --RUNNABLE: #2f6fdf; --SLEEPING: #7a52c7; --PAUSED: #b7791f; --FAILED: #c53030;
-  --COMPLETED: #2f855a; --running: #0b8a9a; --unknown: #888;
+  --NEEDS_INPUT: #dd6b20; --COMPLETED: #2f855a; --running: #0b8a9a; --unknown: #888;
   --add: #e6f4ea; --del: #fce8e6; --hunk: #e8eefc;
+  --tk-read: #9db7e8; --tk-write: #e8a25c; --tk-new: #8a63d2; --tk-out: #3f9d6b; --tk-think: #9fd3b4;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #12151b; --panel: #1b1f27; --ink: #e3e6ec; --muted: #949bab; --line: #2c323d;
     --code: #232833; --link: #7fa7ff;
     --RUNNABLE: #6f9cff; --SLEEPING: #a98be8; --PAUSED: #e0a84a; --FAILED: #f07373;
-    --COMPLETED: #5fc28f; --running: #39c3d3; --unknown: #999;
+    --NEEDS_INPUT: #f6ad55; --COMPLETED: #5fc28f; --running: #39c3d3; --unknown: #999;
     --add: #1d3324; --del: #3a2022; --hunk: #1f2940;
+    --tk-read: #4c6797; --tk-write: #c27b35; --tk-new: #a688e6; --tk-out: #4fb580; --tk-think: #2f6a4a;
   }
 }
 * { box-sizing: border-box; }
@@ -47,12 +49,13 @@ table { border-collapse: collapse; width: 100%; background: var(--panel); }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line);
   vertical-align: top; }
 th { font-weight: 600; color: var(--muted); font-size: 12px; }
-td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+th.num, td.num { text-align: right; white-space: nowrap; }
+td.num { font-variant-numeric: tabular-nums; }
 .wrap { overflow-x: auto; }
 .state { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .03em;
   padding: 1px 7px; border-radius: 9px; color: #fff; background: var(--unknown); }
 .state.RUNNABLE { background: var(--RUNNABLE); } .state.SLEEPING { background: var(--SLEEPING); }
-.state.PAUSED { background: var(--PAUSED); } .state.FAILED { background: var(--FAILED); }
+.state.NEEDS_INPUT { background: var(--NEEDS_INPUT); } .state.PAUSED { background: var(--PAUSED); } .state.FAILED { background: var(--FAILED); }
 .state.COMPLETED { background: var(--COMPLETED); } .state.running { background: var(--running); }
 .state.committed { background: var(--COMPLETED); } .state.failed { background: var(--FAILED); }
 .pulse { animation: pulse 1.4s ease-in-out infinite; }
@@ -64,6 +67,62 @@ summary { cursor: pointer; }
 dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 14px; margin: 0; }
 dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; word-break: break-word; }
 .err { color: var(--FAILED); }
+.flash { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid var(--line); }
+.flash.ok { border-left: 4px solid var(--COMPLETED); } .flash.bad { border-left: 4px solid var(--FAILED); }
+form.act { margin: 0; }
+form.act textarea, form.act input[type=text] { width: 100%; font: inherit; padding: 5px 7px;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--ink); }
+form.act textarea { min-height: 4.5em; }
+button.go { font: inherit; padding: 4px 12px; border-radius: 5px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); cursor: pointer; }
+button.go.primary { background: var(--link); border-color: var(--link); color: #fff; }
+.ask { border-left: 4px solid var(--NEEDS_INPUT); }
+.q { margin: 10px 0 14px; } .q .text { font-weight: 600; margin-bottom: 4px; }
+.q .opts { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 4px 0; }
+.q .opts label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+/* Scroll panes (pane.js) and the CI-style log (_log.html). */
+.pane { max-height: 72vh; overflow: auto; overscroll-behavior: contain; }
+.pane.box { border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; background: var(--panel); }
+.viewbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 18px 0 8px; }
+.viewbar h2 { margin: 0; }
+.tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.tabs a { padding: 2px 10px; font-size: 12.5px; color: var(--muted); text-decoration: none; }
+.tabs a.on { background: var(--link); color: #fff; }
+.mini { font: inherit; font-size: 12px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--panel); color: var(--ink); cursor: pointer; text-decoration: none; }
+.console { background: #0d1117; color: #e6edf3; border-radius: 8px; padding: 6px 0;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.console .ln { display: flex; padding-right: 12px; }
+.console .ln:hover { background: rgba(255,255,255,.04); }
+.console .ln:target, .console summary.ln:target { background: rgba(187,128,9,.3); }
+.console .n { flex: 0 0 4.5em; text-align: right; padding-right: 14px; color: #6e7681;
+  user-select: none; text-decoration: none; }
+.console .n:hover { color: #e6edf3; text-decoration: underline; }
+.console .t { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+.console summary { list-style: none; cursor: pointer; font-weight: 600; }
+.console summary::-webkit-details-marker { display: none; }
+.console summary .t::before { content: "▸ "; color: #8b949e; }
+.console details[open] > summary .t::before { content: "▾ "; }
+.console .cmd .t { color: #79c0ff; } .console .err .t, .console details.err > summary .t { color: #ff7b72; }
+.console .meta .t, .console .dim, .console details.thinking > summary .t { color: #8b949e; font-weight: 400; }
+.console .text .t { color: #d2a8ff; }
+svg.tk { display: block; width: 100%; height: auto; }
+svg.tk .axis { fill: var(--muted); font: 10px system-ui, sans-serif; }
+svg.tk .base { stroke: var(--line); }
+svg.tk .hit { fill: transparent; } svg.tk a:hover .hit, svg.tk g:hover .hit { fill: var(--code); }
+svg.tk .tk-read, .tklegend .tk-read { fill: var(--tk-read); background: var(--tk-read); }
+svg.tk .tk-write, .tklegend .tk-write { fill: var(--tk-write); background: var(--tk-write); }
+svg.tk .tk-new, .tklegend .tk-new { fill: var(--tk-new); background: var(--tk-new); }
+svg.tk .tk-out, .tklegend .tk-out { fill: var(--tk-out); background: var(--tk-out); }
+svg.tk .tk-think, .tklegend .tk-think { fill: var(--tk-think); background: var(--tk-think); }
+svg.tk .failmark { fill: var(--FAILED); } svg.tk g.failed rect:not(.hit):not(.failmark) { opacity: .55; }
+.tklegend { font-size: 12px; color: var(--muted); margin: 2px 0 10px; display: flex; gap: 12px; flex-wrap: wrap; }
+.tklegend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.tkline { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 8px; }
+td.tkshare { width: 80px; padding-left: 0; }
+td.tkshare span { display: block; height: 8px; background: var(--tk-read); border-radius: 2px; min-width: 1px; }
+td.path { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
 </style>
 {% block head %}{% endblock %}
 </head>
@@ -71,33 +130,14 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; word-break: break-word; 
 <header>
   <a class="brand" href="/">wpk dash</a>
   <span class="crumbs">{% block crumbs %}{% endblock %}</span>
-  {% if live %}<button id="live" type="button" title="Refresh every {{ refresh_s }} s">live</button>{% endif %}
-  <span class="muted ver" style="font-size:12px">work-packet {{ version }}</span>
+  {% if live %}<button id="live" type="button" data-refresh-ms="{{ refresh_ms or refresh_s * 1000 }}" title="Refresh every {{ ((refresh_ms or refresh_s * 1000) / 1000)|round(1) }} s">live</button>{% endif %}
+  <a class="newtask" href="/new">New task</a>
+  <span class="muted ver" style="font-size:12px" title="{{ 'This server runs due packets' if runner else 'Nothing runs packets here: start with --run, or use wpk tick' }}">{{ 'runner on' if runner else 'runner off' }} · {% if user %}{{ user }} · {% endif %}work-packet {{ version }}</span>
 </header>
-<main id="main">{% block main %}{% endblock %}</main>
+<main id="main">{% if flash %}<div class="flash {{ 'ok' if flash_ok else 'bad' }}">{{ flash }}</div>{% endif %}{% block main %}{% endblock %}</main>
+<script src="/static/pane.js"></script>
 {% if live %}
-<script>
-// Refresh by swapping <main> in place, so scroll position and open <details> survive.
-(function () {
-  var btn = document.getElementById("live"), on = true;
-  try { on = localStorage.getItem("wpk-live") !== "off"; } catch (e) {}
-  function show() { btn.textContent = on ? "live" : "paused"; btn.style.opacity = on ? 1 : .6; }
-  btn.onclick = function () { on = !on; try { localStorage.setItem("wpk-live", on ? "on" : "off"); } catch (e) {} show(); };
-  show();
-  setInterval(function () {
-    if (!on || document.hidden) return;
-    fetch(location.href, {cache: "no-store"}).then(function (r) { return r.text(); }).then(function (html) {
-      var doc = new DOMParser().parseFromString(html, "text/html");
-      var next = doc.getElementById("main"); if (!next) return;
-      var open = {};
-      document.querySelectorAll("#main details[id]").forEach(function (d) { open[d.id] = d.open; });
-      document.getElementById("main").innerHTML = next.innerHTML;
-      document.querySelectorAll("#main details[id]").forEach(function (d) { if (d.id in open) d.open = open[d.id]; });
-      document.title = doc.title;
-    }).catch(function () {});
-  }, {{ refresh_s * 1000 }});
-})();
-</script>
+<script src="/static/live.js"></script>
 {% endif %}
 </body>
 </html>

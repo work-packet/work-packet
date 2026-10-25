@@ -7,16 +7,19 @@ board can be tested without a web server.
 import json
 import os
 import shlex
+import socket
 from datetime import timedelta
 
-from .. import clock, frontmatter, lease as lease_mod, registry, schema
+from .. import (clock, frontmatter, lease as lease_mod, notes as notes_mod, procs as procs_mod,
+               questions, registry, schema)
 from ..packet import Packet
 from ..project import ProjectError, load_project
 from ..views import packets, relative
 
-# Board columns that exist in Stage 1, in display order.
-COLUMNS = ("Running", "Ready", "Sleeping", "Paused", "Failed", "Done")
-COLUMN_OF = {"RUNNABLE": "Ready", "SLEEPING": "Sleeping", "PAUSED": "Paused",
+# Board columns, in display order.
+COLUMNS = ("Needs you", "Running", "Ready", "Sleeping", "Paused", "Failed", "Done")
+COLUMN_OF = {"NEEDS_INPUT": "Needs you", "RUNNABLE": "Ready", "SLEEPING": "Sleeping",
+             "PAUSED": "Paused",
              "FAILED": "Failed", "COMPLETED": "Done"}
 
 TOOL_RESULT_MAX = 4000      # characters of one tool result shown in the step viewer
@@ -81,7 +84,7 @@ def steps(pkt):
     failed_why = {}
     for r in pkt.journal().records:
         if r.get("type") == "step-failed":
-            failed_why[(r.get("step"), r.get("attempt"))] = r.get("why")
+            failed_why[(r.get("step"), r.get("run", r.get("attempt")))] = r.get("why")
     out = []
     try:
         names = os.listdir(pkt.steps_dir)
@@ -105,11 +108,36 @@ def steps(pkt):
             "dir": name, "n": n, "attempt": attempt, "outcome": outcome,
             "start": _ts(meta.get("start")), "end": _ts(meta.get("end")),
             "cost_usd": meta.get("cost_usd"), "duration_s": meta.get("duration_s"),
+            "context_tokens": _context_tokens(meta.get("tokens")),
+            "output_tokens": (meta.get("tokens") or {}).get("output_tokens"),
             "summary": _first_line(_read(os.path.join(sd, "summary.md"))),
             "why": failed_why.get((n, failed)) if failed is not None else None,
+            "item": _item(sd, failed is not None),
         })
     out.sort(key=lambda s: (s["n"], s["outcome"] != "failed", s["attempt"] or 0))
+    done = {s["n"]: s["item"] for s in out if s["outcome"] == "committed"}
+    for s in out:
+        if s["item"] is None and s["outcome"] == "failed":
+            s["item"] = done.get(s["n"])
     return out
+
+
+def _context_tokens(t):
+    if not isinstance(t, dict):
+        return None
+    n = [t.get(k) for k in ("input_tokens", "cache_creation_input_tokens",
+                            "cache_read_input_tokens")]
+    return sum(v for v in n if isinstance(v, int)) if any(isinstance(v, int) for v in n) else None
+
+
+def _item(sd, failed):
+    """The memento's ``item`` (``stats.packet_steps`` does the same)."""
+    try:
+        mm, _ = frontmatter.load(os.path.join(sd, "pending-memento.md" if failed
+                                              else "result.md"))
+    except (OSError, frontmatter.FrontMatterError):
+        return None
+    return schema.memento_item(mm)
 
 
 def spawn_names(pkt):
@@ -190,14 +218,41 @@ def card(entry, now=None):
                "step": n["running"]["step"],
                "for": relative(-(now - since).total_seconds()).replace(" ago", "")
                if since else ""}
+        try:
+            step_dir = os.path.join(entry["path"], "packets", n["wpid"], "steps",
+                                    schema.step_dir_name(int(run["step"])))
+            evs = activity(os.path.join(step_dir, "transcript.jsonl"))["events"]
+            ev = evs[-1] if evs else None
+            if ev:
+                run["now"] = ev["label"] if ev["kind"] == "text" else \
+                    "%s: %s" % (ev["name"], ev["label"])
+        except (TypeError, ValueError):
+            pass
+    held = None
+    if root and root["state"] == "PAUSED" and root.get("reason") == "setup" and not live:
+        held = setup_summary(entry)
     return {
         "name": entry["name"], "column": column, "root": root, "running": run,
+        "setup": held,
         "counts": sorted(counts.items(), key=lambda kv: str(kv[0])),
         "packets": len(nodes), "trouble": len(trouble),
         "spend_total": sum(n["cost_usd"] for n in nodes), "spend_today": spend_today,
         "last_step": relative(-(now - last).total_seconds()) if last else "never",
         "finished": _local(root["updated"], tz) if root and root.get("updated") else "",
     }
+
+
+def setup_summary(entry):
+    """For a root held for setup: the doctor's counts and next command (docs/setup.md §7)."""
+    from .. import setup
+    try:
+        tg = setup.target(entry["path"])
+        cs = setup.readiness(tg, tools=False)
+    except (setup.SetupError, OSError) as e:
+        return {"missing": None, "warnings": None, "next": str(e)}
+    return {"missing": len(setup.missing(cs)),
+            "warnings": sum(1 for c in cs if c.level == "warn"),
+            "next": setup.next_step(tg, cs)}
 
 
 def board(h=None, now=None):
@@ -316,11 +371,37 @@ def packet(entry, wpid, now=None):
         "summary": body.strip(), "memento": memento, "files": files, "children": kids,
         "parent": parent, "steps": list(reversed(steps(pkt))), "running": running(pkt, now),
         "next": _next(meta, now, tz), "journal": pkt.journal().records[-200:],
+        "notes": notes_mod.queued(pkt),
+        "questions": questions.of_packet(pkt),
     }
 
 
+SETTING_KEYS = ("model", "step_timeout", "step_budget_usd", "step_context_tokens",
+                "max_attempts", "carry_session", "permission_mode")
+
+
+def settings(entry):
+    """The project page's Settings panel: allowed tools and the editable keys."""
+    from ..project import settings as resolved
+    try:
+        d = load_project(entry["path"])
+        st = resolved(entry["path"])
+    except (ProjectError, OSError):
+        return None
+    perm = d.get("permissions") or {}
+    rows = []
+    for k in SETTING_KEYS:
+        own = perm.get(k) if k == "permission_mode" else d.get(k)
+        eff = getattr(st, "step_timeout_s" if k == "step_timeout" else k, None)
+        show = lambda v: ("true" if v else "false") if isinstance(v, bool) else v
+        rows.append({"key": k, "value": show(own), "effective": show(eff)})
+    return {"tools": list(perm.get("allowed_tools") or schema.PERMISSION_DEFAULTS["allowed_tools"]),
+            "rows": rows}
+
+
 def transcript(path, limit=TOOL_RESULT_MAX):
-    """A stream-json transcript as display blocks: text, tool calls, results, the end."""
+    """A stream-json transcript as display blocks: text, tool calls, results, the end.
+    ``limit`` cuts each tool result (None: never)."""
     blocks = []
     try:
         fp = open(path, encoding="utf-8", errors="replace")
@@ -352,14 +433,16 @@ def transcript(path, limit=TOOL_RESULT_MAX):
                         blocks.append({"kind": "thinking", "text": c["thinking"].strip()})
                     elif ct == "tool_use":
                         blocks.append({"kind": "tool_use", "name": c.get("name"),
+                                       "id": c.get("id"), "input": c.get("input"),
                                        "text": json.dumps(c.get("input"), indent=2)})
                     elif ct == "tool_result":
                         r = c.get("content")
                         if isinstance(r, list):
                             r = "\n".join(x.get("text", "") for x in r if isinstance(x, dict))
                         r = str(r if r is not None else "")
-                        cut = len(r) > limit
+                        cut = limit is not None and len(r) > limit
                         blocks.append({"kind": "tool_result", "error": bool(c.get("is_error")),
+                                       "use_id": c.get("tool_use_id"),
                                        "text": r[:limit] + ("\n... (%d more characters)"
                                                             % (len(r) - limit) if cut else "")})
             elif t == "result":
@@ -371,8 +454,9 @@ def transcript(path, limit=TOOL_RESULT_MAX):
     return blocks
 
 
-def step(entry, wpid, dirname):
-    """Everything the step viewer shows. None if there is no such step folder."""
+def step(entry, wpid, dirname, view="blocks"):
+    """Everything the step viewer shows, the transcript as blocks or (``view``
+    "log") as a log. None if there is no such step folder."""
     if not schema.is_wpid(wpid) or schema.parse_step_dir(dirname) is None:
         return None
     pkt = Packet(os.path.join(entry["path"], "packets", wpid))
@@ -398,10 +482,408 @@ def step(entry, wpid, dirname):
                    "hunk" if ln.startswith("@@") else ""), ln)
                  for ln in (diff or "").splitlines()] if diff is not None else None,
         "stderr": _read(os.path.join(sd, "stderr.log")),
-        "blocks": transcript(os.path.join(sd, "transcript.jsonl")),
+        "notes": notes_mod.of_step(sd, pkt, pkt.journal().records),
+        "blocks": transcript(os.path.join(sd, "transcript.jsonl")) if view != "log" else None,
+        "log": log(os.path.join(sd, "transcript.jsonl")) if view == "log" else None,
         "prev": dirs[i - 1] if i > 0 else None,
         "next": dirs[i + 1] if i + 1 < len(dirs) else None,
         "fork": "cd %s && claude --resume %s --fork-session" % (
             shlex.quote(pkt.path), session)
         if session else None,
     }
+
+
+# --- the live view (docs/interaction.md I6) ------------------------------------
+
+FEED_MAX = 80               # newest events shown in the live feed
+_BOX = __import__("re").compile(r"^(\s*)[-*]\s+\[([ xX>+\-~])\]\s+(.*)$")
+BOX_STATE = {" ": "pending", "x": "done", "X": "done", ">": "active", "+": "added",
+             "-": "deferred", "~": "partial"}
+
+
+def _one_line(text, n=160):
+    line = " ".join((text or "").split())
+    return line if len(line) <= n else line[:n - 1] + "…"
+
+
+def _tool_label(name, inp):
+    """A tool call as one line: the command, the path or the pattern."""
+    inp = inp if isinstance(inp, dict) else {}
+    if name == "Bash":
+        return inp.get("description") or inp.get("command") or "", inp.get("command") or ""
+    for k in ("file_path", "path", "pattern", "url", "query"):
+        if inp.get(k):
+            return str(inp[k]), ""
+    return "", ""
+
+
+def activity(path):
+    """The transcript as a feed: one event per model message, tool call and result.
+
+    Returns ``{"events", "context", "output_tokens", "calls", "todos", "pending"}``:
+    ``context`` is the last call's context size, ``todos`` the last TodoWrite
+    list, and ``pending`` the tool call still waiting for its result, if any.
+    """
+    out = {"events": [], "context": None, "output_tokens": 0, "calls": 0, "todos": None,
+           "pending": None, "ended": None}
+    uses = {}
+    try:
+        fp = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return out
+    with fp:
+        for line in fp:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(e, dict):
+                continue
+            t = e.get("type")
+            if t == "assistant":
+                m = e.get("message") or {}
+                u = m.get("usage") or {}
+                if u:
+                    out["calls"] += 1
+                    out["context"] = sum(u.get(k) or 0 for k in (
+                        "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+                    out["output_tokens"] += u.get("output_tokens") or 0
+                for c in m.get("content") or ():
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get("type") == "text" and c.get("text", "").strip():
+                        out["events"].append({"kind": "text", "label": _one_line(c["text"], 400)})
+                    elif c.get("type") == "tool_use":
+                        name, inp = c.get("name"), c.get("input")
+                        if name == "TodoWrite" and isinstance(inp, dict):
+                            out["todos"] = [{"content": x.get("content"),
+                                             "status": x.get("status"),
+                                             "active": x.get("activeForm")}
+                                            for x in inp.get("todos") or () if isinstance(x, dict)]
+                        label, detail = _tool_label(name, inp)
+                        ev = {"kind": "tool", "name": name, "label": _one_line(label),
+                              "detail": _one_line(detail, 300) if detail != label else "",
+                              "result": None, "error": False}
+                        out["events"].append(ev)
+                        uses[c.get("id")] = ev
+            elif t == "user":
+                for c in (e.get("message") or {}).get("content") or ():
+                    if isinstance(c, dict) and c.get("type") == "tool_result":
+                        ev = uses.pop(c.get("tool_use_id"), None)
+                        if ev is None:
+                            continue
+                        r = c.get("content")
+                        if isinstance(r, list):
+                            r = "\n".join(x.get("text", "") for x in r if isinstance(x, dict))
+                        lines = [ln for ln in str(r or "").splitlines() if ln.strip()]
+                        ev["error"] = bool(c.get("is_error"))
+                        ev["result"] = _one_line(lines[-1] if lines else "(no output)", 200)
+            elif t == "result":
+                out["ended"] = {"error": bool(e.get("is_error")), "cost": e.get("total_cost_usd"),
+                                "turns": e.get("num_turns")}
+    if uses:
+        out["pending"] = list(uses.values())[-1]
+    out["events"] = out["events"][-FEED_MAX:]
+    return out
+
+
+LOG_RESULT_MAX = 20000      # characters of one tool result in the log view
+
+
+def log(path, limit=LOG_RESULT_MAX):
+    """The transcript as a console log, the way CI shows one.
+
+    Returns ``{"groups", "lines"}``. Each group is ``{"id", "kind", "title",
+    "lines", "error", "done"}``: a tool call with its input and output
+    (``kind`` "tool"), the model's text ("text", shown without a header),
+    thinking, or a session line ("meta"). ``lines`` are ``(n, text, cls)``,
+    numbered through the whole log; a group with a title takes a number
+    for its header line, as a CI log's group line does.
+    """
+    groups, uses = [], {}
+    pkt = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(path)))) + os.sep
+    for b in transcript(path, limit):
+        k = b["kind"]
+        if k == "tool_use":
+            inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+            label, _ = _tool_label(b["name"], inp)
+            if b["name"] == "Bash" and inp.get("command"):
+                body = ["$ " + ln if i == 0 else "  " + ln
+                        for i, ln in enumerate(inp["command"].splitlines())]
+            else:
+                body = _input_lines(inp, skip=label, pkt=pkt)
+            label = label[len(pkt):] if label.startswith(pkt) else label
+            g = {"kind": "tool", "title": "%s  %s" % (b["name"], _one_line(label, 200)),
+                 "in": body, "out": [], "error": False, "done": False}
+            groups.append(g)
+            uses[b.get("id")] = g
+        elif k == "tool_result":
+            g = uses.pop(b.get("use_id"), None)
+            if g is None:
+                g = {"kind": "tool", "title": "result", "in": [], "error": False}
+                groups.append(g)
+            g["out"] = b["text"].splitlines() or ["(no output)"]
+            g["error"], g["done"] = b["error"], True
+        elif k == "thinking":
+            groups.append({"kind": "thinking", "title": "thinking", "in": [],
+                           "out": b["text"].splitlines(), "done": True})
+        elif k in ("init", "result"):
+            groups.append({"kind": "meta", "title": None, "in": [], "error": b.get("error"),
+                           "out": ["%s: %s" % ("session" if k == "init" else "end", b["text"])]})
+        else:
+            groups.append({"kind": "text", "title": None, "in": [],
+                           "out": b["text"].splitlines()})
+    n = 0
+    for i, g in enumerate(groups, 1):
+        g["id"] = "g%d" % i
+        if g["title"]:
+            n += 1
+            g["n"] = n
+        lines = []
+        for cls, src in (("cmd", g.pop("in")), ("err" if g.get("error") else "", g.pop("out"))):
+            for ln in src:
+                n += 1
+                lines.append((n, ln, cls))
+        g["lines"] = lines
+    return {"groups": groups, "lines": n}
+
+
+def _input_lines(inp, skip, pkt):
+    """A tool's input as ``key: value`` lines, without the value in the title;
+    a multi-line string goes under its key, indented."""
+    out = []
+    for key, v in inp.items():
+        if isinstance(v, str) and v == skip:
+            continue
+        if isinstance(v, str) and "\n" in v:
+            out.append("%s:" % key)
+            out += ["  " + ln for ln in v.splitlines()]
+        else:
+            v = v if isinstance(v, str) else json.dumps(v)
+            out.append("%s: %s" % (key, v[len(pkt):] if v.startswith(pkt) else v))
+    return out
+
+
+def log_text(lg):
+    """``log()`` as plain text, for download."""
+    out = []
+    for g in lg["groups"]:
+        if g["title"]:
+            out.append("%s %s%s" % ("▶", g["title"], "  [error]" if g.get("error") else ""))
+        out += [t for _, t, _ in g["lines"]]
+    return "\n".join(out) + "\n"
+
+
+def outline(pkt):
+    """Checklist items from the packet's outline, newest copy first (.pending/ while a
+    step runs). ``state/outline.md``, else the first state ``.md`` with a checklist."""
+    cands = []
+    for base in (os.path.join(pkt.pending_dir, "state"), pkt.state_dir):
+        cands.append(os.path.join(base, "outline.md"))
+    for base in (os.path.join(pkt.pending_dir, "state"), pkt.state_dir):
+        try:
+            cands += [os.path.join(base, n) for n in sorted(os.listdir(base)) if n.endswith(".md")]
+        except OSError:
+            pass
+    for p in cands:
+        text = _read(p)
+        if not text:
+            continue
+        items = []
+        for ln in text.splitlines():
+            m = _BOX.match(ln)
+            if m:
+                items.append({"depth": len(m.group(1).expandtabs(2)) // 2,
+                              "state": BOX_STATE[m.group(2)], "text": m.group(3).strip()})
+        if len(items) >= 2:
+            cur = next((i for i in items if i["state"] == "active"), None) or \
+                next((i for i in items if i["state"] in ("pending", "added")), None)
+            if cur:
+                cur["current"] = True
+            rel = os.path.relpath(p, pkt.path)
+            return {"file": rel, "entries": items,
+                    "done": sum(i["state"] == "done" for i in items), "total": len(items)}
+    return None
+
+
+def live(entry, wpid, now=None, view="feed"):
+    """The live view of a packet: its newest step's feed (or, with ``view``
+    "log", its log), the outline and the steps so far."""
+    now = now or clock.now()
+    if not schema.is_wpid(wpid):
+        return None
+    pkt = Packet(os.path.join(entry["path"], "packets", wpid))
+    if not os.path.isdir(pkt.path):
+        return None
+    try:
+        meta, _ = pkt.load_status()
+    except (OSError, frontmatter.FrontMatterError):
+        meta = {}
+    all_steps = steps(pkt)
+    run = running(pkt, now)
+    cur = all_steps[-1] if all_steps else None
+    tpath = os.path.join(pkt.steps_dir, cur["dir"], "transcript.jsonl") if cur else None
+    feed = activity(tpath) if cur else None
+    done = [s for s in all_steps if s["outcome"] == "committed"]
+    return {
+        "wpid": wpid, "short": wpid[:8], "meta": meta, "running": run, "step": cur,
+        "feed": feed, "outline": outline(pkt), "questions": questions.of_packet(pkt),
+        "history": list(reversed(done))[:30], "notes": notes_mod.queued(pkt),
+        "procs": processes(pkt, run, cur),
+        "log": log(tpath) if cur and view == "log" else None,
+        "elapsed": _secs_short((now - run["since"]).total_seconds())
+        if run and run.get("since") else None,
+    }
+
+
+def processes(pkt, run, cur):
+    """The running step's processes (``procs.of_step``); ``{"remote": host}``
+    when it runs on another machine; None when no step is running."""
+    if not run or not cur:
+        return None
+    if run.get("host") != socket.gethostname():
+        return {"remote": run.get("host")}
+    try:
+        pid = int((_read(os.path.join(pkt.steps_dir, cur["dir"], "model.pid")) or "").strip())
+    except ValueError:
+        pid = None          # no PID file: find them by their WPK_* tags alone
+    return procs_mod.of_step(pid, pkt.wpid, run.get("step"))
+
+
+def _secs_short(s):
+    s = int(max(s, 0))
+    return "%dm %02ds" % (s // 60, s % 60) if s >= 60 else "%ds" % s
+
+
+# --- Compose (docs/dash-tasks.md §4) -------------------------------------------------
+
+STAGES = (("project", "Project"), ("work", "Work repos"), ("inputs", "Inputs"),
+          ("instruction", "Instruction"), ("limits", "Limits"))
+LEVEL_RANK = {"ok": 0, "info": 1, "warn": 2, "missing": 3}
+OWNED = ("COMPLETED", "NEEDS_INPUT", "PAUSED", "FAILED")
+
+
+def _inputs(state_dir):
+    from ..prompt import FILE_MAX
+    out = []
+    if not os.path.isdir(state_dir):
+        return out
+    for dp, dns, fns in os.walk(state_dir):
+        dns.sort()
+        for f in sorted(fns):
+            p = os.path.join(dp, f)
+            try:
+                size = os.path.getsize(p)
+            except OSError:
+                continue
+            out.append({"rel": os.path.relpath(p, state_dir), "size": size,
+                        "shown": size <= FILE_MAX})
+    return out
+
+
+def _carry_estimate(pkt, meta):
+    """The last committed step's context peak: what a carried session rereads."""
+    n = meta.get("step") or 0
+    if n < 1:
+        return None
+    m = _json(os.path.join(pkt.step_dir(n), "meta.json")) or {}
+    if not m.get("session_id"):
+        return None
+    return {"tokens": (m.get("context") or {}).get("peak"), "model": m.get("model"),
+            "end": _ts(m.get("end"))}
+
+
+def compose(entry, now=None):
+    """Everything the Compose page shows for a project's root, or None.
+
+    ``mode`` is ``setup`` (held for setup, nothing has run: the instruction is
+    ``prompt.md``) or ``next`` (it has run: the instruction is the draft of the
+    next batch). ``owned``: you may change it now (not the runner's).
+    """
+    from .. import actions, executor, setup, workspace
+    from ..project import held_for_setup
+    now = now or clock.now()
+    try:
+        tg = setup.target(entry["path"])
+    except (setup.SetupError, OSError):
+        return None
+    meta = tg.status()
+    if meta is None:
+        return None
+    run = running(tg.packet, now)
+    state = meta.get("state")
+    owned = run is None and state in OWNED
+    mode = "next" if tg.started() else "setup"
+    checks = setup.readiness(tg, tools=False)
+    if mode == "next":        # the setup's instruction check is about prompt.md, long gone
+        checks = [c for c in checks if c.group in ("work", "limits")]
+        for repo, lines in sorted(workspace.dirty(tg.packet).items()):
+            checks.append(setup.Check(
+                "next.dirty.%s" % repo, "work", "missing",
+                "work/%s has uncommitted changes" % repo,
+                "The next step starts from a clean tree: commit or stash them (%d paths)."
+                % len(lines),
+                ["git -C %s add -A && git -C %s commit -m 'handoff: by hand'"
+                 % ((setup.tilde(os.path.join(tg.packet_work, repo)),) * 2)]))
+    groups = []
+    for key, title in STAGES:
+        cs = [c for c in checks if c.group == key]
+        if not cs:
+            continue
+        worst = max(cs, key=lambda c: LEVEL_RANK.get(c.level, 0)).level
+        groups.append({"key": key, "title": title, "level": worst, "checks": cs})
+    records = tg.packet.journal().records
+    if mode == "setup":
+        text, where = setup.instruction(tg)
+        draft = None
+    else:
+        draft = actions.load_draft(tg.packet)
+        text, where = (draft or {}).get("instruction", ""), "draft"
+    last = [r for r in records if r.get("type") == "handoff" and r.get("instruction")]
+    return {
+        "tg": tg, "meta": meta, "state": state, "running": run, "owned": owned,
+        "mode": mode, "held_for_setup": held_for_setup(meta),
+        "groups": groups, "missing": len(setup.missing(checks)),
+        "instruction": text, "where": where, "draft": draft,
+        "last_instruction": last[-1]["instruction"] if last else
+        (_read(tg.prompt_path) or ""),
+        "templates": setup.TEMPLATES,
+        "inputs": _inputs(tg.state),
+        "state_where": "the project's state/" if mode == "setup" else "the root packet's state/",
+        "batch": executor.batch_of(records), "summary": tg.packet.load_status()[1].strip(),
+        "archive_default": state == "COMPLETED",
+        "carry": _carry_estimate(tg.packet, meta) if mode == "next" else None,
+        "shell_dir": tg.proj if mode == "setup" else tg.packet.path,
+    }
+
+
+
+def model_choices(h=None):
+    """For the New task form: ``{harness: [{"id", "label"}]}``. Each harness's own
+    list, then the models registered projects use and the configured default
+    (those are known to work here). The form also takes a model typed in."""
+    from .. import harness as harness_mod
+    try:
+        cfg = registry.load_config(h)
+    except registry.ConfigError:
+        cfg = dict(schema.CONFIG_DEFAULTS)
+    out = {}
+    for name in harness_mod.names():
+        out[name] = [{"id": m, "label": lbl} for m, lbl in harness_mod.get(name).models()]
+    used = [(cfg["harness"], cfg["model"], "the default")]
+    for e in registry.entries(h):
+        try:
+            d = load_project(e["path"])
+        except (ProjectError, OSError):
+            continue
+        used.append((d.get("harness") or cfg["harness"], d.get("model") or cfg["model"],
+                     "used by %s" % e["name"]))
+    for hn, m, why in used:
+        lst = out.setdefault(hn, [])
+        hit = [x for x in lst if x["id"] == m]
+        if hit:
+            if why == "the default":
+                hit[0]["label"] += " (the default)"
+        elif m:
+            lst.append({"id": m, "label": "%s (%s)" % (m, why)})
+    return out

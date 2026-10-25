@@ -79,10 +79,38 @@ def _start(d):
                             stderr=subprocess.PIPE, text=True)
 
 
-def run_pass(items, jobs, budget, report):
-    """Run ``wpk step`` for ``items``, at most ``jobs`` at once and ``budget`` in all."""
+def next_wake(entries):
+    """The earliest ``wake_at`` of a ``SLEEPING`` packet, or None."""
+    best = None
+    for e in entries:
+        pdir = os.path.join(e["path"], "packets")
+        try:
+            names = os.listdir(pdir)
+        except OSError:
+            continue
+        for w in names:
+            if not schema.is_wpid(w):
+                continue
+            try:
+                meta, _ = Packet(os.path.join(pdir, w)).load_status()
+                if meta.get("state") != "SLEEPING" or not meta.get("wake_at"):
+                    continue
+                t = schema.parse_timestamp(meta["wake_at"])
+            except (OSError, frontmatter.FrontMatterError, ValueError):
+                continue
+            best = t if best is None or t < best else best
+    return best
+
+
+def run_pass(items, jobs, budget, report, stop=lambda: False):
+    """Run ``wpk step`` for ``items``, at most ``jobs`` at once and ``budget`` in all.
+
+    Once ``stop()`` is true no new step starts; running ones are waited for.
+    """
     ran, queue, live = [], list(items)[:budget], []
     while queue or live:
+        if stop():
+            queue = []
         while queue and len(live) < jobs:
             d = queue.pop(0)
             live.append((d, _start(d)))
@@ -102,17 +130,21 @@ def run_pass(items, jobs, budget, report):
     return ran
 
 
-def tick(entries, jobs=1, until_idle=False, max_steps=None, report=lambda r: None):
-    """One pass, or with ``until_idle`` passes until nothing is due or nothing moved."""
+def tick(entries, jobs=1, until_idle=False, max_steps=None, report=lambda r: None,
+         stop=lambda: False):
+    """One pass, or with ``until_idle`` passes until nothing is due or nothing moved.
+
+    ``stop`` is checked before each step starts (the runner's shutdown).
+    """
     res = TickResult()
-    while True:
+    while not stop():
         budget = None if max_steps is None else max_steps - len(res.ran)
         if budget is not None and budget <= 0:
             break
         items = due(entries)
         if not items:
             break
-        ran = run_pass(items, jobs, budget if budget is not None else len(items), report)
+        ran = run_pass(items, jobs, budget if budget is not None else len(items), report, stop)
         res.passes += 1
         res.ran += ran
         # Stop when nothing committed or failed: what is left is leased or not runnable.

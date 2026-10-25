@@ -18,7 +18,8 @@ except ImportError:          # Python 3.10
 REQUIRED_ENTRIES = ("status.md", "memento.md", "state", "journal.jsonl")
 KNOWN_ENTRIES = REQUIRED_ENTRIES + (
     "identity", "children", "steps", ".lease", ".pending", ".state.old",
-    "stack", "mailbox",
+    "stack", "mailbox", "work",
+    ".vscode",          # wpk ide's workspace file (docs/vscode-plan.md §2); not packet format
 )
 
 
@@ -216,7 +217,11 @@ def check_packet(path, project=None, rep=None):
                         "is %r but the project is %r" % (status.get("project"), project))
     fm = _load_fm(pkt.memento_path, rep)
     if fm is not None:
-        rep.extend(pkt.memento_path, schema.validate_memento(fm[0], fm[1], proposal=False))
+        probs = schema.validate_memento(fm[0], fm[1], proposal=False)
+        if status is not None and status.get("state") == "PAUSED" and \
+                status.get("reason") == "setup" and not fm[1].strip():
+            probs = [p for p in probs if p.msg != "memento has no instruction"]
+        rep.extend(pkt.memento_path, probs)
 
     leased = _check_lease(pkt, rep)
     if not leased:
@@ -235,6 +240,19 @@ def check_packet(path, project=None, rep=None):
             elif not os.path.exists(p):
                 rep.add(p, None, "dangling identity link -> %s" % os.readlink(p),
                         "warning")
+
+    work = os.path.join(pkt.path, "work")
+    if os.path.lexists(work) and not os.path.isdir(work):
+        rep.add(work, None, "must be a directory")
+    elif os.path.isdir(work):
+        for e in sorted(os.listdir(work)):
+            p = os.path.join(work, e)
+            if os.path.islink(p):
+                if not os.path.exists(p):
+                    rep.add(p, None, "dangling work link -> %s" % os.readlink(p), "warning")
+            elif not os.path.lexists(os.path.join(p, ".git")):
+                rep.add(p, None, "work/ entries should be git repositories or worktrees, "
+                        "or links to the project's work/ (docs/setup.md §10)", "warning")
 
     if status is not None and isinstance(status.get("children"), list):
         links = pkt.child_links()

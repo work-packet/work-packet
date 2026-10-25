@@ -67,3 +67,15 @@ def pending_children(records):
         return {e["wpid"] for e in begin["decision"]["spawn"]}
     except (TypeError, KeyError):
         return set()
+
+
+def handoffs_since_commit(records):
+    """The ``handoff`` records after the last ``commit-end``: what the next step is told."""
+    out = []
+    for r in records:
+        t = r.get("type") if isinstance(r, dict) else None
+        if t == "commit-end":
+            out = []
+        elif t == "handoff":
+            out.append(r)
+    return out

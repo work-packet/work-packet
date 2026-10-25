@@ -16,7 +16,8 @@ Three ideas carry the design:
    person or the runner. Control moves between them only by an explicit,
    journaled **hand-off**.
 2. **The packet is self-contained.** The repository it works on is cloned
-   *inside* the packet, in `work/`. Nothing points outside the packet.
+   *inside* the packet, under `work/`, each by its own name. Nothing points
+   outside the packet.
 3. **A runner daemon** (`wpk runner`) does the work in the background, and
    the **board** (`wpk dash`) is where a person hands packets off, takes
    them back and answers them.
@@ -52,16 +53,16 @@ new instruction and hand it off again, and the project carries on.
 | Transition | How | What the executor checks and records |
 |---|---|---|
 | created → human | `wpk new` | `HELD`, `held_for: setup`. No instruction is needed yet |
-| human → runner | `wpk handoff` or the board's **Hand off** | `memento.md` has an instruction; `wpk check` passes for the packet; `work/`, if present, is a git repo on a branch. Your uncommitted changes in `work/` are committed as one commit by you ("handoff: …"), so the runner starts from a clean tree. Then `RUNNABLE`, and a `handoff` journal record with the `work/` commit |
+| human → runner | `wpk handoff` or the board's **Hand off** | `memento.md` has an instruction; `wpk check` passes for the packet; each work repo under `work/` is on a branch. Your uncommitted changes in each work repo are committed as one commit by you ("handoff: …"), so the runner starts from clean trees. Then `RUNNABLE`, and a `handoff` journal record with each work repo's commit |
 | runner → human, its choice | `ask:` in a memento; a step failing for the last time; a limit | Set in the same commit as the step that caused it (§7): `HELD` with the reason, the question in `reason` |
 | runner → human, your request | `wpk take` or **Take back** | Not running: at once (it takes the lease, like `pause` today). Running: the request is left in `.take-request`; the step finishes or fails as usual and its commit ends in `HELD`/`taken` instead of `RUNNABLE`/`SLEEPING`. A step is never cut short |
 
 Answering a question is just another round trip: take nothing (the packet
 is already yours), read the question on the board, change what you want
-(edit `memento.md`, add a note to `state/`, fix something in `work/`), and
+(edit `memento.md`, add a note to `state/`, fix something in a work repo), and
 hand it off. The next step's prompt includes the hand-off record, so the
 model sees what you changed: the note you wrote with the hand-off, and the
-`work/` commit, if any.
+work repo commits, if any.
 
 Children are owned separately. A spawned child starts with the runner.
 `wpk take <project>` takes the root only; `--tree` takes every packet that
@@ -72,44 +73,75 @@ the runner owns in the project.
 ```
 packets/<WPID>/
   status.md  memento.md  journal.jsonl     as in Stage 1
-  state/        small notes the model rewrites; copied to .pending/ each step
-  work/         NEW: a git clone, the packet's workspace
+  state/        the packet's own documents: plans, outline, questions, notes
+  work/         NEW: the workspace, a folder of repositories
+    fw-uart16550/   a git clone, on branch wpk/<project>
+    fw-hdl/         another clone, if the task changes it too
   steps/NNNN/   as in Stage 1, plus work.diff (see below)
 ```
 
-`state/` keeps its Stage 1 rule: the model edits a copy in `.pending/state/`,
-and a failed step leaves no trace. That cannot work for `work/`: a clone
-with its `packages/` (Verilator, Yosys, dv-flow libraries) can be
-gigabytes, too much to copy every step. The model edits `work/` in place,
-and **git** makes the step atomic instead:
+**`work/` is a folder, not a repository.** Each directory directly under it
+that is a git repository is a **work repo**. It keeps its own name, so paths
+read `work/fw-uart16550/src/…` in prompts, refs and logs. A task that
+changes several repositories clones each of them here.
 
-| Point in the step (stage1-plan §4) | What happens to `work/` |
+- Repositories nested deeper are not work repos. The IVPM clones in
+  `work/fw-uart16550/packages/` are an example. To change a dependency, you
+  clone it at the top level on purpose (`work/fw-hdl`), and point the
+  dependent repo at it.
+- Anything else directly under `work/` that is not a repository is a warning
+  from `wpk check`. Scratch files belong in `state/` or in a repo's ignored
+  build directories.
+
+**Plan documents live in `state/`, never in a work repo.** The design doc, the
+plan, the outline, questions and progress notes are the packet's, not the
+project's. `state/` versions them per step and rolls them back with a failed
+step, and they stay out of the code's history. Commits in a work repo hold
+code, tests and the project's own docs only.
+
+**Steps and commits.** `state/` keeps its Stage 1 rule: the model edits a
+copy in `.pending/state/`, and a failed step leaves no trace. That cannot
+work for `work/`: a clone with its `packages/` (Verilator, Yosys, dv-flow
+libraries) can be gigabytes, too much to copy every step. The model edits
+the work repos in place, and **git** makes the step atomic instead. Every
+rule below applies to each work repo separately:
+
+| Point in the step (stage1-plan §4) | What happens in each work repo |
 |---|---|
 | Prepare | Record `base` = `HEAD` and the branch. The tree must be clean (it is, by construction: every hand-off and every step ends committed) |
-| Model runs | Steps run with the packet as their working directory, so the model works in `work/` directly. `.pending/` is unchanged |
+| Model runs | Steps run with the packet as their working directory, so the model works in `work/<repo>/` directly. `.pending/` is unchanged |
 | Step fails (any reason) | `git reset --hard base` and `git clean -fd`. Ignored files (`packages/`, `rundir/`, build output) are kept, so dependencies are not fetched again. Commits the model made are dropped from the branch (still in the reflog) |
-| Commit | Inside the commit protocol, after `commit-begin`: stage everything and make one commit, message `step N: <first line of summary.md>` with trailers `Wpk-Packet: <WPID>` and `Wpk-Step: N`. Nothing to commit is fine. Save `git diff --stat base..HEAD` and the diff (cut at 256 KiB) to `steps/NNNN/work.diff` |
-| Crash in the middle | Roll-forward is idempotent: if `HEAD` already carries `Wpk-Step: N`, the commit is done; otherwise commit what is there. Roll-back is the failed-step reset |
+| Commit | Inside the commit protocol, after `commit-begin`: in each repo that changed, stage everything and make one commit, message `step N: <first line of summary.md>`, with trailers `Wpk-Packet: <WPID>` and `Wpk-Step: N`. A repo with nothing to commit gets no commit. Save `git diff --stat base..HEAD` and the diff of every repo (with a header per repo, cut at 256 KiB in all) to `steps/NNNN/work.diff` |
+| Crash in the middle | Roll-forward is idempotent, per repo: if `HEAD` already carries `Wpk-Step: N`, that repo is done; otherwise commit what is there. Roll-back is the failed-step reset of every repo |
 
-Rules the executor enforces, each a failed attempt if broken: the branch
-must be the same at the end as at the start, and `HEAD` must descend from
-`base`. The model may run `git commit` itself; the step commit then takes
-whatever is left. The model must not push (§8).
+Rules the executor enforces, each a failed attempt if broken:
 
-Commits are authored by you (your git identity); the trailers say which
-packet and step made them, and the board links each step to its commit.
+- in each work repo, the branch must be the same at the end as at the
+  start, and `HEAD` must descend from `base`;
+- the set of work repos must not change during a step. Adding a repo
+  (cloning) is setup: yours, or a step that asks for it.
 
-**Environment for steps.** Tools such as `iverilog` and `yosys` come from
-`work/packages/` through `direnv`. Claude Code's Bash tool does not load
-`.envrc` on its own, so `project.toml` can say:
+The model may run `git commit` itself; the step commit then takes whatever
+is left. The model must not push (§8).
+
+Commits are authored by you (your git identity). The trailers say which
+packet and step made them, and the board links each step to its commits.
+
+**Environment for steps.** Tools such as `iverilog` and `yosys` come from a
+repo's `packages/` through `direnv`. Claude Code's Bash tool does not load
+`.envrc` on its own, so `project.toml` can name the repo whose environment
+the steps run in:
 
 ```toml
-step_env = "direnv"      # run claude under `direnv exec work/`; default "none"
+step_env = "direnv:fw-uart16550"   # run claude under `direnv exec work/fw-uart16550`; default "none"
 ```
 
+One environment per step is enough for the first version. The other repos'
+tools are reached by path.
+
 **Children** get no `work/` in the first version: only the root holds the
-clone, and it works through the plan in order. A child that needs its own
-workspace (a `git worktree` from the parent's `work/`) is §10.
+clones, and it works through the plan in order. A child that needs its own
+workspace (a `git worktree` of each repo it needs) is §10.
 
 ## 3. Walkthrough: fw-uart16550
 
@@ -130,8 +162,8 @@ With no `--prompt`, the root is `HELD` for `setup` and has no instruction.
 
 ```bash
 cd ~/work-packet-runs/uart-dev/packets/<root>     # or: wpk shell uart-dev (new)
-git clone ~/projects/featherweight-ip/fw-uart16550 work
-cd work
+mkdir work && git clone ~/projects/featherweight-ip/fw-uart16550 work/fw-uart16550
+cd work/fw-uart16550
 git remote set-url origin "$(git -C ~/projects/featherweight-ip/fw-uart16550 remote get-url origin)"
 git switch -c wpk/uart-dev
 # dependencies, once the repo has an ivpm.yaml (plan step 4 adds it):
@@ -152,7 +184,7 @@ step_timeout = "30m"
 step_budget_usd = 2.00
 budget_usd_per_day = 10.00        # (new) over this, the project is HELD for "limit"
 max_steps_per_hour = 6            # (new) per packet; catches loops
-step_env = "direnv"               # (new)
+step_env = "direnv:fw-uart16550"  # (new)
 
 [permissions]
 permission_mode = "acceptEdits"
@@ -172,8 +204,8 @@ Edit `memento.md` in the root (or `wpk instruct uart-dev`, *new*, which
 opens your editor):
 
 ```markdown
-You are working on the repository in work/ (branch wpk/uart-dev).
-Read work/docs/design/plan.md §9 and continue with the first step that is
+You are working on the repository in work/fw-uart16550/ (branch
+wpk/uart-dev). Read work/fw-uart16550/docs/design/plan.md §9 and continue with the first step that is
 not started and lives in this repository (4, 5 or 6; step 3 is a separate
 repository, skip it). Do one bounded piece of that step per run: write or
 change the files, run the smoke checks the plan names (never the full
@@ -190,7 +222,7 @@ wpk handoff uart-dev -m "Clone ready on wpk/uart-dev; start with step 4"   # (ne
 ```
 
 or **Hand off** on the card. `wpk` checks the instruction and the clone,
-records the hand-off and the `work/` commit, and the card moves to the
+records the hand-off and the work repo's commit, and the card moves to the
 runner's side (**Ready**).
 
 ### 6. Let the runner work
@@ -226,10 +258,10 @@ next prompt includes your note.
 
 Any time: **Take back** (or `wpk take uart-dev`). If a step is running, it
 finishes first. Then the packet is yours: look at `git log wpk/uart-dev`
-in `work/`, fix things, and push the branch when you are happy:
+in `work/fw-uart16550/`, fix things, and push the branch when you are happy:
 
 ```bash
-cd ~/work-packet-runs/uart-dev/packets/<root>/work && git push -u origin wpk/uart-dev
+cd ~/work-packet-runs/uart-dev/packets/<root>/work/fw-uart16550 && git push -u origin wpk/uart-dev
 ```
 
 Then hand it off again, or leave it held.
@@ -283,7 +315,9 @@ WantedBy=default.target
 ```
 
 `wpk-dash.service` is the same with `wpk dash`. `loginctl enable-linger`
-keeps both running when you are logged out.
+keeps both running when you are logged out. *(`docs/server.md` §5 replaces
+the two units with one daemon, `wpkd`, which also puts the board on the
+tailnet with a login.)*
 
 ## 5. The board, with actions
 
@@ -297,6 +331,8 @@ each one exactly a CLI command (no logic of its own):
 | Packet page (yours) | **Instruction** editor | writes `memento.md` (only while you own it) |
 | Board | **New project** form: name, directory, model | `wpk new` |
 | Packet page (runner's, sleeping) | **Wake now** | `wpk wake <wpid>` *(new)*: `SLEEPING` → `RUNNABLE` |
+| Project page (yours) | **Settings**: limits, model, allowed tools | `wpk set` / `wpk allow` / `wpk deny` |
+| Needs-you card | **Answer** each question, or **Take the recommendations**; a permission question has **Grant** | writes the answers into the hand-off note, runs `wpk allow` for a grant, then `wpk handoff` |
 
 Columns, in two lanes:
 
@@ -305,7 +341,7 @@ Columns, in two lanes:
 | **Needs you** (question, failed, limit) | Setup | Held | Done | Running | Ready | Sleeping |
 
 A card in **Needs you** shows the question or the failure, and how long it
-has waited. The project page links each step to its `work/` commit and
+has waited. The project page links each step to its work repo commits and
 shows `work.diff` in the step viewer.
 
 Because the board can now change things: it binds to `127.0.0.1` only;
@@ -314,18 +350,58 @@ every POST must carry a token that the server puts in its own pages
 your browser cannot drive it. Reaching it from Windows is an SSH tunnel,
 as now.
 
+### Viewing (later)
+
+Two improvements to what the board shows. Both stay read-only.
+
+**Session status and the raw transcript.** Today the step viewer turns
+`transcript.jsonl` into blocks (`dash/data.py`, `transcript()`): model text,
+tool calls, results and thinking. On a long step that is too much to follow,
+and the original records cannot be seen at all. The step viewer gets three
+views of the same file:
+
+- **Status:** a feed of what the session is doing, one line per event: the
+  model's text, each tool call as its name plus the command or path, test
+  and build results as pass/fail when the tool output shows it, and context
+  size and cost from each message's `usage`. While a step runs, the latest
+  line also shows on the board's card and the packet page ("running
+  `pytest -q`, 4 min, 61k context").
+- **Transcript:** the blocks, as today.
+- **Raw:** the JSONL records as they are, pretty-printed, one per record,
+  with a link to download the file.
+
+Two things the status feed could use, if they prove worth it:
+
+- the model's own progress notes. Claude Code's `TodoWrite` calls are in
+  the transcript already, and the feed could show the current list;
+- the C3 budget hook's messages.
+
+**Rendered Markdown.** The state viewer (packet page), the memento, step
+summaries and the step's "memento it wrote" show Markdown as plain text.
+They get a rendered view, with a toggle back to the source. Plans and
+outlines in `state/` are most of what you read on the board. The text is
+written by the model, so render it safely:
+
+- raw HTML off, and links limited to `http`, `https` and relative paths;
+- render on the server (for example `markdown-it-py` in the `dash` extra),
+  so the page needs no script;
+- show only `.md` files rendered; other files stay as text.
+
+
 ## 6. Commands
 
 | Command | Does |
 |---|---|
 | `wpk new <name> [--prompt …]` | Without a prompt: root `HELD`/`setup`. With one: as Stage 1, but still `HELD` unless `--handoff` |
-| `wpk shell <target>` | A shell in the packet directory (in `work/` if present), with `WPK_WPID` set. A convenience; you can just `cd` |
+| `wpk shell <target>` | A shell in the packet directory (in `work/<repo>` if there is exactly one), with `WPK_WPID` set. A convenience; you can just `cd` |
 | `wpk instruct <target> [--file F]` | Edit `memento.md` in `$EDITOR` (yours only) and validate it |
 | `wpk handoff <target> [-m NOTE]` | human → runner (§1); pokes the runner |
 | `wpk take <target> [--tree]` | runner → human, now or at the end of the running step |
 | `wpk wake <target>` | `SLEEPING` → `RUNNABLE` early |
 | `wpk runner [-j N] [--interval 30s] [--install-units]` | The daemon (§4) |
 | `wpk pause` / `wpk resume` | Kept as aliases of `take` / `handoff` |
+| `wpk set <target> key=value …` | Change a `project.toml` setting (limits, `model`, `step_env`) with the same checks as `wpk check`; journal record `config`. Allowed while you own the packet |
+| `wpk allow <target> <tool>…` / `wpk deny <target> <tool>…` | Add or remove `[permissions] allowed_tools` entries, e.g. `wpk allow dvs-enh Bash` or `'Bash(git commit *)'`; journal record `config` |
 
 ## 7. Format changes (spec v0.3)
 
@@ -340,26 +416,33 @@ as now.
 - Journal records:
   - `handoff`: `t`, `to` (`runner`/`human`), `by`, `why` (`setup`,
     `question`, `failed`, `limit`, `taken`, or `handoff`), `note`,
-    `work_head`;
+    `work_head` (a map: repo → commit);
   - `take-request`: `t`, `by` (the request made while a step runs);
-  - `commit-begin`'s decision gains `work_base` and `held_for`.
+  - `commit-begin`'s decision gains `work_base` (a map: repo → commit)
+    and `held_for`.
 - `.take-request` in the packet: present while a take waits for a step to
   end. Like `.lease`, it is not part of the committed files, so writing
   it during a step does not trip E3.
-- `steps/NNNN/work.diff`: the step's change to `work/`.
-- `work/`: optional; if present it must be a git repository (`wpk check`
-  says so if not, and warns if the tree is dirty while the runner owns the
-  packet).
-- The step prompt gains: who handed the packet over and their note, the
-  `work/` branch and `HEAD`, and that `work/` is edited in place.
+- `steps/NNNN/work.diff`: the step's change to every work repo, one
+  section per repo.
+- `work/`: optional; a directory whose entries are git repositories (work
+  repos). `wpk check` warns about an entry that is not a repository, and
+  about a dirty tree while the runner owns the packet.
+- `step_env`: `"none"` or `"direnv:<repo>"`.
+- Journal: `work_head` (in `handoff`) and `work_base` (in `commit-begin`)
+  become maps from repo name to commit.
+- The step prompt gains: who handed the packet over and their note, each
+  work repo's branch and `HEAD`, and that work repos are edited in place.
+- `state/` is where plan documents live; the protocol prompt says so, and
+  that they are never committed to a work repo.
 
 ## 8. Safety
 
 - **Bash** is what makes this useful and what makes it risky. The allowed
   list is per project and shown on the board. A Bash-capable model can
   write anywhere your user can; the E3 check (snapshot of the committed
-  files) still catches writes to the packet's own files, and the `work/`
-  reset catches stray edits in the clone, but nothing stops a write to
+  files) still catches writes to the packet's own files, and the reset of
+  the work repos catches stray edits in them, but nothing stops a write to
   `~/` beyond the allow-list itself. Keep the list narrow; prefer named
   commands to `Bash(*)`.
 - **No network by default.** `ivpm update`, `git fetch`, `pip install` are
@@ -368,6 +451,10 @@ as now.
   `Bash(git push origin wpk/*)` and nothing wider.)
 - **Spend** is bounded per step (`step_budget_usd`), per project per day
   (`budget_usd_per_day`), and per hour of looping (`max_steps_per_hour`).
+- **Reads are not confined to the packet.** Claude Code's Read, Glob and
+  Grep reach any path your user can read; the dv-solve trial read
+  `~/xezim_research/` with no `identity/` link. The packet boundary holds for
+  writes only, unless reads are denied by path in the permission settings.
 - **Side effects outside `work/` are not rolled back** on a failed step.
   Idempotency keys (roadmap Phase 1) are still to come; until then,
   allowed commands should be ones that are safe to repeat.
@@ -376,13 +463,13 @@ as now.
 
 | What fails | What happens |
 |---|---|
-| A step fails | `state/` as in Stage 1; `work/` reset to `base`. After `max_attempts`, `HELD`/`failed` (Needs you) |
+| A step fails | `state/` as in Stage 1; each work repo reset to its `base`. After `max_attempts`, `HELD`/`failed` (Needs you) |
 | Runner killed | Running steps carry on as their own processes and finish; nothing new starts until a runner is back |
-| Machine off | Leases expire; the next runner's pass recovers crashed steps (`work/` reset included) and runs what is due |
-| You edit a packet the runner owns | The E3 check fails the step if it is one of the committed files; edits in `work/` are lost by the reset of a failing step or folded into the next step's commit. The board says "the runner owns this; take it first" |
+| Machine off | Leases expire; the next runner's pass recovers crashed steps (work repo resets included) and runs what is due |
+| You edit a packet the runner owns | The E3 check fails the step if it is one of the committed files; edits in a work repo are lost by the reset of a failing step or folded into the next step's commit. The board says "the runner owns this; take it first" |
 | Take requested during a step that then fails | The failed attempt is recorded as usual; then `HELD`/`taken`, not a retry |
 | Model asks every step | `max_steps_per_hour` does not help (each ask waits for you); the board's Needs-you age shows it |
-| Clone grows large | Only `steps/*/work.diff` is per step; `work/` itself is not copied |
+| Clone grows large | Only `steps/*/work.diff` is per step; the work repos are not copied |
 
 ## 10. Open questions
 
@@ -393,7 +480,7 @@ as now.
    sleeps, and the runner wakes it when the job exits, with the exit code
    and log tail in the next prompt. Needs the runner to track jobs.
 2. **Children with workspaces.** A child that works on its own branch in a
-   `git worktree` of the parent's `work/`; merging back is the parent's
+   `git worktree` of each of the parent's work repos it needs; merging back is the parent's
    step. Not needed for a single packet working through a plan.
 3. **Messages without a hand-off.** "Use fw_fifo" sent to a sleeping
    packet without taking it. A `mailbox/` read into the next prompt
@@ -408,14 +495,31 @@ as now.
 Each milestone keeps every Stage 1 test green, adds its own tests against
 the fake model, and updates the status log below.
 
+The server milestones S1–S3 (`docs/server.md` §7) slot in around these:
+S1 (board on the tailnet, with login) can be built now, S2 (one daemon)
+follows L3, and L4's POST actions sit behind S1's checks.
+
 ### L1: Ownership in the format
 
 - [ ] Spec v0.3 (§7) in `docs/spec.md`; schema and `wpk check`, reading
       0.2 packets.
 - [ ] `HELD` + `held_for` replace `PAUSED`/`FAILED` in the executor;
       failure after `max_attempts` hands off with `failed`.
-- [ ] `ask:` in the memento; the commit ends `HELD`/`question`.
-- [ ] `wpk new` without a prompt; `wpk handoff`, `wpk take` (including
+- [x] `ask:` in the memento (2026-10-23, docs/l1a-plan.md). For now the
+      commit ends `NEEDS_INPUT`, which v0.3 will read as `HELD`/`question`.
+      Why it came first: the dv-solve trial stands in for a gate with `resume: fail`,
+      and the packet shows as `FAILED` (red on the board) when it only
+      wants a review. The body of a memento with `ask:` is the instruction
+      for *after* the answer, so the step after a gate needs no new
+      instruction from you; your answers arrive as the hand-off note.
+- [x] `wpk set`, `wpk allow`, `wpk deny` (§6; 2026-10-23). Editing `project.toml` by
+      hand stays possible at setup, but is not the way to change a running
+      project.
+- [x] `wpk handoff [-m NOTE | --note-file F]` (2026-10-23): from
+      `NEEDS_INPUT`, `PAUSED` or `FAILED`; the note and the question are in
+      the next step's prompt. Ownership (`by`) is recorded but not yet
+      enforced.
+- [ ] `wpk new` without a prompt; `wpk take` (including
       `.take-request` at the end of a running step), `wpk instruct`,
       `wpk wake`, `wpk shell`.
 - Tests: every hand-off in §1, including take during a running step
@@ -423,15 +527,17 @@ the fake model, and updates the status log below.
 
 ### L2: `work/`
 
-- [ ] Base, reset, step commit and `work.diff` (§2), inside the commit
-      protocol, with new fault points (`after-work-commit`, …) in the
+- [ ] Base, reset, step commit and `work.diff` per work repo (§2), inside
+      the commit protocol, with new fault points (`after-work-commit`, …) in the
       crash suite.
-- [ ] Hand-off commits your changes; checks branch and clean tree.
-- [ ] `step_env = "direnv"`.
-- [ ] Prompt section for `work/`.
-- Tests: a fake behaviour that edits `work/` and fails; one that commits
-  itself; one that switches branch (must fail); a SIGKILL at each new
-  fault point leaves `work/` either at `base` or at the step commit.
+- [ ] Hand-off commits your changes in each work repo; checks branches and
+      clean trees.
+- [ ] `step_env = "direnv:<repo>"`.
+- [ ] Prompt section for `work/`; plan documents in `state/`.
+- Tests: a fake behaviour that edits two work repos and fails; one that
+  commits itself; one that switches branch (must fail); one that adds a
+  repo during a step (must fail); a SIGKILL at each new
+  fault point leaves every work repo either at `base` or at the step commit.
 
 ### L3: The runner
 
@@ -449,6 +555,15 @@ the fake model, and updates the status log below.
 - Tests: each action through the app equals its CLI command; a POST
   without the token or from another origin is refused.
 
+### L4b: Board viewing (later)
+
+- [ ] Step viewer: Status, Transcript and Raw views of `transcript.jsonl`;
+      the running step's latest status line on the card and packet page.
+- [ ] Rendered Markdown with a source toggle: `state/*.md`, the memento,
+      summaries.
+- Tests: a transcript with each record kind gives the right status lines;
+  Markdown with raw HTML, `javascript:` links and images is rendered inert.
+
 ### L5: fw-uart16550 for real
 
 - [ ] Walk through §3 by hand, with Sonnet, for a week of steps. Record
@@ -464,3 +579,26 @@ the runner, never both, and control moves only by hand-off; the clone
 lives inside the packet in `work/`; the runner runs as a daemon. Not yet
 decided: the model and budget for fw-uart16550 (the walkthrough assumes
 Sonnet and $10 a day), and whether the runner may ever push.
+
+### 2026-10-23: `work/` is a folder of repositories
+Decided with the user: `work/` holds one or more clones, each under its own
+name, instead of being the clone. Every §2 rule applies per repo;
+`step_env` names a repo; `work_head` and `work_base` become maps. Plan
+documents live in `state/` and are never committed to a work repo. Found
+while setting up the dv-solve trial (`docs/trial-dv-solve.md`).
+
+### 2026-10-23: board viewing added (later)
+Asked for by the user while starting the dv-solve trial: session status
+updates and the raw transcript in the step viewer, and rendered Markdown in
+the state viewer. §5 "Viewing (later)" and L4b.
+
+### 2026-10-23: from the dv-solve trial's first step
+The planning step stopped as told, with `resume: fail` standing in for a
+gate. It shows as `FAILED`, which is wrong for "please review": `ask:` and
+`HELD`/`question` (L1) come first. Settings and permissions must be changed
+from the CLI or the board (`wpk set`, `wpk allow`; L1, L4), not by editing
+`project.toml`. And the step after a gate must not need a new instruction:
+the gate step writes the instruction for after the answer, and the answer
+comes as the hand-off note. The step could also read `~/xezim_research/`
+without an `identity/` link: Claude Code's Read reaches outside the packet,
+so §8's boundary holds for writes only.

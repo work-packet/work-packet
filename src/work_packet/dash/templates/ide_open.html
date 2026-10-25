@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}VS Code · {{ e.name }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a>{% if wpid %} / <a href="/p/{{ e.name|urlencode }}/{{ wpid }}"><code>{{ wpid[:8] }}</code></a>{% endif %}{% endblock %}
+{% block main %}
+<h1>Opening in VS Code</h1>
+<div class="panel">
+  {% if paused %}<p class="flash ok">Paused ({{ paused.msg }}). It is yours until you hand it off.</p>{% endif %}
+  <p><strong>{{ op.label }}</strong><br><code>{{ op.path }}</code></p>
+  {% if op.note %}<p class="muted">{{ op.note }}.</p>{% endif %}
+  {% if op.owner == "runner" %}<p class="err">The runner owns this packet: its files open read-only (a guard, not a lock). Pause it to edit.</p>{% endif %}
+  {% set other = "local" if first == "remote" else "remote" %}
+  {% set label = {"remote": "VS Code on this computer, over Remote-SSH to " ~ host,
+                  "local": "VS Code on the board's own machine"} %}
+  <p><a id="ide-go" class="go primary ide-link" data-kind="{{ first }}" href="{{ links[first] }}">Open in {{ label[first] }}</a></p>
+  <p class="muted">Or: <a class="ide-link" data-kind="{{ other }}" href="{{ links[other] }}">{{ label[other] }}</a>. This browser remembers the one you click.</p>
+  <p class="muted">Nothing happened? Click the button. Remote-SSH needs VS Code with the Remote - SSH extension, and <code>ssh {{ host }}</code> must work from this computer (set <code>[ide] ssh_host</code> to an alias from your SSH config otherwise).</p>
+</div>
+<p><a href="/p/{{ e.name|urlencode }}{% if wpid %}/{{ wpid }}{% endif %}">Back</a></p>
+<script src="/static/ide.js?v={{ asset_v }}"></script>
+{% endblock %}

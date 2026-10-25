@@ -1,0 +1,35 @@
+$schema: https://fvutils.github.io/ivpm/ivpm.schema.json
+
+package:
+  name: work-packet
+  description: Agents as processes, with resumable LLM work packets.
+  license: Apache-2.0
+  default-dep-set: default-dev
+
+  dep-sets:
+
+  - name: default
+    description: Runtime dependencies only, taken from pyproject.toml.
+    deps:
+    - name: work-packet-deps
+      src: pyproject.toml
+      include: [dependencies]
+
+  - name: default-dev
+    description: Runtime, the dash and tui extras, test tools, and dv-flow-mgr for co-development.
+    deps:
+    - name: work-packet-deps
+      src: pyproject.toml
+      include:
+      - dependencies
+      - optional-dependencies.dash
+      - optional-dependencies.tui
+    - name: pytest
+      src: pypi
+    - name: dv-flow-mgr
+      description: Co-developed; not needed to run wpk.
+      doc: |
+        Editable clone in packages/dv-flow-mgr, installed with -e into
+        packages/python. The DFM event work (docs/dfm-events.md) changes
+        both repos together.
+      url: https://github.com/dv-flow/dv-flow-mgr.git
