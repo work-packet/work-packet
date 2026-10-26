@@ -25,6 +25,12 @@ wpk dash --tailnet         # also on your tailnet, for your tailnet login only (
 wpk dash --run             # ... and run due packets: New task, Compose with a shell, Next batch
 wpk next my-project -f next.md   # a stopped (or finished) task's next batch of work
 wpk stats                  # per harness, model and profile: calls, context, cost, advice
+wpk sched                  # the pool and its queue, each waiting packet with why (docs/scheduler.md)
+wpk sched halt -m "lunch"  # nothing new starts; also stop -m WHY, resume, hold/release <project>
+wpk prio my-project high   # a project's or packet's class; --next runs a packet next, once
+wpk size <wpid> sim        # the job size a packet's steps get ([sched.sizes] in config.toml)
+wpk serve --ensure         # wpkd in the background (cron on a login node); wpk url for ssh -L
+wpk sched doctor           # can the pool run steps on its farm (a probe job)?
 ```
 
 Also: `wpk step`, `recover`, `show`, `pause`, `resume`, `adopt` and `rm`;
@@ -48,6 +54,11 @@ for setup (docs/setup.md), `path`, `shell`, `add-input`,
   wizard with a shell built in.
 - `docs/server.md`: `wpkd`, one daemon for the runner and the board; the
   board on the tailnet with Tailscale identity as the login, no root.
+- `docs/scheduler.md`: the scheduler in wpkd: priority classes, a token
+  budget paced by class, LSF/SLURM slots for steps and IDEs, halt and pause
+  from the board. Built through Q4 (local and SLURM backends, tested against a
+  fake batch system); `docs/scheduler-plan.md` tracks it, and
+  `docs/sched-guide.md` is the user guide.
 - `docs/vscode-plan.md`: VS Code on a packet or a work folder: `wpk ide`,
   desktop links over Remote-SSH, and web VS Code under the board's `/ide/`
   (`[ide] web = true`). Supersedes the build plan in `docs/ide.md`.
@@ -63,9 +74,17 @@ for setup (docs/setup.md), `path`, `shell`, `add-input`,
 ## Development
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -e '.[dash]' pytest httpx
-.venv/bin/pytest -q
+ivpm update                  # venv at packages/python, deps from pyproject.toml
+uv pip install --python packages/python/bin/python --no-deps -e .   # once: wpk itself
+packages/python/bin/pytest -q
 ```
+
+`ivpm.yaml` installs pyproject's runtime deps plus the `dash` and `tui`
+extras, pytest, and an editable clone of dv-flow-mgr in `packages/dv-flow-mgr`
+(co-developed; wpk doesn't need it to run). ivpm doesn't install the root
+project, hence the second line. It survives later `ivpm update` runs, but you
+have to repeat it if `packages/python` is recreated. `ivpm update -d default`
+gives runtime deps only.
 
 Python 3.10 is the floor, because that is what the Forgejo CI runner has.
 

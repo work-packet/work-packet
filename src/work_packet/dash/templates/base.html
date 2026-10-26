@@ -67,7 +67,13 @@ summary { cursor: pointer; }
 dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 14px; margin: 0; }
 dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; word-break: break-word; }
 .err { color: var(--FAILED); }
-.flash { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid var(--line); }
+.flash { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid var(--line); white-space: pre-line; }
+.modebar { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; color: #fff; background: var(--FAILED); }
+.modebar a { color: #fff; text-decoration: underline; }
+.cls { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); }
+.cls.urgent { color: #fff; background: var(--FAILED); border-color: var(--FAILED); }
+.cls.high { color: var(--NEEDS_INPUT); border-color: var(--NEEDS_INPUT); }
+.cls.low, .cls.background { opacity: .75; }
 .flash.ok { border-left: 4px solid var(--COMPLETED); } .flash.bad { border-left: 4px solid var(--FAILED); }
 form.act { margin: 0; }
 form.act textarea, form.act input[type=text] { width: 100%; font: inherit; padding: 5px 7px;
@@ -123,6 +129,39 @@ svg.tk .failmark { fill: var(--FAILED); } svg.tk g.failed rect:not(.hit):not(.fa
 td.tkshare { width: 80px; padding-left: 0; }
 td.tkshare span { display: block; height: 8px; background: var(--tk-read); border-radius: 2px; min-width: 1px; }
 td.path { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
+/* The side tab of the Overview, the boards and All packets (_side.html, docs/boards.md). */
+.withside { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 16px; align-items: start; }
+.side { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 1px; font-size: 13.5px; }
+.side .item { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px;
+  color: var(--ink); border: 1px solid transparent; }
+.side a.item:hover { background: var(--code); text-decoration: none; }
+.side .item.on { background: var(--code); font-weight: 600; }
+.side .item.sub { padding-left: 20px; }
+.side .item.later { color: var(--muted); opacity: .6; cursor: default; }
+.side .item.drop { border-color: var(--link); background: var(--hunk); }
+.side .bn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side .n { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.side .needs { font-size: 11px; font-weight: 700; color: #fff; background: var(--NEEDS_INPUT);
+  border-radius: 9px; padding: 0 6px; margin-left: auto; }
+.side .needs + .n { margin-left: 0; }
+.side .group { margin: 6px 0 0; }
+.side .group summary { display: flex; align-items: center; padding: 4px 8px; list-style: none;
+  color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.side .group summary::-webkit-details-marker { display: none; }
+.side .plus { margin-left: auto; font-size: 15px; line-height: 1; padding: 0 5px; border-radius: 4px;
+  border: 1px solid var(--line); color: var(--ink); }
+.side .newb { display: flex; flex-direction: column; gap: 4px; padding: 2px 8px 6px; }
+.side .newb input[type=text] { font-size: 12.5px; }
+@media (max-width: 800px) {
+  .withside { grid-template-columns: minmax(0, 1fr); }
+  .side { position: static; flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .side .item.sub { padding-left: 8px; }
+  .side .group { margin: 0; } .side .group summary { padding: 4px 4px; }
+  .side .group[open] { flex-basis: 100%; }
+}
+.titlebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.titlebar h1 { margin: 0; }
+.titlebar .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 </style>
 {% block head %}{% endblock %}
 </head>
@@ -134,7 +173,7 @@ td.path { font-family: ui-monospace, monospace; font-size: 12px; word-break: bre
   <a class="newtask" href="/new">New task</a>
   <span class="muted ver" style="font-size:12px" title="{{ 'This server runs due packets' if runner else 'Nothing runs packets here: start with --run, or use wpk tick' }}">{{ 'runner on' if runner else 'runner off' }} · {% if user %}{{ user }} · {% endif %}work-packet {{ version }}</span>
 </header>
-<main id="main">{% if flash %}<div class="flash {{ 'ok' if flash_ok else 'bad' }}">{{ flash }}</div>{% endif %}{% block main %}{% endblock %}</main>
+<main id="main">{% if sched_mode %}<div class="modebar" role="status"><strong>Pool {{ "halted" if sched_mode.mode == "drain" else "stopped" }}</strong>{% if sched_mode.by %} by {{ sched_mode.by }}{% endif %}{% if sched_mode.at %} at {{ sched_mode.at }}{% endif %}{% if sched_mode.reason %}: {{ sched_mode.reason }}{% endif %}. No new agent step starts. <a href="/sched">Scheduler</a></div>{% endif %}{% if flash %}<div class="flash {{ 'ok' if flash_ok else 'bad' }}">{{ flash }}</div>{% endif %}{% block main %}{% endblock %}</main>
 <script src="/static/pane.js"></script>
 {% if live %}
 <script src="/static/live.js"></script>

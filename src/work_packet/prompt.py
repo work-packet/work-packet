@@ -246,7 +246,7 @@ def handoff_section(handoffs):
 
 def build(*, status, last_summary, instruction, step, attempt, max_attempts,
           now, tz, children=(), agent_md=None, state_dir=None, handoffs=(),
-          last_attempt="", notes=()):
+          last_attempt="", notes=(), sizes=()):
     """The prompt text. ``now`` is aware UTC; ``tz`` a tzinfo for local display."""
     wake_line = ""
     if status.get("state") == "SLEEPING" and status.get("wake_at"):
@@ -269,4 +269,18 @@ def build(*, status, last_summary, instruction, step, attempt, max_attempts,
         last_summary=(last_summary or "").strip() or "None: this is the first step.",
         children=children_table(children), agent_md=agent,
         state=state_files(state_dir) if state_dir else "Not shown.",
-        instruction=(instruction or "").strip())
+        sizes=sizes_section(sizes), instruction=(instruction or "").strip())
+
+
+def sizes_section(sizes):
+    """The job sizes the next step may ask for (docs/scheduler.md §5.2), or ""
+    when the project allows only one. ``sizes``: ``sched.config.Size`` list."""
+    if len(sizes) < 2:
+        return ""
+    out = ["## Job sizes", "",
+           "Each step runs in a job of one size. To give the next step a different "
+           "one, add `size: <name>` to the memento; it holds for that step only. Ask "
+           "for a big job only when the next step will build or simulate.", ""]
+    for z in sizes:
+        out.append("- `%s`: %s" % (z.name, z.describe()))
+    return "\n".join(out) + "\n\n"

@@ -49,6 +49,9 @@ executor; if you change one, this step is thrown away.
   worked on several. It is the item you worked on, not the next one. It
   only labels the step's cost; leave it out when there is no plan.
 
+  If the step prompt lists "Job sizes", `size: <name>` gives the next
+  step a job of that size, for that step only.
+
   To ask the person who owns the task something, add `ask: <question>`
   next to `resume`. The packet then waits: no step runs until they hand it
   back, and their answer is under "Hand-off" in the next step's prompt.

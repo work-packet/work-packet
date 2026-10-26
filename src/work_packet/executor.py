@@ -182,6 +182,10 @@ def _apply(pkt, st, rec):
         meta.update(state=d["state"], step=n, attempts=0, children=kids,
                     resume_expr=d["resume_expr"], wake_at=d["wake_at"], model=d["model"],
                     reason=d["reason"], updated=_ts())
+        if d.get("size"):           # for the next step only (docs/scheduler.md §5.2)
+            meta["next_size"] = d["size"]
+        else:
+            meta.pop("next_size", None)
         pkt.save_status(meta, d["summary"])
     faults.point("after-status")
 
@@ -278,8 +282,12 @@ def _move_failed(pkt, n):
     return r
 
 
-def _recover(pkt, st):
-    """Finish or clean up a crashed step. Returns a message, or None if there was nothing."""
+def _recover(pkt, st, lost=None):
+    """Finish or clean up a crashed step. Returns a message, or None if there was nothing.
+
+    ``lost``: the scheduler ended that attempt (Stop now, or the farm took the
+    slot): it is recorded with ``counted: false`` and does not raise
+    ``attempts`` (docs/scheduler-plan.md decision 3)."""
     begin, start = _scan(pkt.journal().records)
     if begin is not None:
         faults.at_step(begin["step"])
@@ -291,13 +299,17 @@ def _recover(pkt, st):
         r = _move_failed(pkt, n)
         _keep_pending(pkt, pkt.step_dir(n, r))
         meta, body = pkt.load_status()
-        if meta["step"] == n - 1 and meta["attempts"] < a:
+        if not lost and meta["step"] == n - 1 and meta["attempts"] < a:
             meta.update(attempts=a, updated=_ts())
             pkt.save_status(meta, body)
-        journal.append(pkt.journal_path, {"type": "step-failed", "t": _ts(), "step": n,
-                                          "attempt": a, "run": r,
-                                          "why": "attempt did not finish"})
+        rec = {"type": "step-failed", "t": _ts(), "step": n, "attempt": a, "run": r,
+               "why": "attempt did not finish"}
+        if lost:
+            rec.update(why="attempt did not finish: %s" % lost, counted=False)
+        journal.append(pkt.journal_path, rec)
         msg = "recorded step %d attempt %d as failed (it did not finish)" % (n, a)
+        if lost:
+            msg = "recorded step %d attempt %d as lost, not counted (%s)" % (n, a, lost)
     if os.path.lexists(pkt.pending_dir) or os.path.lexists(pkt.state_old_dir) or \
             any(n.startswith(".tmp-") for n in os.listdir(pkt.path)):
         _cleanup(pkt)
@@ -377,8 +389,9 @@ def _children(pkt, meta):
     return out
 
 
-def _validate_pending(pkt):
-    """(memento meta, problem message or None)."""
+def _validate_pending(pkt, st=None):
+    """(memento meta, problem message or None). ``st``: the project's settings,
+    for the sizes its steps may ask for."""
     mpath = os.path.join(pkt.pending_dir, "memento.md")
     spath = os.path.join(pkt.pending_dir, "summary.md")
     if not os.path.isfile(mpath):
@@ -391,6 +404,11 @@ def _validate_pending(pkt):
     if probs:
         p = probs[0]
         return None, ".pending/memento.md: %s%s" % (p.field + ": " if p.field else "", p.msg)
+    if mm.get("size") is not None and st is not None:
+        sizes = allowed_sizes(st)
+        if mm["size"] not in sizes:
+            return None, ".pending/memento.md: size: %r is not one of this project's " \
+                "sizes: %s" % (mm["size"], ", ".join(sizes) or "none")
     if not os.path.isfile(spath) or not fsutil.read_text(spath).strip():
         return None, ".pending/summary.md is missing or empty"
     if not os.path.isdir(os.path.join(pkt.pending_dir, "state")):
@@ -448,7 +466,9 @@ def _step_cost(res, prev, chain_total=True):
     return round(max(0.0, res.cost_usd - before), 6)
 
 
-def step(target, force=False):
+def step(target, force=False, lost=None):
+    """One step. ``lost``: why the scheduler ended this packet's last attempt;
+    if that attempt is unfinished it is not counted (``wpk step --lost``)."""
     try:
         pkt, st = _context(target)
         meta, body = pkt.load_status()
@@ -459,7 +479,7 @@ def step(target, force=False):
     except LeaseHeld as e:
         return Outcome(LEASED, str(e))
     try:
-        rec = _recover(pkt, st)
+        rec = _recover(pkt, st, lost)
         if rec and rec.startswith("rolled forward"):
             return Outcome(OK, rec)
         meta, body = pkt.load_status()
@@ -520,7 +540,26 @@ def _meta(n, a, now, end, h, prof, meta, session, carried, res, prev):
         "duration_s": res.duration_s, "api_s": res.api_s, "quota": res.quota or None}
 
 
-def _check(pkt, snap, res):
+def allowed_sizes(st):
+    """The job sizes a step of this project may ask for (docs/scheduler.md §5.2)."""
+    from .sched import config as sconfig
+    try:
+        cfg = sconfig.load()
+    except registry.ConfigError:
+        return []
+    return sconfig.allowed_sizes(cfg, st.sizes)
+
+
+def _size_list(st):
+    from .sched import config as sconfig
+    try:
+        cfg = sconfig.load()
+    except registry.ConfigError:
+        return []
+    return [sconfig.size(cfg, n) for n in sconfig.allowed_sizes(cfg, st.sizes)]
+
+
+def _check(pkt, st, snap, res):
     """(why the attempt cannot commit or None, the memento's meta)."""
     after = _snapshot(pkt)
     if after != snap:
@@ -530,7 +569,7 @@ def _check(pkt, snap, res):
     why = res.failure()
     if why:
         return why, None
-    mm, why = _validate_pending(pkt)
+    mm, why = _validate_pending(pkt, st)
     return why, mm
 
 
@@ -582,7 +621,8 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
                         children=_children(pkt, meta), agent_md=agent,
                         state_dir=pkt.state_dir,
                         handoffs=handoffs,
-                        last_attempt=_last_attempt(pkt, n), notes=queued)
+                        last_attempt=_last_attempt(pkt, n), notes=queued,
+                        sizes=_size_list(st))
     fsutil.atomic_write(os.path.join(sd, "prompt.md"), text)
     # 7. step-start, then 5. snapshot (so the journal line is part of it).
     run_no = pkt.next_run(n)     # not the attempt: that restarts at 1 on a resume
@@ -629,7 +669,7 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
     faults.point("after-model")
     meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev)
     fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(meta_out, indent=2) + "\n")
-    why, mm = _check(pkt, snap, res)
+    why, mm = _check(pkt, st, snap, res)
     if why is not None and _nudgeable(h, res, why):
         # One more turn in the same session: the work is all in its context,
         # only the two files are missing (docs/experiments/dvs-enh-steps.md).
@@ -655,7 +695,7 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
         meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev)
         meta_out["nudged"] = why
         fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(meta_out, indent=2) + "\n")
-        why, mm = _check(pkt, snap, res)
+        why, mm = _check(pkt, st, snap, res)
     if why is not None:
         return _fail(pkt, st, n, a, why)
     # 12. Resolve.
@@ -679,6 +719,8 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
         "model": meta["model"], "summary": summary,
         "spawn": spawn.decision_entries(meta["wpid"], n, mm.get("spawn")),
     }
+    if mm.get("size"):
+        decision["size"] = mm["size"]
     seen = notes.committed(sd, pkt)
     if seen:
         decision["notes"] = seen
@@ -741,7 +783,7 @@ def _archive_outline(pkt, batch):
 
 
 def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
-          archive_outline=None, carry_session=False, force=False):
+          archive_outline=None, carry_session=False, force=False, reason=None):
     """``pause``: RUNNABLE or SLEEPING to PAUSED. ``wake``: SLEEPING to RUNNABLE
     (a note that should not wait, docs/interaction.md §6a). ``resume``: NEEDS_INPUT, PAUSED or
     FAILED to RUNNABLE. ``handoff``: the same as ``resume``, with an optional note
@@ -754,7 +796,8 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
     archived (``archive_outline``, default: only from ``COMPLETED``), and the
     ``handoff`` record gets ``instruction`` and ``batch``. Work repos with
     uncommitted changes refuse it unless ``force``. ``carry_session``: the
-    next step resumes the last step's session (§6.5).
+    next step resumes the last step's session (§6.5). ``reason``: the pause's
+    reason in ``status.md`` (default "by hand"; the scheduler's caps name theirs).
 
     Takes the lease, so it never races a running step.
     """
@@ -772,7 +815,7 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
         if op == "pause":
             if old not in ("RUNNABLE", "SLEEPING"):
                 return Outcome(NOT_RUNNABLE, "%s is %s; nothing to pause" % (pkt.wpid[:8], old))
-            meta.update(state="PAUSED", reason="by hand", wake_at=None)
+            meta.update(state="PAUSED", reason=reason or "by hand", wake_at=None)
         elif op == "wake":
             if old != "SLEEPING":
                 return Outcome(NOT_RUNNABLE, "%s is %s; nothing to wake" % (pkt.wpid[:8], old))

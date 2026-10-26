@@ -232,12 +232,17 @@ def _ide_tools():
         return []
     if not cfg.get("web"):
         return []
-    code = cfg.get("code") or "code"
+    from .dash.ide import command
+    code = command(cfg)
     if shutil.which(code) is None:
+        if cfg.get("backend") == "openvscode-server":
+            how, url = "openvscode-server (the open-source build)", \
+                "https://github.com/gitpod-io/openvscode-server/releases"
+        else:
+            how, url = "`code serve-web`", "https://code.visualstudio.com/download"
         return [Check("tools.code", "tools", "warn", "%s is not on PATH" % code,
                       "[ide] web = true serves VS Code under the board's /ide/ with "
-                      "`code serve-web`; the board hides the button without it.",
-                      ["https://code.visualstudio.com/download"])]
+                      "%s; the board hides the button without it." % how, [url])]
     return [Check("tools.code", "tools", "ok", "%s (web VS Code)" % code)]
 
 

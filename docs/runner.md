@@ -126,6 +126,9 @@ writes it, so the model cannot forget to.
 
 ## The runner
 
+> Superseded in part by docs/scheduler.md: the loop, its limits and its lock
+> are the scheduler's dispatcher, pool limits and `wpkd.lease` now.
+
 `wpk runner` is a long-lived process, normally run as the `wpkd` systemd user
 service.
 It holds `runner.lock`, so only one can run at a time.

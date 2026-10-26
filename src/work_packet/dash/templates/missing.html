@@ -1,6 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Not found{% endblock %}
+{% block title %}{{ "Not allowed" if why else "Not found" }}{% endblock %}
 {% block main %}
+{% if why %}
+<h1>Not allowed</h1>
+<p>{{ why }}. <a href="/">Back to the board</a>.</p>
+{% else %}
 <h1>Not found</h1>
 <p>There is no {{ what }}. <a href="/">Back to the board</a>.</p>
+{% endif %}
 {% endblock %}

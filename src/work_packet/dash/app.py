@@ -11,12 +11,15 @@ import urllib.parse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
+                                 RedirectResponse, Response)
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import __about__, clock, registry
 from . import data, tokens
+from . import sched as dsched
+from ..sched.classes import CLASSES
 from .guard import split_host
 
 TEMPLATES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
@@ -27,7 +30,7 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pane.js"), "
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Served from the package: compose.js, shell.js and the vendored xterm.js (no CDN, the CSP
 # is script-src 'self'). Name -> media type.
-STATIC = {"compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript",
+STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript",
           "vendor/xterm.js": "text/javascript", "vendor/addon-fit.js": "text/javascript",
           "vendor/xterm.css": "text/css"}
 REFRESH_S = 10
@@ -82,7 +85,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
     ``runner`` (``dash.runner.Runner``) is poked after every action that can
     make a packet due (dash-tasks.md §7). ``shells`` (``dash.shells.Shells``)
     serves the browser shell (§5); without it Compose has no shell pane.
-    ``ide_backend`` (``dash.ide.Backend``) serves web VS Code under ``/ide/``
+    ``ide_backend`` (``dash.ide.Backends``) serves web VS Code under ``/ide/<key>/``
     when ``[ide] web`` is on (docs/vscode-plan.md §4)."""
     env = Environment(loader=FileSystemLoader(TEMPLATES),
                       autoescape=select_autoescape(["html"]))
@@ -98,9 +101,21 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         ctx["flash"] = request.query_params.get("msg")
         ctx["flash_ok"] = request.query_params.get("ok") == "1"
         ctx["runner"] = runner is not None
+        try:
+            ctx["sched_mode"] = dsched.mode(home)
+        except Exception:                 # noqa: BLE001: a banner never breaks a page
+            ctx["sched_mode"] = None
         ctx.setdefault("ide", ide_config())
+        ctx["ide_sizes"] = ide_sizes() if getattr(ide_backend, "slot", False) else []
         ctx["ide_web"] = web_state(request, ctx["ide"])
         return HTMLResponse(env.get_template(name).render(**ctx), status_code=status)
+
+    def ide_sizes():
+        from ..sched import config as sconfig
+        try:
+            return list(sconfig.sizes(sconfig.load(home)))
+        except registry.ConfigError:
+            return []
 
     def ide_config():
         from .. import ide
@@ -114,7 +129,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         from . import ide as dide
         if ide_backend is None or not cfg.get("web"):
             return None
-        why = dide.available(cfg.get("code") or "code")
+        # A server in a job runs on a node: its program is checked there (wpk sched doctor).
+        why = None if getattr(ide_backend, "slot", False) else dide.available(cfg)
         if why:
             return why
         host = split_host(request.headers.get("host", ""))[0] or ""
@@ -141,11 +157,230 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         except (KeyError, OSError, ValueError, registry.ConfigError):
             return None
 
-    async def board(request):
+    async def overview(request):
+        """The Overview (``/``): how every board is doing, what needs you, token use
+        over ``?days=`` 1, 7 or 30 (docs/overview.md)."""
+        try:
+            days = int(request.query_params.get("days", 7))
+        except ValueError:
+            days = 7
+        days = days if days in tokens.WINDOWS else 7
         cols, broken = data.board(home)
+        side = data.side(home, cols, broken)
+        burn = tokens.board(registry.entries(home), days=days, on=[b["name"] for b in side])
+        ov = data.overview(cols, broken, side, burn)
+        snap = await run_in_threadpool(dsched.snapshot, home)
+        return render(request, "overview.html", ov=ov, burn=burn, broken=broken, live=True,
+                      sch=dsched.tiles(snap),
+                      home=home or registry.home(), side=side, here=None,
+                      windows=tokens.WINDOWS, main_board=registry.DEFAULT_BOARD)
+
+    async def board(request):
+        """One board (``/b/{board}``; docs/boards.md): its cards."""
+        name = request.path_params["board"]
+        cols, broken = data.board(home)
+        side = data.side(home, cols, broken)
+        here = next((b for b in side if b["name"] == name), None)
+        if here is None:
+            return not_found(request, "board %s" % name)
+        cols, broken = data.only(cols, broken, name)
+        snap = await run_in_threadpool(dsched.snapshot, home)
         return render(request, "board.html", cols=cols, broken=broken, live=True,
-                      home=home or registry.home(),
-                      burn=tokens.board(registry.entries(home)))
+                      waiting=dsched.waiting(snap),
+                      side=side, here=here, main_board=registry.DEFAULT_BOARD)
+
+    async def all_packets(request):
+        """Every packet on every board, to sort and search (docs/boards.md)."""
+        rows = []
+        cols, broken = data.board(home, rows=rows)
+        states = sorted({r["state"] for r in rows}, key=str)
+        snap = await run_in_threadpool(dsched.snapshot, home)
+        cls = {}
+        for e in registry.entries(home):
+            for r in rows:
+                if r["project"] == e["name"]:
+                    cls[r["wpid"]] = dsched.packet_info(snap, e, r["wpid"])
+        return render(request, "packets.html", rows=rows, broken=broken, states=states,
+                      sch=cls, classes=CLASSES, sizes=list((snap or {}).get("sizes", {})),
+                      side=data.side(home, cols, broken), live=True)
+
+    def local(url, default="/"):
+        """A page of this board to go back to: a path, without its query (the flash)."""
+        url = (url or "").split("?")[0].split("#")[0]
+        ok = url.startswith("/") and not url.startswith("//") and "\\" not in url
+        return url if ok else default
+
+    async def board_new(request):
+        from .. import executor
+        f = await form(request)
+        name = (f.get("name") or [""])[0].strip()
+        try:
+            await run_in_threadpool(registry.new_board, name, None, home)
+        except (registry.BoardError, OSError) as ex:
+            return back(local((f.get("back") or [""])[0]),
+                        executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+        return back("/b/%s" % urllib.parse.quote(name),
+                    executor.Outcome(executor.OK, "made board %s" % name), poke_runner=False)
+
+    async def board_delete(request):
+        from .. import executor
+        name = request.path_params["board"]
+        try:
+            moved = await run_in_threadpool(registry.delete_board, name, home)
+        except (registry.BoardError, OSError) as ex:
+            return back("/b/%s" % urllib.parse.quote(name),
+                        executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+        msg = "deleted board %s" % name
+        if moved:
+            msg += "; %s moved to %s" % (", ".join(moved), registry.DEFAULT_BOARD)
+        return back("/", executor.Outcome(executor.OK, msg), poke_runner=False)
+
+    async def board_move(request):
+        """Put a project on another board: a drop on the side tab, or the project page's select."""
+        from .. import executor
+        e = entry(request)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        f = await form(request)
+        to = (f.get("board") or [""])[0].strip()
+        url = local((f.get("back") or [""])[0], "/p/%s" % urllib.parse.quote(e["name"]))
+        try:
+            was = await run_in_threadpool(registry.move, e["name"], to, home)
+        except (registry.BoardError, OSError) as ex:
+            return back(url, executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+        msg = "%s is on %s already" % (e["name"], to) if was == to else \
+            "moved %s from %s to %s" % (e["name"], was, to)
+        return back(url, executor.Outcome(executor.OK, msg), poke_runner=False)
+
+    # --- the scheduler (docs/scheduler.md §9) ------------------------------------
+
+    async def sched_page(request):
+        snap = await run_in_threadpool(dsched.snapshot, home)
+        ch = await run_in_threadpool(dsched.chart, snap, home) if snap else None
+        cols, broken = data.board(home)
+        return render(request, "sched.html", snap=snap, chart=ch, live=True,
+                      lines=None if snap else ["the config cannot be read"],
+                      events=dsched.recent(home), modes=dsched.MODES,
+                      side=data.side(home, cols, broken))
+
+    async def sched_json(request):
+        snap = await run_in_threadpool(dsched.snapshot, home)
+        if snap is None:
+            return JSONResponse({"error": "the config cannot be read"}, status_code=500)
+        return JSONResponse(snap)
+
+    def denied(request, action, target=None):
+        """A 403 page if the requester may not ``action``, else None."""
+        from ..sched import authz
+        try:
+            authz.check(authz.principal_of(request), action, target, home)
+        except authz.Denied as ex:
+            return render(request, "missing.html", status=403, what=None, why=str(ex))
+        return None
+
+    async def sched_mode(request):
+        from ..sched import authz, control
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        no = denied(request, "mode")
+        if no:
+            return no
+        m = {"halt": "drain", "drain": "drain", "stop": "stop", "resume": "run",
+             "run": "run"}.get(one("mode"))
+        if m is None:
+            from .. import executor
+            return back("/sched", executor.Outcome(executor.USAGE, "unknown mode"),
+                        poke_runner=False)
+        out = await run_in_threadpool(control.set_mode, m, authz.principal_of(request),
+                                      one("reason") or None, home)
+        return back(local(one("back"), "/sched"), out)
+
+    def setter(what):
+        async def handle(request):
+            return await sched_set(request, what)
+        return handle
+
+    async def sched_set(request, what):
+        """``/p/<project>/{prio,size,hold}`` and ``/p/<project>/<wpid>/{prio,size,next}``."""
+        from ..sched import authz, control
+        e = entry(request)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        wpid = request.path_params.get("wpid")
+        if wpid is not None and data.packet(e, wpid) is None:
+            return not_found(request, "packet %s" % wpid)
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        action = {"prio": "prio", "size": "size", "hold": "hold", "next": "next"}.get(what)
+        if action is None or (what == "hold" and wpid) or (what == "next" and not wpid):
+            return not_found(request, "%s here" % what)
+        no = denied(request, action, wpid or e["name"])
+        if no:
+            return no
+        by = authz.principal_of(request)
+        target, value = wpid or e["name"], one("value") or None
+        if what == "prio":
+            fn = (control.set_prio, target, value, by, home)
+        elif what == "size":
+            fn = (control.set_size, target, value, by, home)
+        elif what == "next":
+            fn = (control.run_next, target, by, home, value != "off")
+        elif value == "release":
+            fn = (control.release, target, by, home)
+        else:
+            fn = (control.hold, target, by, one("reason") or None, home)
+        out = await run_in_threadpool(*fn)
+        url = "/p/%s" % urllib.parse.quote(e["name"]) + ("/%s" % wpid if wpid else "")
+        return back(local(one("back"), url), out)
+
+    async def bulk(request):
+        """All packets: one action on the ticked packets (docs/boards.md B8)."""
+        from .. import executor
+        from ..packet import Packet
+        from ..sched import authz, control
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        op, value = one("op"), one("value") or None
+        picks = [p for p in f.get("pick") or () if "/" in p]
+        if not picks:
+            return back("/packets", executor.Outcome(executor.USAGE, "tick some packets first"),
+                        poke_runner=False)
+        action = {"prio": "prio", "size": "size", "hold": "hold"}.get(op)
+        if action:
+            no = denied(request, action)
+            if no:
+                return no
+        by = authz.principal_of(request)
+        lines, worst, held = [], 0, set()
+
+        def run_one(project, wpid):
+            e = registry.get(project, home)
+            if e is None or data.packet(e, wpid) is None:
+                return executor.Outcome(executor.USAGE, "%s/%s: not found" % (project, wpid[:8]))
+            if op == "prio":
+                return control.set_prio(wpid, value, by, home)
+            if op == "size":
+                return control.set_size(wpid, value, by, home)
+            if op in ("pause", "resume"):
+                pkt = Packet(os.path.join(e["path"], "packets", wpid))
+                got = executor.admin(pkt, op, by=by)
+                if op == "pause" and got.code == 0:
+                    control.cancel_pending(wpid, by, home)
+                return executor.Outcome(got.code, "%s %s" % (project, got.msg))
+            if op == "hold":
+                if project in held:
+                    return None
+                held.add(project)
+                return control.hold(project, by, None, home)
+            return executor.Outcome(executor.USAGE, "unknown action %r" % op)
+        for p in picks:
+            project, _, wpid = p.partition("/")
+            out = await run_in_threadpool(run_one, project, wpid)
+            if out is None:
+                continue
+            lines.append(out.msg)
+            worst = max(worst, out.code)
+        return back("/packets", executor.Outcome(worst, "\n".join(lines)))
 
     async def project(request):
         e = entry(request)
@@ -155,7 +390,11 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         nodes = data.tree(e, now)
         recent = sorted(((n, s) for n in nodes for s in n["steps"] if s["start"]),
                         key=lambda ns: ns[1]["start"], reverse=True)[:50]
+        bs = registry.boards(home)
+        snap = await run_in_threadpool(dsched.snapshot, home)
         return render(request, "project.html", e=e, card=data.card(e, now), nodes=nodes,
+                      sch=dsched.project_info(snap, e), classes=CLASSES,
+                      boards=bs, on=registry.board_of(e, [b["name"] for b in bs]),
                       recent=recent, tl=data.timeline(nodes, now), live=True,
                       settings=data.settings(e), tk=tokens.project(e, now),
                       work=work_rows(e))
@@ -165,7 +404,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         p = data.packet(e, request.path_params["wpid"]) if e else None
         if p is None:
             return not_found(request, "packet %s" % request.path_params["wpid"])
-        return render(request, "packet.html", e=e, p=p, live=True,
+        snap = await run_in_threadpool(dsched.snapshot, home)
+        return render(request, "packet.html", e=e, p=p, live=True, classes=CLASSES,
+                      sch=dsched.packet_info(snap, e, request.path_params["wpid"]),
                       tk=tokens.packet(e, request.path_params["wpid"]))
 
     async def step(request):
@@ -221,6 +462,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             out = await run_in_threadpool(actions.note, pkt, note, by, one("wake") == "1")
         elif op in ("handoff", "pause", "resume"):
             out = await run_in_threadpool(executor.admin, pkt, op, note or None, None, by)
+            if op == "pause" and out.code == 0:
+                from ..sched import authz, control
+                await run_in_threadpool(control.cancel_pending, wpid,
+                                        authz.principal_of(request), home)
         else:
             out = executor.Outcome(executor.USAGE, "unknown action %r" % op)
         url = "/p/%s/%s" % (urllib.parse.quote(e["name"]), wpid)
@@ -262,7 +507,13 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             if web_state(request, cfg) != "ok":
                 return not_found(request, "web VS Code here (%s)" % (
                     web_state(request, cfg) or "[ide] web is off"))
-            return RedirectResponse(ide.web_path(op, "/ide/"), status_code=303)
+            from . import ide as dide
+            try:
+                key = await run_in_threadpool(ide_backend.register, op.path,
+                                              one("size") or None)
+            except dide.IdeUnavailable as ex:
+                return not_found(request, "web VS Code here (%s)" % ex)
+            return RedirectResponse(ide.web_path(op, "/ide/%s/" % key), status_code=303)
         st = request.scope.get("state", {})
         name = None
         if st.get("listener") == "tailnet":     # the name the browser used: it resolves there
@@ -655,7 +906,20 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         Route("/ide/{rest:path}", ide_http,
               methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         WebSocketRoute("/ide/{rest:path}", ide_ws),
-        Route("/", board),
+        Route("/", overview),
+        Route("/sched", sched_page),
+        Route("/sched.json", sched_json),
+        Route("/sched/mode", sched_mode, methods=["POST"]),
+        Route("/packets/bulk", bulk, methods=["POST"]),
+        *[Route("/p/{project}/%s" % w, setter(w), methods=["POST"])
+          for w in ("prio", "size", "hold")],
+        *[Route("/p/{project}/{wpid}/%s" % w, setter(w), methods=["POST"])
+          for w in ("prio", "size", "next")],
+        Route("/boards", board_new, methods=["POST"]),
+        Route("/packets", all_packets),
+        Route("/b/{board}", board),
+        Route("/b/{board}/delete", board_delete, methods=["POST"]),
+        Route("/p/{project}/board", board_move, methods=["POST"]),
         Route("/healthz", health),
         Route("/static/live.js", live_js),
         Route("/static/pane.js", pane_js),

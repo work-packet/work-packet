@@ -1,11 +1,8 @@
 """``wpk tick``: one scheduler pass over every registered project (stage1-plan §5)."""
 
 import os
-import subprocess
-import sys
-import time
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from . import clock, frontmatter, lease, schema
 from .packet import Packet
@@ -18,6 +15,7 @@ class Due:
     wpid: str
     path: str = field(compare=False)
     state: str = field(compare=False)
+    next_size: Optional[str] = field(default=None, compare=False)   # status.md (§5.2)
 
 
 @dataclass
@@ -69,14 +67,8 @@ def due(entries, now=None):
             held = lease.read(pkt.lease_path)
             if held is not None and not lease.is_stale(held, now):
                 continue
-            out.append(Due(when, e["name"], w, pkt.path, st))
+            out.append(Due(when, e["name"], w, pkt.path, st, meta.get("next_size")))
     return sorted(out)
-
-
-def _start(d):
-    return subprocess.Popen([sys.executable, "-m", "work_packet", "step", d.path],
-                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE, text=True)
 
 
 def next_wake(entries):
@@ -102,49 +94,28 @@ def next_wake(entries):
     return best
 
 
-def run_pass(items, jobs, budget, report, stop=lambda: False):
-    """Run ``wpk step`` for ``items``, at most ``jobs`` at once and ``budget`` in all.
-
-    Once ``stop()`` is true no new step starts; running ones are waited for.
-    """
-    ran, queue, live = [], list(items)[:budget], []
-    while queue or live:
-        if stop():
-            queue = []
-        while queue and len(live) < jobs:
-            d = queue.pop(0)
-            live.append((d, _start(d)))
-        time.sleep(0.02)
-        for d, p in list(live):
-            if p.poll() is None:
-                continue
-            live.remove((d, p))
-            err = (p.stderr.read() or "").strip().splitlines()
-            p.stderr.close()
-            msg = err[-1] if err else ""
-            if msg.startswith("wpk: "):
-                msg = msg[5:]
-            r = Ran(d, p.returncode, msg or "exit %s" % p.returncode)
-            ran.append(r)
-            report(r)
-    return ran
-
-
 def tick(entries, jobs=1, until_idle=False, max_steps=None, report=lambda r: None,
-         stop=lambda: False):
+         stop=lambda: False, home=None):
     """One pass, or with ``until_idle`` passes until nothing is due or nothing moved.
 
+    A pass starts each packet due at its start at most once, through the
+    dispatcher with the local backend (docs/scheduler-plan.md Q1.17), so the
+    pool's mode, holds, classes and sizes apply; ``jobs`` steps at once.
     ``stop`` is checked before each step starts (the runner's shutdown).
     """
+    from .sched.backends.local import Local
+    from .sched.dispatcher import Dispatcher
+    d = Dispatcher(home=home, backend=Local(home), jobs=jobs, report=report,
+                   entries=lambda: entries)
     res = TickResult()
     while not stop():
         budget = None if max_steps is None else max_steps - len(res.ran)
         if budget is not None and budget <= 0:
             break
-        items = due(entries)
+        items, _ = d.context()
         if not items:
             break
-        ran = run_pass(items, jobs, budget if budget is not None else len(items), report, stop)
+        ran = d.tick_pass({it.key for it in items}, budget, stop)
         res.passes += 1
         res.ran += ran
         # Stop when nothing committed or failed: what is left is leased or not runnable.

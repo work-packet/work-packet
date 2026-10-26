@@ -2,7 +2,7 @@
 
 import os
 
-from . import fsutil, schema
+from . import clock, fsutil, schema
 from .tomlio import load_toml, save_toml
 
 
@@ -93,6 +93,68 @@ def register(entry, h=None):
     save_toml(path, entry)
 
 
+LOCK_WAIT_S = 5.0
+LOCK_STALE_S = 30.0
+
+
+class EntryBusy(Exception):
+    pass
+
+
+def _lock_entry(name, h):
+    """An ``O_EXCL`` lock file beside the entry; waits up to ``LOCK_WAIT_S``. A
+    lock older than ``LOCK_STALE_S`` is from a writer that died, and is taken."""
+    import time
+    path = os.path.join(projects_dir(h), ".%s.lock" % name)
+    deadline = time.monotonic() + LOCK_WAIT_S
+    while True:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.write(fd, b"%d\n" % os.getpid())
+            os.close(fd)
+            return path
+        except FileExistsError:
+            try:
+                if time.time() - os.stat(path).st_mtime > LOCK_STALE_S:
+                    os.unlink(path)
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.monotonic() > deadline:
+                raise EntryBusy("%s is locked by another writer" % path) from None
+            time.sleep(0.01)
+
+
+def update(name, fn, h=None):
+    """Change ``projects/<name>.toml``: read it, ``fn(entry)`` (changes it in
+    place; may return a value), validate, write. Under the entry's lock, so two
+    writers (the board and the CLI) never lose each other's change. Returns
+    ``fn``'s value. Raises LookupFailed, ConfigError (invalid result), EntryBusy."""
+    path = entry_path(name, h)
+    if not os.path.exists(path):
+        raise LookupFailed("no registered project named %r" % (name,))
+    lock = _lock_entry(name, h)
+    try:
+        try:
+            e = load_toml(path)
+        except (OSError, ValueError) as ex:
+            raise ConfigError("%s: %s" % (path, ex)) from None
+        import copy
+        before = copy.deepcopy(e)
+        got = fn(e)
+        probs = [p for p in schema.validate_registry_entry(e, name) if p.level == "error"]
+        if probs:
+            raise ConfigError("%s: %s" % (probs[0].field, probs[0].msg))
+        if e != before:
+            save_toml(path, e)
+        return got
+    finally:
+        try:
+            os.unlink(lock)
+        except FileNotFoundError:
+            pass
+
+
 def unregister(name, h=None):
     path = entry_path(name, h)
     os.unlink(path)
@@ -141,3 +203,94 @@ def resolve(target, h=None):
     raise LookupFailed("no packet, project or registered project named %r" % target)
 
 
+
+
+# --- boards (docs/boards.md) ------------------------------------------------
+
+DEFAULT_BOARD = "main"
+
+
+class BoardError(Exception):
+    pass
+
+
+def boards_dir(h=None):
+    return os.path.join(h or home(), "boards")
+
+
+def boards(h=None):
+    """Every board, ``main`` first and the rest by name: ``[{"name", "created"?, "title"?}]``."""
+    out = [{"name": DEFAULT_BOARD}]
+    d = boards_dir(h)
+    try:
+        names = sorted(os.listdir(d))
+    except FileNotFoundError:
+        return out
+    for n in names:
+        if not n.endswith(".toml") or n.startswith(".") or n[:-5] == DEFAULT_BOARD:
+            continue
+        try:
+            b = load_toml(os.path.join(d, n))
+        except (OSError, ValueError):
+            continue
+        if not [p for p in schema.validate_board(b, n[:-5]) if p.level == "error"]:
+            out.append(b)
+    return out
+
+
+def board_of(entry, names=None):
+    """The board a registry entry is on; ``main`` if it names none, or one not in ``names``."""
+    b = entry.get("board") or DEFAULT_BOARD
+    return b if names is None or b in names else DEFAULT_BOARD
+
+
+def new_board(name, title=None, h=None):
+    if not schema.is_name(name):
+        raise BoardError("%r is not a board name; use [a-z0-9][a-z0-9_-]*" % (name,))
+    path = os.path.join(boards_dir(h), name + ".toml")
+    if name == DEFAULT_BOARD or os.path.exists(path):
+        raise BoardError("there is already a board named %s" % name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    b = {"name": name, "created": schema.format_timestamp(clock.now())}
+    if title:
+        b["title"] = title
+    save_toml(path, b)
+    return b
+
+
+def _set_board(e, board, h):
+    def change(e):
+        if board == DEFAULT_BOARD:
+            e.pop("board", None)
+        else:
+            e["board"] = board
+    update(e["name"], change, h)
+
+
+def move(project, board, h=None):
+    """Put a project on a board. Returns the board it was on."""
+    e = get(project, h)
+    if e is None:
+        raise BoardError("no registered project named %r" % (project,))
+    names = [b["name"] for b in boards(h)]
+    if board not in names:
+        raise BoardError("no board named %r" % (board,))
+    was = board_of(e, names)
+    if was != board:
+        _set_board(e, board, h)
+    return was
+
+
+def delete_board(name, h=None):
+    """Remove a board; its projects go to ``main``. Returns their names."""
+    if name == DEFAULT_BOARD:
+        raise BoardError("%s is the default board and cannot be deleted" % name)
+    path = os.path.join(boards_dir(h), name + ".toml")
+    if not os.path.exists(path):
+        raise BoardError("no board named %r" % (name,))
+    moved = [e for e in entries(h) if e.get("board") == name]
+    for e in moved:
+        _set_board(e, DEFAULT_BOARD, h)
+    os.unlink(path)
+    fsutil.fsync_dir(os.path.dirname(path))
+    return [e["name"] for e in moved]

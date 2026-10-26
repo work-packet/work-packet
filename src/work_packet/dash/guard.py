@@ -65,7 +65,7 @@ def is_loopback(host):
 class Guard:
     def __init__(self, app, kind, secret, tailnet=None, allow=(), extra_hosts=(),
                  local_user=None):
-        assert kind in ("loopback", "tailnet")
+        assert kind in ("loopback", "tailnet", "unix")
         if kind == "tailnet" and tailnet is None:
             raise ValueError("the tailnet listener needs tailscaled")
         self.app = app
@@ -88,6 +88,8 @@ class Guard:
         name, port = split_host(host or "")
         if not name or name not in self.host_names():
             return False
+        if self.kind == "unix":       # reached by ssh -L: the laptop's port is not ours
+            return name in LOOPBACK_NAMES or name in self.extra_hosts
         default = 443 if scope.get("scheme") in ("https", "wss") else 80
         server = scope.get("server") or (None, None)
         return (port or default) == server[1]
@@ -130,7 +132,7 @@ class Guard:
         if not self.host_ok(host, scope):
             return await _refuse(send, 421, "unknown host name: %r" % (host,), scope)
 
-        if self.kind == "loopback":
+        if self.kind in ("loopback", "unix"):     # unix: only this user can connect (0700)
             if any(k in PROXY_HEADERS or k.startswith(b"tailscale-") for k, _ in headers):
                 return await _refuse(send, 403, "this board was reached through a proxy; "
                                      "use its tailnet address instead", scope)

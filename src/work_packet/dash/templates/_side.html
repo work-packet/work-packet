@@ -1,0 +1,25 @@
+{#- The side tab of the Overview and the boards (docs/boards.md). Inbox, Outbox and
+    Connections are placeholders for the collaborative model (product.md §11). -#}
+{% macro tab(side, here, page=None) -%}
+<nav class="side" aria-label="Boards" data-csrf="{{ csrf or '' }}">
+  <a class="item{{ ' on' if not here and not page }}" href="/">Overview<span class="n">{{ side|sum(attribute="n") }}</span></a>
+  <a class="item{{ ' on' if page == 'packets' }}" href="/packets" title="Every packet on every board, to sort and search">All packets</a>
+  <a class="item{{ ' on' if page == 'sched' }}" href="/sched" title="The pool: what runs, what waits and why, the budget, and Halt">Scheduler</a>
+  <span class="item later" title="Not built yet: what others send you">Inbox</span>
+  <span class="item later" title="Not built yet: what you send others">Outbox</span>
+  <details class="group" id="side-new">
+    <summary><span>Boards</span><span class="plus" title="New board" aria-label="New board">+</span></summary>
+    <form class="act newb" method="post" action="/boards">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      <input type="hidden" name="back" value="{{ '/b/' ~ here.name|urlencode if here else '/' }}">
+      <input type="text" name="name" placeholder="new board name" pattern="[a-z0-9][a-z0-9_\-]*" required aria-label="new board name">
+      <button class="go primary">Make</button>
+    </form>
+  </details>
+  {% for b in side %}
+  <a class="item sub{{ ' on' if here and here.name == b.name }}" href="/b/{{ b.name|urlencode }}" data-board="{{ b.name }}" title="{{ b.title or b.name }}{{ ': drop a card here to move it' if side|length > 1 }}">
+    <span class="bn">{{ b.name }}</span>{% if b.needs %}<span class="needs" title="needs you">{{ b.needs }}</span>{% endif %}<span class="n">{{ b.n }}</span></a>
+  {% endfor %}
+  <span class="item later" title="Not built yet: teammates' and hubs' boards">Connections</span>
+</nav>
+{%- endmacro %}

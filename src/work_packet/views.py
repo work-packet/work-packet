@@ -103,6 +103,8 @@ def show(pkt):
     meta, body = pkt.load_status()
     out = ["# %s" % pkt.wpid, "", "## status.md", ""]
     for k in schema.STATUS_FIELDS:
+        if k in schema.STATUS_OPTIONAL and k not in meta:
+            continue
         out.append("%-12s %s" % (k + ":", meta.get(k)))
     if body.strip():
         out += ["", body.rstrip()]

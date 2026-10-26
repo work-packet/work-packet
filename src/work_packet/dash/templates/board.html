@@ -1,13 +1,20 @@
 {% extends "base.html" %}
-{% block title %}Board{% endblock %}
+{% import "_side.html" as sidem with context %}
+{% block title %}{{ here.name }}{% endblock %}
+{% block crumbs %}/ <a href="/b/{{ here.name|urlencode }}">{{ here.name }}</a>{% endblock %}
 {% block head %}
 <style>
-.board { display: grid; grid-template-columns: repeat(7, minmax(180px, 1fr)); gap: 12px;
+.card.dragging { opacity: .5; }
+/* Columns by the board's own width, not the window's: the side tab takes some. */
+.boardarea { container-type: inline-size; min-width: 0; }
+.board { display: grid; grid-template-columns: repeat(7, minmax(150px, 1fr)); gap: 12px;
   overflow-x: auto; }
-@media (max-width: 1100px) { .board { grid-template-columns: repeat(3, minmax(200px, 1fr)); } }
-@media (max-width: 640px) { .board { grid-template-columns: minmax(0, 1fr); } }
-.col { background: var(--code); border-radius: 8px; padding: 8px; min-height: 120px; }
-.col h2 { margin: 2px 4px 8px; display: flex; justify-content: space-between; }
+@container (max-width: 1120px) { .board { grid-template-columns: repeat(4, minmax(170px, 1fr)); } }
+@container (max-width: 760px) { .board { grid-template-columns: repeat(2, minmax(170px, 1fr)); } }
+@container (max-width: 420px) { .board { grid-template-columns: minmax(0, 1fr); } }
+.col { background: var(--code); border-radius: 8px; padding: 0 8px 8px; min-height: 120px; }
+.col h2 { margin: 0 -4px 6px; padding: 10px 8px 4px; display: flex; justify-content: space-between;
+  position: sticky; top: 0; z-index: 1; background: var(--code); }
 .card { display: block; color: inherit; background: var(--panel); border: 1px solid var(--line);
   border-left: 4px solid var(--unknown); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
 .card:hover { text-decoration: none; border-color: var(--link); }
@@ -26,21 +33,31 @@
 .counts .NEEDS_INPUT::before { color: var(--NEEDS_INPUT); } .counts .PAUSED::before { color: var(--PAUSED); } .counts .FAILED::before { color: var(--FAILED); }
 .counts .COMPLETED::before { color: var(--COMPLETED); }
 </style>
+<script src="/static/board.js?v={{ asset_v }}"></script>
 {% endblock %}
 {% block main %}
+<div class="withside">
+{{ sidem.tab(side, here) }}
+<div class="boardarea">
 {% set total = cols.values()|map("length")|sum %}
-{% if total == 0 and not broken %}
-<div class="panel">
-  <p>No projects are registered in <code>{{ home }}</code>.</p>
-  <p class="muted"><a href="/new"><strong>New task</strong></a> here, or <code>wpk setup</code> (a guided setup in a terminal), or <code>wpk new &lt;name&gt;</code> and then <code>wpk doctor &lt;name&gt;</code>.</p>
+<div class="titlebar">
+  <h1>{{ here.name }}</h1>{% if here.title %}<span class="muted">{{ here.title }}</span>{% endif %}
+  <span class="right">
+    {% if here.name != main_board %}
+    <form class="act" method="post" action="/b/{{ here.name|urlencode }}/delete" data-confirm="Delete board {{ here.name }}?{% if here.n %} Its {{ here.n }} project{{ 's' if here.n != 1 }} move to {{ main_board }}.{% endif %}">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini">Delete board</button></form>
+    {% endif %}
+  </span>
 </div>
+{% if total == 0 and not broken %}
+<div class="panel" style="margin-bottom:12px"><p class="muted" style="margin:0">Nothing on this board yet. Drag a card onto <strong>{{ here.name }}</strong> in the side tab, or use the Board setting on a project's page.</p></div>
 {% endif %}
 <div class="board">
 {% for col in columns %}
-  <section class="col">
+  <section class="col" id="col-{{ loop.index }}" data-follow="no">
     <h2><span>{{ col }}</span><span class="muted">{{ cols[col]|length }}</span></h2>
     {% for c in cols[col] %}
-    <a class="card {{ c.column }}" href="/p/{{ c.name|urlencode }}{% if c.running %}/{{ c.running.wpid }}/live{% elif c.setup %}/compose{% elif c.column == 'Needs you' and c.root %}/{{ c.root.wpid }}#answer{% endif %}">
+    <a class="card {{ c.column }}" draggable="true" data-project="{{ c.name }}" href="/p/{{ c.name|urlencode }}{% if c.running %}/{{ c.running.wpid }}/live{% elif c.setup %}/compose{% elif c.column == 'Needs you' and c.root %}/{{ c.root.wpid }}#answer{% endif %}">
       <div class="name"><span>{{ c.name }}</span>
         {% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</div>
       {% if c.running %}
@@ -48,7 +65,9 @@
           {{ c.running.name or c.running.short }} step {{ c.running.step }}{% if c.running.for %}, {{ c.running.for }}{% endif %}</div>
         {% if c.running.now %}<div class="line muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.running.now }}</div>{% endif %}
       {% elif c.column == "Ready" %}
-        <div class="line">due now, waiting for {{ "the runner" if runner else "<code>wpk tick</code>"|safe }}</div>
+        {% set why = waiting.get(c.root.wpid) if c.root and waiting else none %}
+        {% if why and why.waiting %}<div class="line"><span class="cls {{ why['class'] }}">{{ why['class'] }}</span> waiting on: {{ why.why }}</div>
+        {% else %}<div class="line">due now, waiting for {{ "the runner" if runner else "<code>wpk tick</code>"|safe }}</div>{% endif %}
       {% elif c.column == "Sleeping" %}
         <div class="line">wakes {{ c.root.next }}</div>
       {% elif c.column == "Needs you" and c.root and c.root.reason %}
@@ -76,26 +95,10 @@
   </section>
 {% endfor %}
 </div>
-{% if burn.rows or burn.quota %}
-{% import "_tokens.html" as tkm %}
-<h2>Tokens, last 7 days</h2>
-{{ tkm.quota(burn.quota) }}
-{% if burn.rows %}
-<div class="wrap"><table>
-  <tr><th>Project</th><th>Per day</th><th class="num">Steps</th><th class="num">Cost</th><th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
-  {% for r in burn.rows %}
-  <tr><td><a href="/p/{{ r.name|urlencode }}#tokens">{{ r.name }}</a></td>
-    <td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>
-    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.quota_week|pct }}</td>
-    <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
-    <td class="num">{{ r.output_tokens|tok }}</td><td class="num">{{ r.thinking_share|pct }}</td>
-    <td class="num {{ 'err' if r.failed_share and r.failed_share > 0.1 }}">{{ r.failed_share|pct }}</td></tr>
-  {% endfor %}
-</table></div>
-{% endif %}
-{% endif %}
 {% if broken %}
 <h2>Projects that could not be read</h2>
 <table>{% for b in broken %}<tr><td>{{ b.name }}</td><td class="err">{{ b.why }}</td></tr>{% endfor %}</table>
 {% endif %}
+</div>
+</div>
 {% endblock %}

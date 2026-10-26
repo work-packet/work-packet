@@ -8,7 +8,8 @@ from . import clock, profiles, registry, schema
 from .tomlio import load_toml
 
 LIMITS = ("step_timeout", "max_attempts", "step_budget_usd", "step_context_tokens",
-          "carry_session", "carry_ttl", "carry_factor")
+          "carry_session", "carry_ttl", "carry_factor", "budget_usd_per_day",
+          "budget_quota_per_week", "max_steps_per_hour")
 
 
 class ProjectError(Exception):
@@ -37,6 +38,12 @@ class Settings:
     permission_mode: str = "acceptEdits"
     agent_md: Optional[str] = None
     setup: dict = field(default_factory=dict)     # [setup] (docs/setup.md §4)
+    sizes: Optional[List[str]] = None             # job sizes steps may ask for (scheduler.md §5.2)
+    weight: float = 1.0                           # fair share (§3.3)
+    max_cores: int = 0                            # 0: no project limit
+    budget_usd_per_day: float = 0.0               # caps (§4.5); 0: none
+    budget_quota_per_week: float = 0.0
+    max_steps_per_hour: int = 0
 
 
 def project_of(packet_path):
@@ -92,7 +99,12 @@ def settings(proj, config=None):
         allowed_tools=list(perms["allowed_tools"]),
         permission_mode=perms["permission_mode"],
         agent_md=agent if os.path.isfile(agent) else None,
-        setup=d.get("setup") or {})
+        setup=d.get("setup") or {},
+        sizes=list(d["sizes"]) if d.get("sizes") else None,
+        weight=float(d.get("weight", 1.0)), max_cores=int(d.get("max_cores", 0)),
+        budget_usd_per_day=float(cfg["budget_usd_per_day"]),
+        budget_quota_per_week=float(cfg["budget_quota_per_week"]),
+        max_steps_per_hour=int(cfg["max_steps_per_hour"]))
 
 
 # --- wpk new and wpk adopt ---------------------------------------------------------
@@ -241,7 +253,7 @@ def adopt(path, h=None):
 
 # --- wpk allow / deny / set (long-running.md §6) ---------------------------------
 
-SETTABLE = ("model", "harness", "profile", "tz") + LIMITS
+SETTABLE = ("model", "harness", "profile", "tz") + LIMITS + schema.PROJECT_SCHED_KEYS
 PERMISSION_KEYS = ("permission_mode",)
 
 
@@ -336,6 +348,8 @@ def set_values(proj, pairs, by):
                     out.append("unset %s" % k)
                 continue
             v = parse_value(raw)
+            if k == "sizes" and isinstance(v, str):     # wpk set sizes=look,sim
+                v = [x.strip() for x in v.split(",") if x.strip()]
             if table.get(k) != v:
                 table[k] = v
                 out.append("set %s = %r" % (k, v))

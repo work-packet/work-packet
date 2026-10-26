@@ -63,6 +63,34 @@ def read_state(home):
 GRACE_S = 3
 
 
+def sock_path(home):
+    return os.path.join(home, "run", "wpkd.sock")
+
+
+def _bind_unix(path):
+    """A unix socket only this user can reach: its directory is 0700."""
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    os.chmod(d, 0o700)
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(path)              # one wpkd per home (wpkd.lease): a leftover file
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.bind(path)
+        os.chmod(path, 0o600)
+        s.listen(128)
+    except OSError:
+        s.close()
+        raise
+    return s
+
+
+def ssh_line(home, port=7878):
+    """How to reach a unix-socket board from a laptop (docs/scheduler.md §7.1)."""
+    return "ssh -N -L %d:%s %s@%s" % (port, sock_path(home), getpass.getuser(),
+                                      socket.getfqdn())
+
+
 def _url(host, port, scheme="http"):
     return "%s://%s:%d/" % (scheme, "[%s]" % host if ":" in host else host, port)
 
@@ -106,8 +134,14 @@ class Board:
         from .shells import Shells
         self.shells = Shells()
         from .. import ide as ide_cfg
-        from .ide import Backend
-        self.ide = Backend(self.home, ide_cfg.load_config(self.home))
+        from .ide import Backends
+        from ..sched import config as sconfig, ide as side
+        try:
+            slot = side.enabled(sconfig.load(self.home))
+        except registry.ConfigError:
+            slot = False
+        self.ide = Backends(self.home, ide_cfg.load_config(self.home), slot=slot,
+                            poke=runner.poke if runner is not None else None)
         self.app = create_app(home, runner=runner, shells=self.shells, ide_backend=self.ide)
         self.secret = load_secret(self.home)
         self.user = getpass.getuser()
@@ -117,6 +151,7 @@ class Board:
             raise ServeError("auth = %r cannot listen beyond this machine; "
                              "use auth = \"tailscale\"" % cfg["auth"])
         self.urls = {"loopback": [], "tailnet": []}
+        self.sock = None
         self._stop = None
 
     def guard(self, kind):
@@ -139,7 +174,8 @@ class Board:
         fsutil.atomic_write(state_path(self.home), json.dumps({
             "pid": os.getpid(), "started": schema.format_timestamp(clock.now()),
             "port": self.port, "urls": self.urls["loopback"] + self.urls["tailnet"],
-            "runner": self.runner is not None,
+            "runner": self.runner is not None, "sock": self.sock,
+            "host": socket.gethostname(),
         }, indent=1) + "\n")
 
     def _cert(self):
@@ -221,7 +257,17 @@ class Board:
             if self.host is not None and self.tailnet is not None:
                 tasks.append(asyncio.ensure_future(self._tailnet([self.host])))
             else:
-                if self.host is not None or self.cfg["loopback"]:
+                if self.host is None and self.cfg.get("listen") == "unix":
+                    path = sock_path(self.home)
+                    try:
+                        sock = _bind_unix(path)
+                    except OSError as e:
+                        raise ServeError("cannot listen on %s: %s" % (path, e))
+                    servers.append(self._start("unix", [sock]))
+                    self.sock = path
+                    self.urls["loopback"] = ["http://localhost:%d/ (after: %s)"
+                                             % (self.port, ssh_line(self.home, self.port))]
+                elif self.host is not None or self.cfg["loopback"]:
                     ip = self.host or "127.0.0.1"
                     try:
                         sock = _bind(ip, self.port)
@@ -251,6 +297,9 @@ class Board:
             with contextlib.suppress(OSError):
                 if (read_state(self.home) or {}).get("pid") == os.getpid():
                     os.unlink(state_path(self.home))
+            if self.sock:
+                with contextlib.suppress(OSError):
+                    os.unlink(self.sock)
             for sig in (signal.SIGINT, signal.SIGTERM):
                 loop.remove_signal_handler(sig)
 

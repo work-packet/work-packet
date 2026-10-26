@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "_tokens.html" as tkm %}
 {% import "_settings.html" as sm with context %}
+{% import "_sched.html" as schm with context %}
 {% block title %}{{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a>{% endblock %}
 {% block head %}
@@ -32,7 +33,13 @@ td.tree a { white-space: nowrap; }
   <dt>Packets</dt><dd>{{ card.packets }}{% for st, k in card.counts %} · {{ k }} {{ st }}{% endfor %}</dd>
   <dt>Spend</dt><dd>{{ card.spend_total|money or "$0" }} total, {{ card.spend_today|money or "$0" }} today</dd>
   <dt>Last step</dt><dd>{{ card.last_step }}</dd>
+  <dt>Board</dt><dd>{% if boards|length > 1 %}<form class="act" method="post" action="/p/{{ e.name|urlencode }}/board" style="display:inline-flex;gap:6px;align-items:center">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <select name="board" aria-label="board">{% for b in boards %}<option value="{{ b.name }}"{{ " selected" if b.name == on }}>{{ b.name }}</option>{% endfor %}</select>
+    <button class="mini">Move</button> <a href="/b/{{ on|urlencode }}">open {{ on }}</a></form>
+  {% else %}<a href="/b/{{ on|urlencode }}">{{ on }}</a> <span class="muted">(make another board from the side tab of the Overview to move it)</span>{% endif %}</dd>
 </dl>
+{{ schm.project_panel(e, sch, classes) }}
 
 {% if ide.desktop %}
 <h2 id="vscode">VS Code</h2>
@@ -40,7 +47,7 @@ td.tree a { white-space: nowrap; }
 <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/ide">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
   <button class="go" name="go" value="desktop">Open the project</button>
-  {% if ide_web %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
+  {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
   <span class="muted" style="font-size:12px">{{ "The root packet's worktrees and state/." if card.root and not card.setup else "Its root: work/, state/ and the prompt." }}</span>
 </form>
 {% if work %}
@@ -51,7 +58,7 @@ td.tree a { white-space: nowrap; }
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
   <input type="hidden" name="repo" value="{{ name }}">
   <button class="go" name="go" value="desktop">{{ "Your clone" if git else "Open (shared)" }}</button>
-  {% if ide_web %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}
+  {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}
   {% if git and tree %}<button class="go" name="go" value="desktop-packet">Packet worktree</button>
   {% if ide_web %}<button class="go" name="go" value="web-packet" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}{% endif %}
 </form></td></tr>

@@ -203,6 +203,7 @@ def test_ide_config_is_validated():
     assert v({"ide": {"web": True, "ssh_host": "a"}}) == []
     assert v({"ide": {"web": "yes"}})
     assert v({"ide": {"backend": "code-server"}})
+    assert v({"ide": {"backend": "openvscode-server"}}) == []
     assert v({"ide": {"idle_minutes": 0}})
     assert v({"ide": {"nope": 1}})
     assert v({"ide": {"desktop_link": "remote"}}) == []
@@ -334,10 +335,18 @@ def short_home(tmp_path, monkeypatch):
     shutil.rmtree(d, ignore_errors=True)
 
 
-def _backend(home, tmp_path, **cfg):
-    from work_packet.dash.ide import Backend
+def _backends(home, tmp_path, **cfg):
+    from work_packet.dash.ide import Backends
     c = dict(schema.IDE_DEFAULTS, web=True, **cfg)
-    return Backend(home, c, argv=[sys.executable, FAKE_IDE, str(tmp_path / "pids")])
+    return Backends(home, c, argv=[sys.executable, FAKE_IDE, str(tmp_path / "pids")])
+
+
+def _backend(home, tmp_path, target="/x", **cfg):
+    """The server for ``target``; ``.mgr`` is the board's ``Backends``."""
+    bs = _backends(home, tmp_path, **cfg)
+    be = bs.get(bs.register(target))
+    be.mgr = bs
+    return be
 
 
 def _web_client(home, tmp_path, kind="loopback", ts=None, **cfg):
@@ -348,20 +357,45 @@ def _web_client(home, tmp_path, kind="loopback", ts=None, **cfg):
     be = _backend(home, tmp_path, **cfg)
     host = "127.0.0.1:7878" if kind == "loopback" else "a9550:7878"
     peer = "127.0.0.1" if kind == "loopback" else "100.64.0.9"
-    c = _client(create_app(ide_backend=be), kind, ts, peer=peer, host=host)
+    c = _client(create_app(ide_backend=be.mgr), kind, ts, peer=peer, host=host)
     c.__enter__()               # one event loop, as under uvicorn
     return c, be, {"origin": "http://" + host}, csrf_token(SECRET)
 
 
+def test_backend_command_line(tmp_path):
+    from work_packet.dash import ide as dide
+    key = dide.key_for("/w/x")
+    sw = dide.Backend(str(tmp_path), dict(schema.IDE_DEFAULTS), key)
+    assert sw.argv()[:2] == ["code", "serve-web"]
+    ov = dide.Backend(str(tmp_path), dict(schema.IDE_DEFAULTS, backend="openvscode-server"), key)
+    a = ov.argv()
+    assert a[0] == "openvscode-server" and "serve-web" not in a
+    assert a[a.index("--socket-path") + 1] == ov.sock
+    assert a[a.index("--server-base-path") + 1] == "/ide/" + key
+    assert a[a.index("--server-data-dir") + 1] == str(tmp_path / "ide" / "data")   # shared
+    assert "--without-connection-token" in a
+    own = dict(schema.IDE_DEFAULTS, backend="openvscode-server", code="/opt/ovs/bin/openvscode-server")
+    assert dide.command(own) == "/opt/ovs/bin/openvscode-server"
+
+
+def test_backend_availability_names_the_program():
+    from work_packet.dash import ide as dide
+    cfg = dict(schema.IDE_DEFAULTS, backend="openvscode-server")
+    assert "'openvscode-server' is not on PATH" in dide.available(cfg, lambda n: None)
+    assert dide.available(cfg, lambda n: "/usr/bin/" + n) is None
+    assert "'code'" in dide.available(dict(schema.IDE_DEFAULTS), lambda n: None)
+
+
 def test_socket_path_fits_sun_path(tmp_path):
     from work_packet.dash import ide as dide
-    assert dide.socket_path("/h") == "/h/ide/serve.sock"
+    k = "0123456789ab"
+    assert dide.socket_path("/h", k) == "/h/ide/servers/%s/serve.sock" % k
     long = "/" + "x" * 120
-    p = dide.socket_path(long, {"XDG_RUNTIME_DIR": str(tmp_path)})
-    assert p.startswith(str(tmp_path) + "/wpk-ide-") and len(p) < 100
-    p = dide.socket_path(long, {})
+    p = dide.socket_path(long, k, {"XDG_RUNTIME_DIR": str(tmp_path)})
+    assert p.startswith(str(tmp_path) + "/wpk-ide-") and p.endswith(k + ".sock")
+    p = dide.socket_path(long, k, {})
     assert p.startswith("/tmp/wpk-ide-%d-" % os.getuid())
-    assert p == dide.socket_path(long, {})                  # the same home, the same place
+    assert p == dide.socket_path(long, k, {})               # the same home, the same place
 
 
 def test_private_dir_refuses_a_shared_directory(tmp_path):
@@ -377,7 +411,7 @@ def test_private_dir_refuses_a_shared_directory(tmp_path):
 def test_web_proxy_http(short_home, tmp_path):
     c, be, origin, tok = _web_client(short_home, tmp_path)
     try:
-        r = c.get("/ide/?folder=/x", headers={"cookie": "vscode-tkn=1; other=secret"})
+        r = c.get("/ide/%s/?folder=/x" % be.key, headers={"cookie": "vscode-tkn=1; other=secret"})
         assert r.status_code == 200
         assert "enableWorkspaceTrust&quot;:false" in r.text          # trust prompt off
         seen = json.loads(r.text.split('<pre id="seen">')[1].split("</pre>")[0]
@@ -390,10 +424,10 @@ def test_web_proxy_http(short_home, tmp_path):
         assert r.headers["x-content-type-options"] == "nosniff"
         assert r.cookies.get("vscode-cli-secret-half") == "abc"
         # POST: no CSRF token needed under /ide/, but the Origin must match
-        r = c.post("/ide/echo", headers=origin, content=b"hello")
+        r = c.post("/ide/%s/echo" % be.key, headers=origin, content=b"hello")
         assert (r.status_code, r.content) == (200, b"hello")
-        assert c.post("/ide/echo", content=b"x").status_code == 403
-        assert c.post("/ide/echo", headers={"origin": "http://evil"}, content=b"x") \
+        assert c.post("/ide/%s/echo" % be.key, content=b"x").status_code == 403
+        assert c.post("/ide/%s/echo" % be.key, headers={"origin": "http://evil"}, content=b"x") \
             .status_code == 403
         # the board's own POSTs still need the token
         assert c.post("/p/x/ide", headers=origin, data={}).status_code == 403
@@ -409,7 +443,8 @@ def test_web_proxy_websocket(short_home, tmp_path):
     from starlette.websockets import WebSocketDisconnect
     c, be, origin, tok = _web_client(short_home, tmp_path)
     try:
-        with c.websocket_connect("ws://127.0.0.1:7878/ide/stable-x/remote?reconnectionToken=t",
+        with c.websocket_connect("ws://127.0.0.1:7878/ide/%s/stable-x/remote?reconnectionToken=t"
+                                 % be.key,
                                  headers=dict(origin, cookie="vscode-k=v; board=b")) as ws:
             first = json.loads(ws.receive_text())
             assert first == {"host": "127.0.0.1:7878", "cookie": "vscode-k=v"}
@@ -423,7 +458,8 @@ def test_web_proxy_websocket(short_home, tmp_path):
             time.sleep(0.05)
         assert be.clients == 0
         with pytest.raises(WebSocketDisconnect):
-            with c.websocket_connect("ws://127.0.0.1:7878/ide/x", headers={"origin": "http://evil"}) as ws:
+            with c.websocket_connect("ws://127.0.0.1:7878/ide/%s/x" % be.key,
+                                     headers={"origin": "http://evil"}) as ws:
                 ws.receive_text()
     finally:
         be.stop()
@@ -439,9 +475,9 @@ def test_web_proxy_refuses_another_login_without_starting(short_home, tmp_path):
         from work_packet.dash.app import create_app
         open(os.path.join(short_home, "config.toml"), "w").write("[ide]\nweb = true\n")
         be = _backend(short_home, tmp_path)
-        g = Guard(create_app(ide_backend=be), "tailnet", SECRET, tailnet=Tailnet(f.path))
+        g = Guard(create_app(ide_backend=be.mgr), "tailnet", SECRET, tailnet=Tailnet(f.path))
         c = TestClient(g, base_url="http://a9550:7878", client=("100.64.0.10", 50000))
-        assert c.get("/ide/?folder=/x").status_code == 403
+        assert c.get("/ide/%s/?folder=/x" % be.key).status_code == 403
         assert be.proc is None and not os.path.exists(tmp_path / "pids")
     finally:
         f.close()
@@ -451,7 +487,7 @@ def test_web_off_is_404_and_starts_nothing(short_home, tmp_path):
     c, be, origin, tok = _web_client(short_home, tmp_path)
     try:
         open(os.path.join(short_home, "config.toml"), "w").write("[ide]\nweb = false\n")
-        assert c.get("/ide/?folder=/x").status_code == 404
+        assert c.get("/ide/%s/?folder=/x" % be.key).status_code == 404
         assert be.proc is None
     finally:
         c.__exit__(None, None, None)
@@ -489,7 +525,8 @@ def test_idle_backend_stops(short_home, tmp_path):
 
 def test_a_backend_that_dies_at_once_says_so(short_home, tmp_path):
     from work_packet.dash.ide import Backend, IdeUnavailable
-    be = Backend(short_home, dict(schema.IDE_DEFAULTS), argv=[sys.executable, "-c", "pass"])
+    be = Backend(short_home, dict(schema.IDE_DEFAULTS), "0123456789ab",
+                 argv=[sys.executable, "-c", "pass"])
     with pytest.raises(IdeUnavailable, match="exited"):
         asyncio.run(be.ensure())
 
@@ -505,12 +542,15 @@ def test_board_web_buttons(short_home, tmp_path, monkeypatch, source):
         r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "go": "web"},
                    follow_redirects=False)
         assert r.status_code == 303
-        assert r.headers["location"] == "/ide/?workspace=%s/.vscode/project.code-workspace" \
-            % proj
+        from work_packet.dash.ide import key_for
+        ws = "%s/.vscode/project.code-workspace" % proj
+        assert r.headers["location"] == "/ide/%s/?workspace=%s" % (key_for(ws), ws)
         r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "go": "web",
                                                        "repo": "dv-solve"},
                    follow_redirects=False)
-        assert r.headers["location"] == "/ide/?folder=%s/work/dv-solve" % proj
+        folder = "%s/work/dv-solve" % proj
+        assert r.headers["location"] == "/ide/%s/?folder=%s" % (key_for(folder), folder)
+        assert be.mgr.target(key_for(folder)) == folder           # registered by the open
     finally:
         c.__exit__(None, None, None)
     # over the tailnet on plain http: shown, disabled, and the POST is refused
@@ -532,7 +572,7 @@ def test_a_server_left_by_a_crashed_board_is_adopted_and_stopped(short_home, tmp
     asyncio.run(a.ensure())
     [(pid, kid)] = _pids(tmp_path / "pids")
     a.proc = None                               # the board died without stopping it
-    b = _backend(short_home, tmp_path)
+    b = _backends(short_home, tmp_path).get(a.key)     # a new board: found by its key
     try:
         asyncio.run(b.ensure())
         assert b.proc == pid                    # adopted, not a second server
@@ -543,6 +583,68 @@ def test_a_server_left_by_a_crashed_board_is_adopted_and_stopped(short_home, tmp
     while (_alive(pid) or _alive(kid)) and time.time() < deadline:
         time.sleep(0.05)
     assert not _alive(pid) and not _alive(kid)
+
+
+def test_one_server_per_target(short_home, tmp_path):
+    c, be, origin, tok = _web_client(short_home, tmp_path)
+    bs = be.mgr
+    other = bs.get(bs.register("/y"))
+    try:
+        assert other.key != be.key
+        r = c.get("/ide/%s/?folder=/x" % be.key)
+        assert r.status_code == 200
+        # each server's cookies stay under its own path
+        assert "path=/ide/%s;" % be.key in r.headers["set-cookie"].lower() + ";"
+        assert c.get("/ide/%s/?folder=/y" % other.key).status_code == 200
+        assert c.get("/ide/%s/?folder=/x" % be.key).status_code == 200      # no restart
+        pids = _pids(tmp_path / "pids")
+        assert len(pids) == 2 and pids[0] != pids[1]
+        assert {b.key for b in bs.running()} == {be.key, other.key}
+        assert be.sock != other.sock
+    finally:
+        bs.stop()
+        c.__exit__(None, None, None)
+    assert not any(_alive(p) for pair in pids for p in pair)
+
+
+def test_an_unknown_server_is_404_and_starts_nothing(short_home, tmp_path):
+    c, be, origin, tok = _web_client(short_home, tmp_path)
+    try:
+        for path in ("/ide/?folder=/x", "/ide/ffffffffffff/?folder=/x", "/ide/../x",
+                     "/ide/NOTAKEY/"):
+            assert c.get(path).status_code == 404, path
+        assert not os.path.exists(tmp_path / "pids")
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_max_servers_stops_the_least_recently_used_idle_one(short_home, tmp_path):
+    from work_packet.dash.ide import IdeUnavailable
+    bs = _backends(short_home, tmp_path, max_servers=2)
+    a, b, d = (bs.get(bs.register(p)) for p in ("/a", "/b", "/d"))
+
+    async def run():
+        await bs.ensure(a)
+        await bs.ensure(b)
+        a.last, b.last = 1.0, 2.0                       # a is the older one
+        await bs.ensure(d)
+        assert not a.running() and b.running() and d.running()
+        b.clients = d.clients = 1                       # both in use: no room
+        with pytest.raises(IdeUnavailable, match="max_servers"):
+            await bs.ensure(a)
+        b.clients = d.clients = 0
+    try:
+        asyncio.run(run())
+    finally:
+        bs.stop()
+
+
+def test_cookie_path_is_scoped_to_the_server():
+    from work_packet.dash.ide import cookie_path
+    assert cookie_path("k=v; SameSite=Strict; Path=/", "/ide/abc") == \
+        "k=v; SameSite=Strict; Path=/ide/abc"
+    assert cookie_path("k=v; path=/; HttpOnly", "/ide/abc") == "k=v; path=/ide/abc; HttpOnly"
+    assert cookie_path("k=v; Path=/other", "/ide/abc") == "k=v; Path=/other"
 
 
 def test_web_button_says_when_code_is_missing(short_home, tmp_path, monkeypatch, source):

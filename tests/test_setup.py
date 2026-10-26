@@ -341,9 +341,12 @@ def test_board_card_shows_setup(home):
     assert c["column"] == "Paused"
     assert c["setup"] == {"missing": 1, "warnings": 1,
                           "next": "wpk instruct dvs --template outline"}
-    r = TestClient(create_app()).get("/")
+    client = TestClient(create_app())
+    r = client.get("/b/main")
     assert "Setting up:" in r.text and "1 missing" in r.text
     assert "next: <code>wpk instruct dvs --template outline</code>" in r.text
+    r = client.get("/")                                 # and the Overview's attention list
+    assert ">SETUP<" in r.text and "1 missing" in r.text and 'href="/p/dvs/compose">Set up<' in r.text
     setup.instruct(tg, "Count to 3.")
     assert data.card(registry.get("dvs"))["setup"]["missing"] == 0
     assert "ready to hand off" in TestClient(create_app()).get("/").text

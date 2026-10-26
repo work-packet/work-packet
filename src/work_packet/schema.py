@@ -20,10 +20,11 @@ RESERVED_STATES = {"WAITING": "Stage 3"}
 STATUS_FIELDS = (
     "wpk", "wpid", "project", "state", "step", "attempts", "parent",
     "spawn_key", "children", "resume_expr", "wake_at", "model", "reason",
-    "updated",
+    "updated", "next_size",
 )
+STATUS_OPTIONAL = ("next_size",)      # docs/scheduler-plan.md decision 4
 
-MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item")
+MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item", "size")
 ITEM_MAX = 80
 MEMENTO_LATER = {"every": "Stage 2", "wait": "Stage 3"}
 SPAWN_FIELDS = ("name", "instruction", "copy", "model")
@@ -42,6 +43,9 @@ CONFIG_DEFAULTS = {
     "carry_session": False,           # context.md C4
     "carry_ttl": "55m",
     "carry_factor": 4.0,              # C4: fresh again at this multiple of O
+    "budget_usd_per_day": 0,          # per project; 0 = no cap (docs/scheduler.md §4.5)
+    "budget_quota_per_week": 0,       # share of the weekly quota per project; 0 = no cap
+    "max_steps_per_hour": 0,          # per packet; 0 = no cap
 }
 SERVER_DEFAULTS = {                   # server.md §6
     "port": 7878,
@@ -52,18 +56,62 @@ SERVER_DEFAULTS = {                   # server.md §6
     "tls": "off",
     "extra_hosts": [],
     "run": False,                      # dash-tasks.md §7: the runner in the server
+    "listen": "",                      # "unix": $WPK_HOME/run/wpkd.sock, not 127.0.0.1 (§7.1)
 }
 IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
     "desktop": True,                   # vscode:// buttons
     "web": False,                      # VS Code under the board's /ide/
     "backend": "serve-web",
-    "code": "code",                    # the VS Code CLI that runs serve-web
+    "code": "",                        # empty: `code` (serve-web) or `openvscode-server`
     "ssh_host": "",                    # empty: you@ the board's name or MagicDNS name
     "desktop_link": "auto",            # auto | remote | local: the vscode:// link to follow
     "idle_minutes": 60,
+    "max_servers": 8,                  # one server per open target; LRU idle one makes room
     "workspace_trust": False,          # V0 finding 4: the runner already runs this code
 }
-IDE_BACKENDS = ("serve-web",)          # openvscode-server: §4.4, when needed
+SCHED_DEFAULTS = {                    # docs/scheduler.md §10
+    "backend": "local",                # local | slurm | lsf
+    "cores": 0,                        # pool limits; 0 or "" = no limit
+    "mem": "",
+    "jobs": 0,                         # 0: max_concurrent
+    "default_size": "look",
+    "spare_size": "look",              # background leaves room for one of these
+    "backfill_for": "10m",
+    "age_after": "4h",
+    "max_pending": "30m",
+    "poll": "",                        # empty: the backend's own (local 1s, batch 15s)
+    "tz": "",
+    "start_mode": "run",               # run | drain: when control.toml is missing
+    "node_env": "",
+    "sizes": {"look": {"cpus": 1, "mem": "4G"}},
+    "budget": {},
+    "slurm": {},
+    "lsf": {},
+    "ide": {},
+}
+SCHED_BACKENDS = ("local", "slurm", "lsf")
+SCHED_CLASSES = ("urgent", "high", "normal", "low", "background")
+SCHED_MODES = ("run", "drain", "stop")
+SIZE_KEYS = ("cpus", "mem", "time", "partition", "queue", "extra")
+SCHED_BUDGET_DEFAULTS = {             # §4; Q2
+    "measure": "",                     # usd | tokens | quota; empty: no budget
+    "amount": 0.0,
+    "period": "week",                  # day | week | month (ignored for quota)
+    "slack": 0.1,
+    "hard_cap": 0.0,                   # 0: amount
+    "default_step": 0.0,
+    "cache_read_weight": 0.1,
+    "stale_after": "6h",
+    "tz": "",
+    "shape": {},
+}
+SCHED_BACKEND_KEYS = {
+    "slurm": ("bin", "partition", "account", "extra", "poll"),
+    "lsf": ("bin", "queue", "project", "extra", "poll"),
+    "ide": ("reserve", "run_limit", "slot"),
+}
+_MEM_RX = re.compile(r"^(\d+)([KMGT]?)$")
+IDE_BACKENDS = ("serve-web", "openvscode-server")   # docs/vscode-plan.md §4.4
 SERVER_AUTH = ("tailscale", "none")
 SERVER_TLS = ("off", "tailscale")        # server.md §2.3    # token, pam: server.md S3
 PERMISSION_DEFAULTS = {
@@ -199,7 +247,7 @@ def validate_status(meta, body=""):
         return [_err(None, "status.md has no front matter")]
     out = _unknown(meta, STATUS_FIELDS)
     for k in STATUS_FIELDS:
-        if k not in meta:
+        if k not in meta and k not in STATUS_OPTIONAL:
             out.append(_err(k, "missing"))
     if "wpk" in meta and meta["wpk"] != FORMAT_VERSION:
         out.append(_err("wpk", "must be the string %r, got %r" % (FORMAT_VERSION, meta.get("wpk"))))
@@ -245,6 +293,8 @@ def validate_status(meta, body=""):
     if "model" in meta and not (isinstance(meta["model"], str) and meta["model"]):
         out.append(_err("model", "must be a non-empty string"))
     out += _opt_str(meta, "reason")
+    if "next_size" in meta and not is_name(meta["next_size"]):
+        out.append(_err("next_size", "must be a size name"))
     if st in ("NEEDS_INPUT", "PAUSED", "FAILED") and not meta.get("reason"):
         out.append(_err("reason", "required when %s" % st))
     if "updated" in meta and not is_timestamp(meta["updated"]):
@@ -359,6 +409,8 @@ def validate_memento(meta, body, proposal=True):
                             "after the answer"))
     if "spawn" in meta and meta["spawn"] is not None:
         out += validate_spawn(meta["spawn"])
+    if "size" in meta and not is_name(meta["size"]):
+        out.append(_err("size", "must be the name of a job size, such as look"))
     if r is not None and r.kind not in ("done", "fail") and not body.strip():
         out.append(_err(None, "body is empty; the next step needs an instruction"))
     return out
@@ -401,6 +453,13 @@ def _validate_limits(d):
             parse_duration(d["carry_ttl"])
         except ValueError as e:
             out.append(_err("carry_ttl", str(e)))
+    for k in ("budget_usd_per_day", "budget_quota_per_week"):
+        v = d.get(k, 0)
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0):
+            out.append(_err(k, "must be a number >= 0 (0: no cap)"))
+    if "max_steps_per_hour" in d and not (is_int(d["max_steps_per_hour"])
+                                          and d["max_steps_per_hour"] >= 0):
+        out.append(_err("max_steps_per_hour", "must be a whole number >= 0 (0: no cap)"))
     return out
 
 
@@ -437,6 +496,8 @@ def _validate_server(d):
         v = t.get(k, [])
         if not (isinstance(v, list) and all(isinstance(x, str) and x for x in v)):
             out.append(_err("server." + k, "must be a list of strings"))
+    if t.get("listen", "") not in ("", "unix"):
+        out.append(_err("server.listen", "must be \"unix\" or empty (a TCP port on loopback)"))
     if t.get("tls", "off") not in SERVER_TLS:
         out.append(_err("server.tls", "must be one of %s" % ", ".join(SERVER_TLS)))
     return out
@@ -459,15 +520,166 @@ def _validate_ide(d):
         out.append(_err("ide.desktop_link", "must be auto, remote or local"))
     if t.get("backend", "serve-web") not in IDE_BACKENDS:
         out.append(_err("ide.backend", "must be one of %s" % ", ".join(IDE_BACKENDS)))
-    m = t.get("idle_minutes", 60)
-    if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
-        out.append(_err("ide.idle_minutes", "must be a positive whole number"))
+    for k, dflt in (("idle_minutes", 60), ("max_servers", 8)):
+        m = t.get(k, dflt)
+        if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
+            out.append(_err("ide." + k, "must be a positive whole number"))
+    return out
+
+
+def parse_mem(v):
+    """``"32G"`` -> megabytes (32768). A bare number is megabytes. Raises ValueError."""
+    m = _MEM_RX.match(v.strip().upper()) if isinstance(v, str) else None
+    if is_int(v) and v >= 0:
+        return v
+    if not m:
+        raise ValueError("expected a memory size like 512M, 4G or 1T, got %r" % (v,))
+    n = int(m.group(1))
+    return {"K": n // 1024, "": n, "M": n, "G": n * 1024, "T": n * 1024 * 1024}[m.group(2)]
+
+
+def _strs(v):
+    return isinstance(v, list) and all(isinstance(x, str) for x in v)
+
+
+def validate_size(name, t, where="sched.sizes"):
+    f = "%s.%s" % (where, name)
+    if not is_name(name):
+        return [_err(f, "a size name must match [a-z0-9][a-z0-9_-]*")]
+    if not isinstance(t, dict):
+        return [_err(f, "must be a table")]
+    out = _unknown(t, SIZE_KEYS, f)
+    if not (is_int(t.get("cpus")) and t["cpus"] >= 1):
+        out.append(_err(f + ".cpus", "required; must be a whole number >= 1"))
+    if "mem" in t:
+        try:
+            parse_mem(t["mem"])
+        except ValueError as e:
+            out.append(_err(f + ".mem", str(e)))
+    if "time" in t:
+        try:
+            parse_duration(t["time"])
+        except ValueError as e:
+            out.append(_err(f + ".time", str(e)))
+    for k in ("partition", "queue"):
+        if k in t and not isinstance(t[k], str):
+            out.append(_err("%s.%s" % (f, k), "must be a string"))
+    if "extra" in t and not _strs(t["extra"]):
+        out.append(_err(f + ".extra", "must be a list of strings"))
+    return out
+
+
+def _validate_budget(t):
+    if not isinstance(t, dict):
+        return [_err("sched.budget", "must be a table")]
+    out = _unknown(t, tuple(SCHED_BUDGET_DEFAULTS), "sched.budget")
+    if t.get("measure", "") not in ("", "usd", "tokens", "quota"):
+        out.append(_err("sched.budget.measure", "must be usd, tokens or quota"))
+    if t.get("period", "week") not in ("day", "week", "month"):
+        out.append(_err("sched.budget.period", "must be day, week or month"))
+    for k in ("amount", "slack", "hard_cap", "default_step", "cache_read_weight"):
+        v = t.get(k, 0)
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0):
+            out.append(_err("sched.budget." + k, "must be a number >= 0"))
+    if "stale_after" in t:
+        try:
+            parse_duration(t["stale_after"])
+        except ValueError as e:
+            out.append(_err("sched.budget.stale_after", str(e)))
+    if "tz" in t and t["tz"] and not is_zone(t["tz"]):
+        out.append(_err("sched.budget.tz", "not a known IANA time zone"))
+    sh = t.get("shape", {})
+    if not isinstance(sh, dict):
+        out.append(_err("sched.budget.shape", "must be a table"))
+    else:
+        out += _unknown(sh, ("weekday", "hour"), "sched.budget.shape")
+        for k, n in (("weekday", 7), ("hour", 24)):
+            v = sh.get(k)
+            if v is not None and not (isinstance(v, list) and len(v) == n and all(
+                    isinstance(x, (int, float)) and not isinstance(x, bool) and x >= 0
+                    for x in v) and sum(v) > 0):
+                out.append(_err("sched.budget.shape." + k,
+                                "must be a list of %d numbers >= 0, not all 0" % n))
+    return out
+
+
+def validate_sched(t):
+    """``[sched]`` (docs/scheduler.md §10)."""
+    if not isinstance(t, dict):
+        return [_err("sched", "must be a table")]
+    out = _unknown(t, tuple(SCHED_DEFAULTS), "sched")
+    if t.get("backend", "local") not in SCHED_BACKENDS:
+        out.append(_err("sched.backend", "must be one of %s" % ", ".join(SCHED_BACKENDS)))
+    for k in ("cores", "jobs"):
+        v = t.get(k, 0)
+        if not (is_int(v) and v >= 0):
+            out.append(_err("sched." + k, "must be a whole number >= 0 (0: no limit)"))
+    if t.get("mem", ""):
+        try:
+            parse_mem(t["mem"])
+        except ValueError as e:
+            out.append(_err("sched.mem", str(e)))
+    for k in ("backfill_for", "age_after", "max_pending"):
+        if k in t:
+            try:
+                parse_duration(t[k])
+            except ValueError as e:
+                out.append(_err("sched." + k, str(e)))
+    if t.get("poll", ""):
+        try:
+            parse_duration(t["poll"])
+        except ValueError as e:
+            out.append(_err("sched.poll", str(e)))
+    if t.get("tz") and not is_zone(t["tz"]):
+        out.append(_err("sched.tz", "not a known IANA time zone"))
+    if t.get("start_mode", "run") not in ("run", "drain"):
+        out.append(_err("sched.start_mode", "must be run or drain"))
+    if not isinstance(t.get("node_env", ""), str):
+        out.append(_err("sched.node_env", "must be a string"))
+    sizes = t.get("sizes", {})
+    if not isinstance(sizes, dict):
+        out.append(_err("sched.sizes", "must be a table of [sched.sizes.<name>] tables"))
+        sizes = {}
+    for name, st in sizes.items():
+        out += validate_size(name, st)
+    known = set(sizes) | set(SCHED_DEFAULTS["sizes"])
+    for k in ("default_size", "spare_size"):
+        v = t.get(k, SCHED_DEFAULTS[k])
+        if v not in known:
+            out.append(_err("sched." + k, "names no size in [sched.sizes]: %r" % (v,)))
+    if "budget" in t:
+        out += _validate_budget(t["budget"])
+    for sub, keys in SCHED_BACKEND_KEYS.items():
+        v = t.get(sub, {})
+        if not isinstance(v, dict):
+            out.append(_err("sched." + sub, "must be a table"))
+            continue
+        out += _unknown(v, keys, "sched." + sub)
+        for k in keys:
+            if k not in v:
+                continue
+            if k == "slot":
+                if not isinstance(v[k], bool):
+                    out.append(_err("sched.ide.slot", "must be true or false"))
+            elif k == "extra":
+                if not _strs(v[k]):
+                    out.append(_err("sched.%s.extra" % sub, "must be a list of strings"))
+            elif k in ("poll", "run_limit") and v[k]:
+                try:
+                    parse_duration(v[k])
+                except ValueError as e:
+                    out.append(_err("sched.%s.%s" % (sub, k), str(e)))
+            elif not isinstance(v[k], str):
+                out.append(_err("sched.%s.%s" % (sub, k), "must be a string"))
     return out
 
 
 def validate_config(d):
-    return _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide")) + \
+    out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched")) + \
         _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d)
+    if "sched" in d:
+        out += validate_sched(d["sched"])
+    return out
 
 
 def _validate_template(d):
@@ -517,11 +729,30 @@ def _validate_setup(t):
     return out
 
 
+PROJECT_SCHED_KEYS = ("sizes", "weight", "max_cores")      # docs/scheduler.md §10
+
+
+def _validate_project_sched(d):
+    out = []
+    if "sizes" in d and not (isinstance(d["sizes"], list) and d["sizes"]
+                             and all(is_name(x) for x in d["sizes"])):
+        out.append(_err("sizes", "must be a non-empty list of size names"))
+    if "weight" in d:
+        v = d["weight"]
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
+            out.append(_err("weight", "must be a number > 0"))
+    if "max_cores" in d and not (is_int(d["max_cores"]) and d["max_cores"] >= 0):
+        out.append(_err("max_cores", "must be a whole number >= 0 (0: no limit)"))
+    return out
+
+
 def validate_project(d):
     known = ("name", "root", "created", "template", "tz", "model", "harness", "profile",
              "step_timeout", "max_attempts", "step_budget_usd", "step_context_tokens",
-             "carry_session", "carry_ttl", "carry_factor", "permissions", "setup")
-    out = _unknown(d, known) + _validate_setup(d.get("setup"))
+             "carry_session", "carry_ttl", "carry_factor", "permissions", "setup",
+             "budget_usd_per_day", "budget_quota_per_week", "max_steps_per_hour") + \
+        PROJECT_SCHED_KEYS
+    out = _unknown(d, known) + _validate_setup(d.get("setup")) + _validate_project_sched(d)
     if not is_name(d.get("name")):
         out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
     if not is_wpid(d.get("root")):
@@ -550,12 +781,52 @@ def validate_project(d):
     return out
 
 
+PACKET_SCHED_KEYS = ("priority", "size", "next")
+
+
+def _validate_entry_sched(d):
+    """The scheduling keys of a registry entry (docs/scheduler.md §3.2). Size
+    names are checked against ``[sched.sizes]`` only as a warning (by the
+    scheduler), so a config change never breaks an entry."""
+    out = []
+    if "priority" in d and d["priority"] not in SCHED_CLASSES:
+        out.append(_err("priority", "must be one of %s" % ", ".join(SCHED_CLASSES)))
+    if "size" in d and not is_name(d["size"]):
+        out.append(_err("size", "must be a size name"))
+    if d.get("sched", "run") not in ("run", "hold"):
+        out.append(_err("sched", "must be run or hold"))
+    for k in ("sched_by", "sched_at", "sched_reason"):
+        out += _opt_str(d, k)
+    pk = d.get("packets", {})
+    if not isinstance(pk, dict):
+        return out + [_err("packets", "must be a table of [packets.<wpid>] tables")]
+    for w, t in pk.items():
+        f = "packets.%s" % w
+        if not is_wpid(w):
+            out.append(_err(f, "not a WPID"))
+        if not isinstance(t, dict):
+            out.append(_err(f, "must be a table"))
+            continue
+        out += _unknown(t, PACKET_SCHED_KEYS, f)
+        if "priority" in t and t["priority"] not in SCHED_CLASSES:
+            out.append(_err(f + ".priority", "must be one of %s" % ", ".join(SCHED_CLASSES)))
+        if "size" in t and not is_name(t["size"]):
+            out.append(_err(f + ".size", "must be a size name"))
+        if "next" in t and not isinstance(t["next"], bool):
+            out.append(_err(f + ".next", "must be true or false"))
+    return out
+
+
 def validate_registry_entry(d, stem=None):
-    out = _unknown(d, ("name", "path", "root", "created", "template"))
+    out = _unknown(d, ("name", "path", "root", "created", "template", "board", "priority",
+                       "size", "sched", "sched_by", "sched_at", "sched_reason", "packets"))
+    out += _validate_entry_sched(d)
     if not is_name(d.get("name")):
         out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
     elif stem is not None and d["name"] != stem:
         out.append(_err("name", "is %r but the file is %s.toml" % (d["name"], stem)))
+    if "board" in d and not is_name(d["board"]):
+        out.append(_err("board", "must match [a-z0-9][a-z0-9_-]*"))
     p = d.get("path")
     if not (isinstance(p, str) and p.startswith("/")):
         out.append(_err("path", "required; must be an absolute path"))
@@ -564,6 +835,20 @@ def validate_registry_entry(d, stem=None):
     if not is_timestamp(d.get("created")):
         out.append(_err("created", "required; must be a UTC timestamp"))
     out += _validate_template(d)
+    return out
+
+
+def validate_board(d, stem=None):
+    """``boards/<name>.toml`` (docs/boards.md)."""
+    out = _unknown(d, ("name", "created", "title"))
+    if not is_name(d.get("name")):
+        out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
+    elif stem is not None and d["name"] != stem:
+        out.append(_err("name", "is %r but the file is %s.toml" % (d["name"], stem)))
+    if not is_timestamp(d.get("created")):
+        out.append(_err("created", "required; must be a UTC timestamp"))
+    if "title" in d and not isinstance(d["title"], str):
+        out.append(_err("title", "must be a string"))
     return out
 
 

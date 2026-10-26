@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% import "_side.html" as sidem with context %}
+{% block title %}All packets{% endblock %}
+{% block crumbs %}/ <a href="/packets">all packets</a>{% endblock %}
+{% block head %}
+<style>
+.filter { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
+.filter input[type=search] { flex: 1; min-width: 180px; max-width: 420px; font: inherit; padding: 4px 8px;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); }
+.filter select { font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--panel); color: var(--ink); }
+table.pk th[data-key] { cursor: pointer; user-select: none; white-space: nowrap; }
+table.pk th[data-key]:hover { color: var(--ink); }
+table.pk th[aria-sort=ascending]::after { content: " ▲"; font-size: 9px; }
+table.pk th[aria-sort=descending]::after { content: " ▼"; font-size: 9px; }
+table.pk td.why { color: var(--muted); max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.pk td.nm { white-space: nowrap; }
+table.pk .tree { color: var(--muted); } table.pk.sorted .tree { display: none; }
+.bulk { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; font-size: 13px; }
+.bulk select { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); }
+</style>
+<script src="/static/packets.js?v={{ asset_v }}"></script>
+<script src="/static/sched.js?v={{ asset_v }}"></script>
+{% endblock %}
+{% block main %}
+<div class="withside">
+{{ sidem.tab(side, None, "packets") }}
+<div>
+<div class="titlebar"><h1>All packets</h1><span class="muted" id="pk-count">{{ rows|length }} packet{{ "s" if rows|length != 1 }}</span></div>
+<form class="filter" data-filter role="search">
+  <input type="search" id="pk-q" placeholder="Search name, project, board, state, reason…" aria-label="search packets" autocomplete="off">
+  <select id="pk-state" aria-label="state">
+    <option value="">every state</option>
+    {% for st in states %}<option value="{{ st }}">{{ st }}</option>{% endfor %}
+  </select>
+  {% if side|length > 1 %}<select id="pk-board" aria-label="board">
+    <option value="">every board</option>
+    {% for b in side %}<option value="{{ b.name }}">{{ b.name }}</option>{% endfor %}
+  </select>{% endif %}
+</form>
+{% if rows %}
+<form class="act" method="post" action="/packets/bulk" id="bulk">
+<input type="hidden" name="csrf" value="{{ csrf or '' }}">
+<div class="bulk" aria-label="with the ticked packets">
+  <span class="muted">Ticked:</span>
+  <button class="mini" name="op" value="pause">Pause</button>
+  <button class="mini" name="op" value="resume">Resume</button>
+  <button class="mini" name="op" value="hold" title="Hold their projects: nothing new starts there">Hold project</button>
+  <select name="value" aria-label="class or size"><option value="">class or size…</option>
+    <optgroup label="class">{% for c in classes %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</optgroup>
+    {% if sizes|length > 1 %}<optgroup label="size">{% for z in sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</optgroup>{% endif %}
+  </select>
+  <button class="mini" name="op" value="prio">Set class</button>
+  {% if sizes|length > 1 %}<button class="mini" name="op" value="size">Set size</button>{% endif %}
+</div>
+<div class="wrap"><table class="pk" id="pk">
+  <thead><tr>
+    <th><input type="checkbox" data-pick-all aria-label="tick every packet shown"></th>
+    <th data-key="board">Board</th><th data-key="project">Project</th><th data-key="name">Packet</th>
+    <th data-key="state">State</th><th data-key="step" class="num">Step</th>
+    <th data-key="last" title="when its last step ended">Last step</th>
+    <th data-key="cost" class="num">Cost</th>
+    <th data-key="cls">Class</th><th data-key="size">Size</th>
+    <th data-key="why">Waiting on, reason or summary</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+  {% set q = sch.get(r.wpid) %}
+  <tr data-board="{{ r.board }}" data-state="{{ r.state }}">
+    <td><input type="checkbox" name="pick" value="{{ r.project }}/{{ r.wpid }}" aria-label="tick {{ r.name }}"></td>
+    <td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>
+    <td><a href="/p/{{ r.project|urlencode }}">{{ r.project }}</a></td>
+    <td class="nm" data-sort="{{ r.name }}">{% if r.depth %}<span class="tree" style="padding-left:{{ (r.depth - 1) * 10 }}px">└ </span>{% endif %}<a href="/p/{{ r.project|urlencode }}/{{ r.wpid }}{{ '/live' if r.state == 'running' }}" title="{{ r.wpid }}">{{ r.name }}</a></td>
+    <td data-sort="{{ r.state }}"><span class="state {{ r.state }}{{ ' pulse' if r.state == 'running' }}">{{ r.state }}</span></td>
+    <td class="num" data-sort="{{ r.step if r.step is number else -1 }}">{{ r.step }}</td>
+    <td data-sort="{{ r.last.isoformat() if r.last else '' }}">{{ r.last|when if r.last else "-" }}</td>
+    <td class="num" data-sort="{{ r.cost_usd or 0 }}">{{ r.cost_usd|money or "-" }}</td>
+    {% set ci = ["urgent", "high", "normal", "low", "background"].index(q.cls) if q else 2 %}
+    <td data-sort="{{ ci }}">{% if q %}<span class="cls {{ q.cls }}">{{ q.cls }}</span>{% if q.next %} <span class="cls high">next</span>{% endif %}{% endif %}</td>
+    <td>{{ q.size if q else "" }}</td>
+    {% set wait = q.row.why if q and q.row and q.row.waiting else "" %}
+    <td class="why" title="{{ wait or r.why }}">{% if wait %}{{ wait }}{% else %}{% if r.state == "SLEEPING" and r.next %}wakes {{ r.next }}{% if r.why %} · {% endif %}{% endif %}{{ r.why }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+</form>
+<p class="muted" id="pk-none" hidden>No packet matches.</p>
+{% else %}
+<div class="panel"><p class="muted" style="margin:0">No packets yet. <a href="/new">New task</a> makes a project and its first packet.</p></div>
+{% endif %}
+{% if broken %}
+<h2>Projects that could not be read</h2>
+<table>{% for b in broken %}<tr><td>{{ b.name }}</td><td class="err">{{ b.why }}</td></tr>{% endfor %}</table>
+{% endif %}
+</div>
+</div>
+{% endblock %}

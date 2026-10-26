@@ -159,11 +159,20 @@ def client(tree):
 
 def test_pages(tree, client):
     root = tree["done"][1].wpid
-    r = client.get("/")
+    r = client.get("/b/main")
     assert r.status_code == 200
     for name in tree:
         assert ">%s<" % name in r.text
     assert "Needs you" in r.text and "Which colour" in r.text and "wpk answer asking" in r.text
+    # The Overview: no cards, but what needs you, the boards' counts, what runs and wakes.
+    r = client.get("/")
+    assert r.status_code == 200 and 'data-project=' not in r.text
+    assert "Needs attention" in r.text and "Which colour" in r.text \
+        and "wpk answer asking" in r.text and "/p/asking/%s#answer" % tree["asking"][1].wpid in r.text
+    assert "/p/failed\"><strong>failed<" in r.text            # failed root, in the attention list
+    assert 'title="ready">1<' not in r.text and 'title="ready"><a href="/b/main">1<' in r.text
+    assert "/p/running/%s/live" % tree["running"][1].wpid in r.text
+    assert ">sleeping</strong>" in r.text and "Coming up" in r.text
     r = client.get("/p/done")
     assert r.status_code == 200 and "<svg" in r.text and "hello" in r.text
     r = client.get("/p/done/" + root)
@@ -185,6 +194,9 @@ def test_token_panels(tree, client):
     assert tokens.chart([], tokens.CONTEXT) is None
     r = client.get("/")
     assert "Tokens, last 7 days" in r.text and 'href="/p/done#tokens"' in r.text
+    assert "Context read per day" in r.text
+    for d, head in ((1, "Tokens, today"), (30, "Tokens, last 30 days"), (5, "Tokens, last 7 days")):
+        assert head in client.get("/?days=%d" % d).text
     r = client.get("/p/done")
     assert 'id="tokens"' in r.text and "Context read per day" in r.text and "By packet" in r.text
     r = client.get("/p/done/" + root.wpid)

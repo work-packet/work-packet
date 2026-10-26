@@ -191,11 +191,11 @@ def tree(entry, now=None):
     return out
 
 
-def card(entry, now=None):
-    """One project's card on the board."""
+def card(entry, now=None, nodes=None):
+    """One project's card on the board. ``nodes``: its ``tree()``, if already read."""
     now = now or clock.now()
     tz = _zone(entry["path"])
-    nodes = tree(entry, now)
+    nodes = tree(entry, now) if nodes is None else nodes
     root = nodes[0] if nodes else None
     live = [n for n in nodes if n["running"]]
     if live:
@@ -238,6 +238,7 @@ def card(entry, now=None):
         "packets": len(nodes), "trouble": len(trouble),
         "spend_total": sum(n["cost_usd"] for n in nodes), "spend_today": spend_today,
         "last_step": relative(-(now - last).total_seconds()) if last else "never",
+        "last_end": last,
         "finished": _local(root["updated"], tz) if root and root.get("updated") else "",
     }
 
@@ -255,26 +256,121 @@ def setup_summary(entry):
             "next": setup.next_step(tg, cs)}
 
 
-def board(h=None, now=None):
-    """{column: [card]} for every registered project, plus projects that failed to load."""
+def board(h=None, now=None, rows=None):
+    """{column: [card]} for every registered project, plus projects that failed to load.
+    Each card and each broken one names its ``board`` (docs/boards.md). Given a list,
+    ``rows`` gets every packet of every project (``packet_rows``)."""
     now = now or clock.now()
     cols = {c: [] for c in COLUMNS}
     broken = []
+    names = [b["name"] for b in registry.boards(h)]
     for e in registry.entries(h):
+        on = registry.board_of(e, names)
         if not os.path.isdir(e["path"]):
-            broken.append({"name": e["name"], "why": "%s is missing" % e["path"]})
+            broken.append({"name": e["name"], "board": on, "why": "%s is missing" % e["path"]})
             continue
         try:
-            c = card(e, now)
+            nodes = tree(e, now)
+            c = card(e, now, nodes)
         except (OSError, ValueError, KeyError) as ex:
-            broken.append({"name": e["name"], "why": str(ex)})
+            broken.append({"name": e["name"], "board": on, "why": str(ex)})
             continue
+        c["board"] = on
+        if rows is not None:
+            rows += packet_rows(e, on, nodes)
         cols[c["column"]].append(c)
     # Sleepers soonest first; the rest by name.
     far = now + timedelta(days=36500)
     for c in cols.values():
         c.sort(key=lambda k: ((k["root"] or {}).get("wake_at") or far, k["name"]))
     return cols, broken
+
+
+def packet_rows(entry, board, nodes):
+    """The All packets table's rows for one project (docs/boards.md)."""
+    out = []
+    for n in nodes:
+        last = max((s["end"] for s in n["steps"] if s["end"]), default=None)
+        out.append({
+            "board": board, "project": entry["name"], "wpid": n["wpid"],
+            "short": n["short"], "name": n["name"] or n["short"], "depth": n["depth"],
+            "state": "running" if n["running"] else (n["state"] or "?"),
+            "step": n["step"], "attempts": n.get("attempts"), "last": last,
+            "cost_usd": n["cost_usd"], "next": n["next"],
+            "why": n["reason"] or n["summary"] or "",
+        })
+    return out
+
+
+def only(cols, broken, board):
+    """``board()``'s result cut down to one board."""
+    return ({k: [c for c in v if c["board"] == board] for k, v in cols.items()},
+            [b for b in broken if b["board"] == board])
+
+
+def side(h, cols, broken):
+    """The side tab's boards: ``[{"name", "title", "n", "needs"}]``, ``main`` first."""
+    out = []
+    for b in registry.boards(h):
+        cards = [c for v in cols.values() for c in v if c["board"] == b["name"]]
+        out.append({"name": b["name"], "title": b.get("title") or "",
+                    "n": len(cards) + sum(1 for x in broken if x["board"] == b["name"]),
+                    "needs": sum(1 for c in cards if c["column"] == "Needs you")})
+    return out
+
+
+def overview(cols, broken, side, burn, now=None, coming=8):
+    """The Overview (docs/overview.md) from ``board()``, ``side()`` and
+    ``tokens.board()``: headline ``tiles``, the ``attention`` list, a row per
+    board, what is running, and the next wake-ups."""
+    now = now or clock.now()
+    cards = [c for v in cols.values() for c in v]
+    ago = lambda t: relative(-(now - t).total_seconds()).replace(" ago", "") if t else ""
+    needs = cols["Needs you"]
+    attention = [{"kind": "needs", "card": c} for c in needs]
+    attention += [{"kind": "failed", "card": c} for c in cols["Failed"]]
+    attention += [{"kind": "trouble", "card": c} for c in cards
+                  if c["trouble"] and c["column"] != "Failed"]
+    attention += [{"kind": "setup", "card": c} for c in cards if c["setup"]]
+    waits = [c["root"]["updated"] for c in needs if c["root"] and c["root"].get("updated")]
+    fails = [c["root"]["updated"] for c in cols["Failed"]
+             if c["root"] and c["root"].get("updated")]
+    rows = []
+    for b in side:
+        mine = [c for c in cards if c["board"] == b["name"]]
+        counts = {k: [c for c in mine if c["column"] == k] for k in COLUMNS}
+        packets = {}
+        for c in mine:
+            for st, k in c["counts"]:
+                packets[st] = packets.get(st, 0) + k
+        last = max((c["last_end"] for c in mine if c["last_end"]), default=None)
+        tk = burn.get("boards", {}).get(b["name"]) or {}
+        rows.append({
+            "name": b["name"], "title": b["title"], "n": len(mine),
+            "counts": [(k, len(counts[k]),
+                        ", ".join(c["name"] for c in counts[k])) for k in COLUMNS],
+            "packets": sum(packets.values()),
+            "packets_title": ", ".join("%s %s" % (k, st) for st, k in
+                                       sorted(packets.items(), key=lambda kv: str(kv[0]))),
+            "broken": sum(1 for x in broken if x["board"] == b["name"]),
+            "last_step": relative(-(now - last).total_seconds()) if last else "never",
+            "tk": tk})
+    total = burn.get("total") or {}
+    return {
+        "tiles": {
+            "needs": len(needs), "oldest": ago(min(waits)) if waits else "",
+            "running": len(cols["Running"]),
+            "failed": len(cols["Failed"]) + sum(c["trouble"] for c in cards
+                                                 if c["column"] != "Failed"),
+            "newest_fail": ago(max(fails)) if fails else "",
+            "spend_today": sum(c["spend_today"] for c in cards),
+            "spend": total.get("cost_usd"),
+            "quota": next((w for w in burn.get("quota") or [] if w["label"] == "Weekly"),
+                          None),
+        },
+        "attention": attention, "boards": rows, "running": cols["Running"],
+        "coming": cols["Sleeping"][:coming], "more_coming": max(len(cols["Sleeping"]) - coming, 0),
+    }
 
 
 def timeline(nodes, now=None, width=900, row=22, label=150):

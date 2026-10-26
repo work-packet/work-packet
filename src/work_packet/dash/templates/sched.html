@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% import "_side.html" as sidem with context %}
+{% block title %}Scheduler{% endblock %}
+{% block crumbs %}/ <a href="/sched">scheduler</a>{% endblock %}
+{% block head %}
+<style>
+.sgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.tile .big { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tile .lbl { color: var(--muted); font-size: 12px; }
+.ctl { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.ctl form { display: flex; gap: 6px; align-items: center; }
+.ctl input[type=text] { width: 22ch; }
+.ctl button { white-space: nowrap; }
+svg.bud { display: block; width: 100%; max-width: 760px; height: auto; }
+svg.bud .axis { fill: var(--muted); font: 10px system-ui, sans-serif; }
+svg.bud .frame { stroke: var(--line); fill: none; }
+svg.bud path { fill: none; stroke-width: 1.5; }
+svg.bud .spend { stroke: var(--ink); stroke-width: 2; }
+svg.bud .pace { stroke: var(--muted); stroke-dasharray: 4 3; }
+svg.bud .c-urgent { stroke: var(--FAILED); } svg.bud .c-high { stroke: var(--NEEDS_INPUT); }
+svg.bud .c-normal { stroke: var(--RUNNABLE); } svg.bud .c-low { stroke: var(--SLEEPING); }
+svg.bud .c-background { stroke: var(--unknown); }
+svg.bud .now { stroke: var(--line); stroke-dasharray: 2 2; }
+svg.bud .res { fill: var(--tk-write); opacity: .7; }
+.legend { font-size: 12px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; margin: 4px 0 8px; }
+.legend i { display: inline-block; width: 14px; height: 2px; vertical-align: 3px; margin-right: 4px; }
+td.why { color: var(--muted); }
+tr.go td.why { color: var(--COMPLETED); font-weight: 600; }
+</style>
+<script src="/static/sched.js?v={{ asset_v }}"></script>
+{% endblock %}
+{% block main %}
+<div class="withside">
+{{ sidem.tab(side, None, "sched") }}
+<div>
+<div class="titlebar"><h1>Scheduler</h1>
+{% if snap %}<span class="state {{ 'COMPLETED' if snap.mode.mode == 'run' else 'FAILED' }}">{{ modes[snap.mode.mode]|upper }}</span>
+<span class="muted">backend {{ snap.backend }}</span>{% endif %}</div>
+{% if not snap %}
+<div class="panel err">The scheduler's config cannot be read; <code>wpk sched</code> says why.</div>
+{% else %}
+{% set lim, u = snap.limits, snap.usage %}
+<div class="panel" style="margin-bottom:12px">
+<div class="ctl">
+  {% if snap.mode.mode == "run" %}
+  <form class="act" method="post" action="/sched/mode">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <input type="text" name="reason" placeholder="why (optional)" aria-label="why halt">
+    <button class="go" name="mode" value="halt" title="Running steps finish and commit; nothing new starts">Halt</button>
+  </form>
+  {% else %}
+  <form class="act" method="post" action="/sched/mode">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <button class="go primary" name="mode" value="resume">Resume</button>
+  </form>
+  {% endif %}
+  {% if snap.mode.mode != "stop" %}
+  <form class="act" method="post" action="/sched/mode" data-confirm="Stop now kills every running step; their packets go back to their last commit. Stop?">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <input type="text" name="reason" placeholder="why (required)" required aria-label="why stop">
+    <button class="go" name="mode" value="stop" title="Kill running steps now; their attempts are not counted">Stop now</button>
+  </form>
+  {% endif %}
+  <span class="muted" style="font-size:12px">{% if snap.mode.mode != "run" %}{{ modes[snap.mode.mode]|capitalize }} by {{ snap.mode.by }}{% if snap.mode.at %} at {{ snap.mode.at }}{% endif %}{% if snap.mode.reason %}: {{ snap.mode.reason }}{% endif %}. IDEs stay open.{% else %}Halt lets running steps finish; Stop now kills them.{% endif %}</span>
+</div>
+</div>
+
+<div class="sgrid">
+  <div class="tile"><div class="big">{{ u.cores }}{% if lim.cores %}<span class="muted">/{{ lim.cores }}</span>{% endif %}</div><div class="lbl">cores in use</div></div>
+  <div class="tile"><div class="big">{{ u.jobs }}{% if lim.jobs %}<span class="muted">/{{ lim.jobs }}</span>{% endif %}</div><div class="lbl">jobs{% for k, n in u.by_size|dictsort %} · {{ n }} {{ k }}{% endfor %}</div></div>
+  <div class="tile"><div class="big">{{ snap.queue|selectattr("waiting")|list|length }}</div><div class="lbl">waiting{% if snap.holds %} · {{ snap.holds|length }} project{{ "s" if snap.holds|length != 1 }} on hold{% endif %}</div></div>
+  {% if snap.budget %}{% set w = snap.budget.windows[0] %}
+  <div class="tile"><div class="big">{{ "%.0f"|format(100 * w.spent / snap.budget.amount) if snap.budget.amount else 0 }}%</div><div class="lbl">of the budget spent; pace {{ "%.0f"|format(100 * w.pace / snap.budget.amount) if snap.budget.amount else 0 }}%</div></div>
+  {% endif %}
+</div>
+{% if snap.backend_down %}<div class="flash bad">The batch system is not answering ({{ snap.backend_down.why }}), since {{ snap.backend_down.t }}; submits are retried with backoff.</div>{% endif %}
+{% if lim.grant %}<p class="muted">Limits lowered by a grant from {{ lim.grant.by or "?" }}{% if lim.grant.expires %} until {{ lim.grant.expires }}{% endif %}.</p>{% endif %}
+{% for n in lim.notes %}<p class="muted">{{ n }}</p>{% endfor %}
+
+{% if snap.budget %}
+<h2>Budget</h2>
+<div class="panel">
+<p style="margin:0 0 6px">{{ snap.budget.line }}</p>
+{% if chart %}
+<svg class="bud" viewBox="0 0 {{ chart.w }} {{ chart.h }}" role="img" aria-label="spend against pace and each class's ceiling">
+  <rect class="frame" x="{{ chart.pad }}" y="{{ chart.pad }}" width="{{ chart.w - 2 * chart.pad }}" height="{{ chart.h - 2 * chart.pad }}"></rect>
+  {% for c, d in chart.ceil|dictsort %}<path class="c-{{ c }}" d="{{ d }}"><title>{{ c }}'s ceiling</title></path>{% endfor %}
+  <path class="pace" d="{{ chart.pace }}"><title>pace</title></path>
+  <line class="now" x1="{{ chart.now }}" x2="{{ chart.now }}" y1="{{ chart.pad }}" y2="{{ chart.h - chart.pad }}"></line>
+  <path class="spend" d="{{ chart.spend }}"><title>spent</title></path>
+  {% if chart.reserved %}<rect class="res" x="{{ chart.reserved.x }}" y="{{ chart.reserved.y }}" width="{{ chart.reserved.w }}" height="{{ chart.reserved.h }}"><title>reserved for running steps</title></rect>{% endif %}
+  <text class="axis" x="{{ chart.pad }}" y="{{ chart.h - 10 }}">{{ chart.start }}</text>
+  <text class="axis" x="{{ chart.w - chart.pad }}" y="{{ chart.h - 10 }}" text-anchor="end">{{ chart.end }}</text>
+  <text class="axis" x="{{ chart.pad - 4 }}" y="{{ chart.pad + 4 }}" text-anchor="end">{{ chart.top }}</text>
+</svg>
+<div class="legend"><span><i style="background:var(--ink)"></i>spent</span><span><i style="background:var(--muted)"></i>pace</span>
+  {% for c in ("urgent", "high", "normal", "low", "background") %}<span><i style="background:var(--{{ {'urgent': 'FAILED', 'high': 'NEEDS_INPUT', 'normal': 'RUNNABLE', 'low': 'SLEEPING', 'background': 'unknown'}[c] }})"></i>{{ c }}</span>{% endfor %}
+  <span><i style="background:var(--tk-write);height:8px"></i>reserved</span></div>
+{% endif %}
+<table>
+<tr><th>Class</th><th>Ceiling now</th></tr>
+{% for c in snap.budget.classes %}<tr><td><span class="cls {{ c.class }}">{{ c.class }}</span></td><td>{{ c.line }}</td></tr>{% endfor %}
+</table>
+</div>
+{% endif %}
+
+<h2>Queue</h2>
+{% if snap.queue %}
+<div class="wrap"><table>
+<tr><th class="num">#</th><th>Project</th><th>Packet</th><th>Class</th><th>Size</th><th>Due</th><th>Waiting on</th></tr>
+{% for r in snap.queue %}
+<tr class="{{ 'go' if not r.waiting }}">
+  <td class="num">{{ r.pos }}</td>
+  <td><a href="/p/{{ r.project|urlencode }}">{{ r.project }}</a></td>
+  <td><a href="/p/{{ r.project|urlencode }}/{{ r.wpid }}"><code>{{ r.wpid[:8] }}</code></a>{% if r.next %} <span class="cls high">next</span>{% endif %}</td>
+  <td><span class="cls {{ r['class'] }}" title="from the {{ r.class_from }}">{{ r['class'] }}</span>{% if r.aged != r['class'] %} <span class="muted" title="aged: waiting moves it up">→ {{ r.aged }}</span>{% endif %}</td>
+  <td title="from the {{ r.size_from }}">{{ r.size }}</td>
+  <td>{{ r.due }}</td>
+  <td class="why">{{ r.why }}{% if r.clears_at %} <span class="muted">(until {{ r.clears_at }})</span>{% endif %}</td>
+</tr>
+{% endfor %}
+</table></div>
+{% else %}<p class="muted">Nothing is due.</p>{% endif %}
+
+<h2>Jobs</h2>
+{% if snap.jobs %}
+<div class="wrap"><table>
+<tr><th>Job</th><th>Kind</th><th>State</th><th>Project</th><th>Packet</th><th class="num">Step</th><th>Size</th><th>Submitted</th><th>Started</th></tr>
+{% for j in snap.jobs %}
+<tr><td><code>{{ j.id }}</code></td><td>{{ j.kind }}</td><td>{{ j.state }}{% if j.cancel %} <span class="err">cancelling</span>{% endif %}</td>
+  <td><a href="/p/{{ j.project|urlencode }}">{{ j.project }}</a></td>
+  <td><a href="/p/{{ j.project|urlencode }}/{{ j.wpid }}"><code>{{ j.wpid[:8] }}</code></a></td>
+  <td class="num">{{ j.step }}</td><td>{{ j.size }}</td><td>{{ j.submitted }}</td><td>{{ j.started or "-" }}</td></tr>
+{% endfor %}
+</table></div>
+{% else %}<p class="muted">No jobs.</p>{% endif %}
+{% endif %}
+
+{% set ch = snap.core_hours %}
+{% if ch.by_size %}
+<h2>Core-hours, last 7 days</h2>
+<div class="grid2">
+<table><tr><th>Size</th><th class="num">Jobs</th><th class="num">Core-hours</th><th class="num">CPU-hours</th></tr>
+{% for k, t in ch.by_size|dictsort %}<tr><td>{{ k }}</td><td class="num">{{ t.jobs }}</td><td class="num">{{ "%.2f"|format(t.core_h) }}</td><td class="num">{{ "%.2f"|format(t.cpu_h) }}</td></tr>{% endfor %}</table>
+<table><tr><th>Project</th><th class="num">Jobs</th><th class="num">Core-hours</th><th class="num">CPU-hours</th></tr>
+{% for k, t in ch.by_project|dictsort %}<tr><td>{{ k }}</td><td class="num">{{ t.jobs }}</td><td class="num">{{ "%.2f"|format(t.core_h) }}</td><td class="num">{{ "%.2f"|format(t.cpu_h) }}</td></tr>{% endfor %}</table>
+</div>
+{% if ch.low_cpu %}<p class="muted">{{ ch.low_cpu|length }} multi-core job{{ "s" if ch.low_cpu|length != 1 }} used under 20% of {{ "their" if ch.low_cpu|length != 1 else "its" }} cores (latest: {{ ch.low_cpu[-1].project }} {{ ch.low_cpu[-1].wpid[:8] }}, {{ ch.low_cpu[-1].size }}). Tell the model to use a smaller size until it runs something.</p>{% endif %}
+{% endif %}
+
+<h2>Recent</h2>
+{% if events %}
+<div class="wrap"><table>
+{% for ev in events %}
+<tr><td class="muted" style="white-space:nowrap">{{ ev.t }}</td><td>{{ ev.type }}</td><td class="muted">{{ ev.by }}</td>
+  <td>{% for k, v in ev|dictsort if k not in ("t", "type", "by") and v is not none %}{{ k }} {{ v if v is not string or v|length < 60 else v[:60] ~ "…" }}{{ " · " if not loop.last }}{% endfor %}</td></tr>
+{% endfor %}
+</table></div>
+{% else %}<p class="muted">Nothing yet.</p>{% endif %}
+</div>
+</div>
+{% endblock %}

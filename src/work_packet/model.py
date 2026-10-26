@@ -79,6 +79,13 @@ def run(argv, prompt, cwd, env, timeout_s, transcript_path, stderr_path, parse,
             except ProcessLookupError:
                 pass
             p.wait()
+        except BaseException:       # SIGTERM from the scheduler (Stop now): take it along
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            p.wait()
+            raise
         finally:
             if pid_path:
                 try:

@@ -14,6 +14,10 @@ Runs the behaviour named by ``WPK_FAKE_BEHAVIOR`` (a module in
   bad-resume   resume: every monday
   forgetful    end the turn without writing .pending/, unless nudged
   silent       never write .pending/
+
+Spend knobs (docs/scheduler-plan.md T-c): ``WPK_FAKE_COST`` is the result's
+``total_cost_usd``; ``WPK_FAKE_QUOTA`` is JSON ``{"seven_day": [first, last,
+resets_at], "five_hour": [...]}``, sent as two ``rate_limit_event``s.
 """
 
 import argparse
@@ -84,6 +88,11 @@ def main():
     hooked = post_tool_use(args.settings)
     if hooked:
         emit({"type": "user", "session_id": args.session_id, "fake_hook_context": hooked})
+    quota = json.loads(os.environ.get("WPK_FAKE_QUOTA") or "{}")
+    for i in (0, 1):
+        if quota:
+            emit({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
+                name: {"utilization": v[i], "resetsAt": v[2]} for name, v in quota.items()}}})
     usage = {"input_tokens": 10, "cache_creation_input_tokens": 1000,
              "cache_read_input_tokens": 9000, "output_tokens": 50}
     for i in range(2):
@@ -93,7 +102,8 @@ def main():
                   "content": [{"type": "text", "text": text}]}})
     emit({"type": "result", "subtype": "error_during_execution" if fault == "error" else "success",
           "is_error": fault == "error", "session_id": args.session_id, "num_turns": 2,
-          "duration_ms": 1234, "total_cost_usd": 0.0012, "result": text,
+          "duration_ms": 1234, "total_cost_usd": float(os.environ.get("WPK_FAKE_COST") or 0.0012),
+          "result": text,
           "usage": {"input_tokens": 1500, "output_tokens": 120}})
     return 0
 

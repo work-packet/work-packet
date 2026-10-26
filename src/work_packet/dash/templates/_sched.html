@@ -1,0 +1,68 @@
+{#- Scheduling on the project and packet pages (docs/scheduler.md §9). Each form
+    posts to one control (sched/control.py). -#}
+{% macro select(name, opts, cur, blank) -%}
+<select name="{{ name }}" aria-label="{{ blank }}">
+  <option value="">{{ blank }}</option>
+  {% for o in opts %}<option value="{{ o }}"{{ " selected" if o == cur }}>{{ o }}</option>{% endfor %}
+</select>
+{%- endmacro %}
+
+{% macro packet_panel(e, wpid, sch, classes) -%}
+{% set base = "/p/" ~ (e.name|urlencode) ~ "/" ~ wpid %}
+<div class="panel" id="sched" style="margin-bottom:12px">
+  <h2 style="margin-top:0">Scheduling</h2>
+  <p style="margin:0 0 8px"><span class="cls {{ sch.cls }}">{{ sch.cls }}</span>
+    <span class="muted">{{ "its own class" if sch.cls_from == "packet" else "the project's class" if sch.cls_from == "project" else "the default class" }}</span>
+    · size <strong>{{ sch.size }}</strong>
+    {% if sch.next %}· <span class="cls high">runs next</span>{% endif %}
+    {% if sch.job %}· job <code>{{ sch.job.id }}</code> {{ sch.job.state|lower }}{% endif %}</p>
+  {% if sch.row %}<p style="margin:0 0 8px">{% if sch.row.waiting %}Waiting on: {{ sch.row.why }}{% if sch.row.clears_at %} <span class="muted">(until {{ sch.row.clears_at }})</span>{% endif %}{% else %}<strong>Starts next</strong>{% endif %} · <span class="muted">#{{ sch.row.pos }} in the <a href="/sched">queue</a></span></p>{% endif %}
+  <div class="row">
+    <form class="act row" method="post" action="{{ base }}/prio" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      {{ select("value", classes, sch.own_cls, "the project's class") }}<button class="mini">Set class</button>
+    </form>
+    {% if sch.sizes|length > 1 %}
+    <form class="act row" method="post" action="{{ base }}/size" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      {{ select("value", sch.sizes, sch.own_size, "the project's size") }}<button class="mini">Set size</button>
+    </form>{% endif %}
+    <form class="act" method="post" action="{{ base }}/next" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      {% if sch.next %}<button class="mini" name="value" value="off">Not next</button>{% else %}<button class="mini" title="Put it at the head of the line for its next step, once">Run next</button>{% endif %}
+    </form>
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro project_panel(e, sch, classes) -%}
+{% set base = "/p/" ~ (e.name|urlencode) %}
+<h2 id="sched">Scheduling</h2>
+<div class="panel">
+  <p style="margin:0 0 8px"><span class="cls {{ sch.cls }}">{{ sch.cls }}</span>
+    {% if sch.size %}· size <strong>{{ sch.size }}</strong>{% endif %}
+    · {{ sch.cores }} core{{ "s" if sch.cores != 1 }} in use{% if sch.jobs %}, {{ sch.jobs|length }} job{{ "s" if sch.jobs|length != 1 }}{% endif %}
+    · {{ sch.queue|length }} due{% if sch.queue|selectattr("waiting")|list %}, {{ sch.queue|selectattr("waiting")|list|length }} waiting{% endif %}</p>
+  {% if sch.hold %}<p class="err" style="margin:0 0 8px">On hold{% if sch.hold_by %} by {{ sch.hold_by }}{% endif %}{% if sch.hold_at %} at {{ sch.hold_at }}{% endif %}{% if sch.hold_reason %}: {{ sch.hold_reason }}{% endif %}. Nothing new starts here; packets keep their state.</p>{% endif %}
+  <div class="row">
+    <form class="act row" method="post" action="{{ base }}/prio" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      {{ select("value", classes, sch.own_cls, "normal (default)") }}<button class="mini">Set class</button>
+    </form>
+    {% if sch.sizes|length > 1 %}
+    <form class="act row" method="post" action="{{ base }}/size" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      {{ select("value", sch.sizes, sch.size, "the default size") }}<button class="mini">Set size</button>
+    </form>{% endif %}
+    <form class="act row" method="post" action="{{ base }}/hold" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      {% if sch.hold %}<button class="mini" name="value" value="release">Release</button>
+      {% else %}<input type="text" name="reason" placeholder="why (optional)" aria-label="why hold" style="width:16ch"><button class="mini" title="Start nothing in this project; its packets keep their state">Hold</button>{% endif %}
+    </form>
+  </div>
+  {% if sch.queue %}
+  <table style="margin-top:8px">
+  {% for r in sch.queue %}<tr><td><a href="/p/{{ e.name|urlencode }}/{{ r.wpid }}"><code>{{ r.wpid[:8] }}</code></a></td><td><span class="cls {{ r['class'] }}">{{ r['class'] }}</span></td><td>{{ r.size }}</td><td class="muted">{{ r.why }}</td></tr>{% endfor %}
+  </table>{% endif %}
+</div>
+{%- endmacro %}

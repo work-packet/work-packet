@@ -63,6 +63,11 @@ def now():
     return datetime.now(timezone.utc).replace(microsecond=0)
 
 
+def real_now():
+    """Wall-clock time, ignoring ``WPK_NOW``: for leases between processes."""
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
 def parse_resume(expr):
     """Parse a ``resume:`` value. Raises ResumeError with a message for a person."""
     if not isinstance(expr, str):

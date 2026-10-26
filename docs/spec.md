@@ -28,10 +28,19 @@ expression is resolved (§5) or a time is shown to a person.
 ~/.work-packet/
   config.toml           global defaults (§2.1)
   projects/<name>.toml  registry: one file per project (§2.2)
+  projects/.<name>.lock held while the entry is rewritten (§2.2)
+  boards/<name>.toml    a board of the dash, other than main (§2.3)
+  wpkd.lease            the one wpkd of this home: {host, pid, started, expires}; O_EXCL,
+                        refreshed every 30 s, taken over 90 s after its last refresh or at
+                        once if it names a dead PID on the taker's host
+  events.jsonl          a symlink to the current month's sched/events-YYYY-MM.jsonl
+  sched/                the scheduler's state (§2.4)
+  run/wpkd.sock         the board, with [server] listen = "unix" (directory 0700)
+  log/wpkd.log          wpk serve --detach's output
 ```
 
-`templates/`, `events.jsonl`, `runner.lock` and `runner.sock` are reserved
-(`docs/runner.md`); Stage 1 does not create them.
+`templates/` is reserved (`docs/runner.md`). `runner.lock`, which an older
+wpkd held with `flock`, is no longer used.
 
 ### 2.1 `config.toml`
 
@@ -57,6 +66,30 @@ profile; a value written in `config.toml` or `project.toml` wins over it.
 A **duration** is a string `<int><unit>`, unit `s`, `m` or `h`: `90s`,
 `20m`, `2h`.
 
+`[sched]`: the scheduler (docs/scheduler.md §10). All keys are optional.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `backend` | string | `local` | `local`, `slurm` or `lsf`: where steps run |
+| `cores`, `jobs` | int ≥ 0 | 0 | pool limits; every job's size counts, pending ones too. 0 cores: no limit; 0 jobs: `max_concurrent` |
+| `mem` | memory | none | pool memory limit |
+| `default_size` | name | `look` | the size a step gets when nothing names one |
+| `spare_size` | name | `look` | a `background` step starts only if one job of this size would still fit |
+| `backfill_for` | duration | `10m` | smaller jobs may start past a waiting bigger one until it has waited this long |
+| `age_after` | duration | `4h` | a due packet moves up one class per this much waiting, up to `high` |
+| `max_pending` | duration | `30m` | a job pending longer is reported (`pending_long`) |
+| `poll` | duration | backend's | how often to poll the backend (local 0.25 s) |
+| `tz` | IANA zone | host's | |
+| `start_mode` | string | `run` | `run` or `drain`: the mode when `sched/control.toml` is missing |
+| `node_env` | string | empty | put in front of the step command on a compute node |
+| `[sched.sizes.<name>]` | table | `look` = 1 cpu, 4G | a job shape: `cpus` (int ≥ 1, required), `mem`, `time` (run limit; default the step timeout), `partition`, `queue`, `extra` (list of batch arguments). Tables merge over the default, so adding `sim` keeps `look` |
+| `[sched.budget]` | table | none | the budget (docs/scheduler.md §4): `measure` (`usd`, `tokens` or `quota`; empty: no budget), `amount` (dollars, tokens, or the share of the quota window, such as 0.6), `period` (`day`, `week` from Monday, `month`, in `tz`; ignored for `quota`, which uses the 7-day and 5-hour windows), `slack` (share of `amount`, 0.1), `hard_cap` (`urgent`'s ceiling; 0: `amount`), `default_step` (an estimate without history; 0: $0.50, 2M tokens, 0.5%), `cache_read_weight` (0.1), `stale_after` (`6h`: a quota reading older than this admits only `high` and `urgent` while a step runs), `tz`, `[shape]` (`weekday` = 7 weights from Monday, `hour` = 24 weights: pace follows them) |
+| `[sched.slurm]` | table | none | flags for every job: `partition`, `account`, `extra` (list), `bin` (where `sbatch` and the rest are; empty: PATH), `poll` (duration, default 15 s) |
+| `[sched.lsf]` | table | none | the same for LSF: `queue`, `project` (`-P`), `extra`, `bin`, `poll` |
+| `[sched.ide]` | table | none | web VS Code in a slot (docs/scheduler.md §8): `slot` (bool; default true with a batch backend), `reserve` (a size agents never take; empty: none), `run_limit` (duration) |
+
+A **memory** size is `<int>[K|M|G|T]`; a bare number is megabytes.
+
 ### 2.2 Registry entry: `projects/<name>.toml`
 
 | Key | Type | Required | Meaning |
@@ -66,9 +99,62 @@ A **duration** is a string `<int><unit>`, unit `s`, `m` or `h`: `90s`,
 | `root` | WPID | yes | the project's root packet |
 | `created` | timestamp | yes | |
 | `template` | string | no | `<template>@<version>`, e.g. `blank@1` |
+| `board` | name | no | the dash board the project is on; absent, or a board that does not exist, is `main` (§2.3) |
+| `priority` | class | no | the project's class: `urgent`, `high`, `normal` (default), `low`, `background` (docs/scheduler.md §3) |
+| `size` | name | no | the project's default job size (a `[sched.sizes]` name; an unknown one is ignored with a note) |
+| `sched` | string | no | `run` (default) or `hold`: hold starts nothing in the project; `sched_by`, `sched_at`, `sched_reason` say who held it, when and why |
+| `[packets.<WPID>]` | table | no | one packet's scheduling: `priority`, `size`, `next` (true: run next, once; the scheduler clears it) |
 
 A **name** matches `[a-z0-9][a-z0-9_-]{0,63}`.
 
+Every change to an entry goes through `registry.update`: it takes
+`projects/.<name>.lock` (`O_EXCL`, waiting up to 5 s; a lock older than
+30 s is taken over), rereads, changes, validates and writes the file
+atomically, so the board and the CLI never lose each other's change.
+
+### 2.3 Board: `boards/<name>.toml`
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | name | yes | equals the file stem; never `main` |
+| `created` | timestamp | yes | |
+| `title` | string | no | |
+
+`main` is the default board: it has no file and cannot be deleted. Deleting
+a board moves its projects to `main` (`docs/boards.md`).
+
+### 2.4 The scheduler's files: `sched/`
+
+Written only by wpkd's dispatcher and by the controls in
+`sched/control.py` (docs/scheduler.md §6), each atomically.
+
+| File | Written by | Holds |
+|---|---|---|
+| `control.toml` | `wpk sched halt\|stop\|resume`, the board | `mode` (`run`, `drain`, `stop`), `by`, `at`, `reason`. Missing: `[sched] start_mode` |
+| `jobs/<id>.json` | the dispatcher | one per job it submitted and has not reaped: `id`, `backend`, `ref` (the backend's job ID; local: `<pid>:<start ticks>`), `kind` (`step`, `ide`), `project`, `wpid`, `path`, `by`, `cls`, `size`, `cpus`, `mem_mb`, `step`, `submitted`, `started`, `state` (`PENDING`, `RUNNING`), `lost`, `estimate`, `log`, `cancel`, `cancel_why`, `pending_long` |
+| `jobs/<id>.log` | the job | the step's stderr; removed with the record |
+| `lost/<WPID>.json` | Stop now, the reaper | `wpid`, `reason`, `by`, `t`, `step`: the packet's last attempt was ended by the scheduler or the farm, so its next launch passes `wpk step --lost REASON`. Removed when that launch is submitted |
+| `grant.toml` | a front door (docs/scheduler.md §14), or by hand | `cores`, `mem`, `jobs`, `[budget] amount`, `by`, `expires`: limits that lower the config's, never raise them. Read every pass; once expired it is ignored, with one `grant_expired` event |
+| `grant-expired` | the dispatcher | the `expires` of the last expired grant reported |
+| `spend.json` | the dispatcher | the budget as of the last fill: windows, spent, reserved, pace, each class's ceiling. For readers; rebuilt every fill |
+| `gated.json` | the dispatcher | per window, the period and the classes already gated in it (one `gate` event each) |
+| `events-YYYY-MM.jsonl` | the dispatcher, the controls | one JSON object per line (below) |
+
+A **principal** is `<scheme>:<name>`: `unix:<login>` from the CLI and the
+board's loopback listener, `tailscale:<login>` from its tailnet listener.
+Every control, event and job record carries one in `by`; what wpkd does on
+its own is `by = "wpkd"`.
+
+**Events**: `{"t", "type", "by", ...}`. Types: `mode` (`mode`, `was`,
+`reason`), `hold` (`project`, `sched`), `prio` (`project`, `wpid`, `cls`,
+`was`), `size` (`project`, `wpid`, `size`, `was`), `next`, `submitted`
+(`job`, `ref`, `project`, `wpid`, `step`, `cls`, `aged`, `size`, `lost`,
+`estimate`), `started`, `finished` (`job`, `kind`, `project`, `wpid`,
+`step`, `size`, `cpus`, `code`, `submitted`, `started`, `end`, `cpu_s`,
+`cancelled`, `lost`), `lost` (`why`), `cancelled` (`job`, `why`, `state`),
+`pending_long`, `gate`, `backend_down`, `backend_up`, `adopted`,
+`wpkd_start`, `wpkd_stop`, `grant_expired`, `cap`. Readers ignore types and
+fields they do not know.
 ## 3. Project directory
 
 ```
@@ -102,6 +188,10 @@ A **name** matches `[a-z0-9][a-z0-9_-]{0,63}`.
 | `step_timeout`, `max_attempts`, `step_budget_usd`, `step_context_tokens`, `carry_session`, `carry_ttl`, `carry_factor` | as §2.1 | no | override `config.toml` |
 | `[permissions]` | table | no | see below |
 | `[setup]` | table | no | what the setup should contain: `[[setup.repo]]`, `[[setup.input]]`, `[[setup.link]]`, `[[setup.smoke]]`, `smoke_timeout` (docs/setup.md §4). Ignored by the executor |
+| `sizes` | list of names | `[default_size]` | the job sizes this project's steps may ask for with `size:` (§4.2); `wpk set sizes=look,sim` |
+| `weight` | number > 0 | 1 | fair share between projects of a class (docs/scheduler.md §3.3) |
+| `max_cores` | int ≥ 0 | 0 | the most cores the project's jobs may hold at once; 0: no limit |
+| `budget_usd_per_day`, `budget_quota_per_week`, `max_steps_per_hour` | number ≥ 0 (the last an int) | 0 | caps (docs/scheduler.md §4.5), also settable in `config.toml`: dollars the project spends per local day, share of the weekly quota per 7 days, steps per packet per hour. A packet over one is paused with `reason` naming the cap and the figures (`limit: …`, `HELD`/`limit` once L1 lands); 0: no cap |
 
 `[permissions]`:
 
@@ -166,6 +256,7 @@ present, unknown keys are errors.
 | `model` | string | model for the next step; a step may change it, and `wpk set model=` may (§3.1) |
 | `reason` | string or null | required when `NEEDS_INPUT` (the question), `PAUSED` or `FAILED` |
 | `updated` | timestamp | when the executor last wrote this file |
+| `next_size` | name | optional: the job size the last committed memento asked for with `size:` (§4.2), for the next step only; the next commit replaces or removes it |
 
 `NEEDS_INPUT` means the last step asked a question (`ask:`, §4.2) and the
 packet waits for a hand-off (`wpk handoff`); nothing runs it until then.
@@ -206,6 +297,7 @@ instruction for the next step.
 | `ask` | non-empty string, or a list of questions (docs/interaction.md §2: `id`, `q`, optional `recommend`, `choices`, `grants`) | no | questions for the owner: the step commits as `NEEDS_INPUT` with this as `reason`, whatever `resume` says; `resume` is kept in `resume_expr` as a record |
 | `spawn` | list of spawn entries | no | children to create (§6) |
 | `item` | string, number or a list of them | no | the plan item this step worked on (such as `2a`); it only labels the step for `wpk stats --by item` and the board. Missing or malformed is never an error: the step is just not charged to an item. A failed attempt is charged to its own pending memento's item, else to the item its step committed |
+| `size` | name | no | the job size for the next step only (docs/scheduler.md §5.2): one of the project's `sizes` (§3.1), else the memento is refused like any bad one. Committed as `next_size` in `status.md` |
 
 A spawn entry:
 
@@ -251,7 +343,7 @@ a warning, not an error; the executor ignores it.
 | `type` | Written when | Further required keys |
 |---|---|---|
 | `step-start` | after the lease is taken | `step`, `attempt`, `model`, `session_id` |
-| `step-failed` | an attempt ends without committing | `step`, `attempt`, `why`; `run`, the folder's number (§4.4), since it was added |
+| `step-failed` | an attempt ends without committing | `step`, `attempt`, `why`; `run`, the folder's number (§4.4), since it was added; `counted: false` when the scheduler ended it (Stop now, a farm preemption: `wpk step --lost`), and `attempts` was not raised |
 | `step-nudge` | the model's turn ended with `.pending/` incomplete; the session is resumed once | `step`, `attempt`, `why` |
 | `commit-begin` | before any committed file changes | `step`, `decision` (below) |
 | `commit-end` | after every committed file is in place | `step`; optional `cost_usd`, `tokens`, `duration_s` |

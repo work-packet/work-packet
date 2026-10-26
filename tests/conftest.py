@@ -123,3 +123,69 @@ def fake(monkeypatch, tmp_path):
         else:
             monkeypatch.delenv("WPK_FAKE_FAULT", raising=False)
     return use
+
+
+# --- the scheduler (docs/scheduler-plan.md T-b) ------------------------------------
+
+class FakeLocal:
+    """A backend that starts nothing until the test says so: ``start(ref)``,
+    ``finish(ref, code)``, ``lose(ref, why)``. Jobs pend until started."""
+    name = "local"
+    poll_s = 0.05
+    holds_room_while_pending = True
+
+    def __init__(self):
+        self.jobs = {}                 # ref -> {"task", "state", "code", "why"}
+        self.cancelled = []
+        self.n = 0
+
+    def submit(self, task):
+        self.n += 1
+        ref = "f%d" % self.n
+        self.jobs[ref] = {"task": task, "state": "PENDING", "code": None, "why": None}
+        return ref
+
+    def poll(self, refs):
+        from work_packet.sched.backends import JobState
+        out = {}
+        for r in refs:
+            j = self.jobs.get(r)
+            if j is None:
+                out[r] = JobState("DONE")
+            elif j["state"] == "LOST":
+                out[r] = JobState("LOST", reason=j["why"], counted=False)
+            else:
+                out[r] = JobState(j["state"], code=j["code"])
+        return out
+
+    def cancel(self, ref, hard=False):
+        self.cancelled.append((ref, hard))
+        j = self.jobs.get(ref)
+        if j is not None and j["state"] in ("PENDING", "RUNNING"):
+            j.update(state="DONE", code=None if j["state"] == "PENDING" else -15)
+
+    def list_ours(self):
+        return {}
+
+    def running(self):
+        return [r for r, j in self.jobs.items() if j["state"] == "RUNNING"]
+
+    def close(self):
+        pass
+
+    def start(self, ref):
+        self.jobs[ref]["state"] = "RUNNING"
+
+    def finish(self, ref, code=0):
+        self.jobs[ref].update(state="DONE", code=code)
+
+    def lose(self, ref, why="preempted"):
+        self.jobs[ref].update(state="LOST", why=why)
+
+    def tasks(self):
+        return [j["task"] for j in self.jobs.values()]
+
+
+@pytest.fixture
+def fakelocal():
+    return FakeLocal()

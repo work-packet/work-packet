@@ -18,6 +18,6 @@ $children
 
 $state
 
-$agent_md## Instruction for this step
+$agent_md$sizes## Instruction for this step
 
 $instruction

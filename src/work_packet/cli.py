@@ -33,9 +33,25 @@ def _outcome(out) -> int:
     return out.code
 
 
+class Terminated(BaseException):
+    """SIGTERM: the scheduler cancelled this step (Stop now, a farm limit)."""
+
+
+def _on_term(signum, frame):
+    import signal
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)   # once: let the unwinding finish
+    raise Terminated()
+
+
 def cmd_step(args) -> int:
+    import signal
     from . import executor
-    return _outcome(executor.step(args.target, force=args.force))
+    signal.signal(signal.SIGTERM, _on_term)     # unwind: kill the model, free the lease
+    try:
+        return _outcome(executor.step(args.target, force=args.force, lost=args.lost))
+    except Terminated:
+        print("wpk: step stopped (SIGTERM)", file=sys.stderr)
+        return 128 + signal.SIGTERM
 
 
 def cmd_recover(args) -> int:
@@ -118,6 +134,33 @@ def cmd_rm(args) -> int:
         return _err("no registered project named %r" % args.name)
     registry.unregister(args.name)
     print("Removed %s from the registry; its files are untouched" % args.name)
+    return 0
+
+
+def cmd_board(args) -> int:
+    """Boards of the dash (docs/boards.md)."""
+    from . import registry
+    try:
+        if args.op == "new":
+            registry.new_board(args.name, args.title)
+            print("Made board %s" % args.name)
+        elif args.op == "rm":
+            moved = registry.delete_board(args.name)
+            print("Deleted board %s%s" % (args.name, "; moved %s to %s" % (
+                ", ".join(moved), registry.DEFAULT_BOARD) if moved else ""))
+        elif args.op == "move":
+            was = registry.move(args.name, args.board)
+            print("%s is on %s already" % (args.name, args.board) if was == args.board else
+                  "Moved %s from %s to %s" % (args.name, was, args.board))
+        else:
+            bs = registry.boards()
+            on = [b["name"] for b in bs]
+            es = registry.entries()
+            for b in bs:
+                ps = [e["name"] for e in es if registry.board_of(e, on) == b["name"]]
+                print("%-20s %s" % (b["name"], ", ".join(ps) or "-"))
+    except registry.BoardError as e:
+        return _err(str(e))
     return 0
 
 
@@ -204,7 +247,16 @@ def cmd_admin(args) -> int:
         out = executor.admin(Packet(p.path), op, note=note)
         print("wpk: %s" % out.msg, file=sys.stderr)
         code = max(code, out.code)
+        if op == "pause" and out.code == 0:
+            _cancel_pending(p.wpid)
     return code
+
+
+def _cancel_pending(wpid):
+    """A paused packet's job that is still waiting in the batch queue is withdrawn."""
+    from .sched import authz, control
+    for r in control.cancel_pending(wpid, authz.principal_cli()):
+        print("wpk: cancelled its pending job %s" % r.id, file=sys.stderr)
 
 
 def _setup_guard(pkts):
@@ -662,6 +714,81 @@ def cmd_tick(args) -> int:
     return 0
 
 
+def cmd_sched(args) -> int:
+    """``wpk sched``: the pool, its queue and its controls (docs/scheduler.md §6.4)."""
+    import json
+    from . import registry
+    from .sched import authz, control, explain
+    by = authz.principal_cli()
+    op = args.op or "show"
+    if op in ("halt", "stop", "resume"):
+        mode = {"halt": "drain", "stop": "stop", "resume": "run"}[op]
+        return _outcome(control.set_mode(mode, by, args.message))
+    if op == "doctor":
+        from .sched import doctor
+        try:
+            checks = doctor.run(probe=not args.no_probe)
+        except registry.ConfigError as e:
+            return _err(str(e))
+        for c in checks:
+            print("  %s %s" % (MARK.get(c.level, "?"), c.title))
+            if c.detail and c.level != "ok":
+                print("      " + c.detail)
+            for f in c.fix:
+                print("      $ " + f)
+        return 1 if any(c.level == "missing" for c in checks) else 0
+    if op in ("hold", "release"):
+        if not args.project:
+            return _err("wpk sched %s needs a project" % op)
+        if op == "hold":
+            return _outcome(control.hold(args.project, by, args.message))
+        return _outcome(control.release(args.project, by))
+    try:
+        snap = explain.snapshot()
+    except registry.ConfigError as e:
+        return _err(str(e))
+    if op == "jobs":
+        if args.json:
+            print(json.dumps(snap["jobs"], indent=2))
+            return 0
+        if not snap["jobs"]:
+            print("no jobs")
+        for j in snap["jobs"]:
+            print("%-12s %-5s %-8s %-10s %s  step %-4s %-5s %s  submitted %s%s" % (
+                j["id"], j["kind"], j["state"], j["project"], j["wpid"][:8], j["step"],
+                j["size"], j["ref"] or "-", j["submitted"],
+                "  cancelling since %s" % j["cancel"] if j["cancel"] else ""))
+        return 0
+    if args.json:
+        print(json.dumps(snap, indent=2))
+        return 0
+    for line in explain.lines(snap):
+        print(line)
+    return 0
+
+
+def cmd_prio(args) -> int:
+    from .sched import authz, control
+    by = authz.principal_cli()
+    if args.next:
+        return _outcome(control.run_next(args.target, by))
+    if args.clear:
+        return _outcome(control.set_prio(args.target, None, by))
+    if not args.cls:
+        return _err("give a class (urgent, high, normal, low, background), --clear or --next")
+    return _outcome(control.set_prio(args.target, args.cls, by))
+
+
+def cmd_size(args) -> int:
+    from .sched import authz, control
+    by = authz.principal_cli()
+    if args.clear:
+        return _outcome(control.set_size(args.target, None, by))
+    if not args.size:
+        return _err("give a size from [sched.sizes], or --clear")
+    return _outcome(control.set_size(args.target, args.size, by))
+
+
 def cmd_dash(args) -> int:
     try:
         from .dash.server import Board, ServeError
@@ -688,7 +815,7 @@ def cmd_dash(args) -> int:
         try:
             runner.acquire()
         except RunnerBusy as e:
-            return _err("%s; is another `wpk dash --run` up?" % e)
+            return _err("%s; is another `wpk dash --run` or `wpk serve` up?" % e)
 
     def ready(board):
         for url in board.urls["loopback"]:
@@ -753,6 +880,52 @@ def cmd_ide(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    """``wpk serve``: wpkd, the board and the scheduler in one process
+    (docs/scheduler.md §7.1). ``--detach`` starts it in the background with its
+    log in ``$WPK_HOME/log/wpkd.log``; ``--ensure`` does that only if no wpkd
+    holds this home's lease, so cron can run it every few minutes."""
+    import subprocess
+    import time
+    from . import registry
+    from .sched import home_lease
+    h = registry.home()
+    held = home_lease.live(h)
+    if args.ensure and held:
+        print("wpk: wpkd is running (host %s, pid %s)" % (held.get("host"), held.get("pid")),
+              file=sys.stderr)
+        return 0
+    if args.detach or args.ensure:
+        if held:
+            return _err("wpkd is already running for %s: host %s, pid %s" % (
+                h, held.get("host"), held.get("pid")))
+        logdir = os.path.join(h, "log")
+        os.makedirs(logdir, exist_ok=True)
+        argv = [sys.executable, "-m", "work_packet", "serve"]
+        if args.port is not None:
+            argv += ["--port", str(args.port)]
+        if args.jobs:
+            argv += ["-j", str(args.jobs)]
+        with open(os.path.join(logdir, "wpkd.log"), "ab") as log:
+            p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                 start_new_session=True)
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            got = home_lease.live(h)
+            if got and got.get("pid") == p.pid:
+                print("wpk: wpkd started (pid %d); log in %s" % (
+                    p.pid, os.path.join(logdir, "wpkd.log")), file=sys.stderr)
+                return 0
+            if p.poll() is not None:
+                return _err("wpkd exited with %s; see %s" % (
+                    p.returncode, os.path.join(logdir, "wpkd.log")))
+            time.sleep(0.1)
+        return _err("wpkd (pid %d) did not take the home's lease; see %s" % (
+            p.pid, os.path.join(logdir, "wpkd.log")))
+    args.run, args.host, args.tailnet = True, None, None
+    return cmd_dash(args)
+
+
 def cmd_url(args) -> int:
     try:
         from .dash.server import read_state
@@ -761,9 +934,14 @@ def cmd_url(args) -> int:
         return _err("wpk url needs the dash extra: pip install 'work-packet[dash]' (%s)" % e)
     st = read_state(registry.home())
     if st is None:
-        return _err("the board is not running (start it with `wpk dash`)")
+        return _err("the board is not running (start it with `wpk dash` or `wpk serve`)")
+    if st.get("sock"):
+        from .dash.server import ssh_line
+        print("# on your laptop, then open http://localhost:%d/" % st.get("port", 7878))
+        print(ssh_line(registry.home(), st.get("port", 7878)))
     for url in st.get("urls", []):
-        print(url)
+        if not st.get("sock") or not url.startswith("http://localhost"):
+            print(url)
     return 0
 
 
@@ -808,6 +986,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("rm", help="remove a project from the registry (files are kept)")
     p.add_argument("name")
     p.set_defaults(func=cmd_rm)
+
+    p = sub.add_parser("board", help="list, make or delete the dash's boards, or move a "
+                       "project to one", description="With no operation, list the boards "
+                       "and their projects. Deleting a board moves its projects to main.")
+    bsub = p.add_subparsers(dest="op", metavar="<op>")
+    bp = bsub.add_parser("list", help="each board and its projects")
+    bp = bsub.add_parser("new", help="make a board")
+    bp.add_argument("name")
+    bp.add_argument("--title", help="a longer name, shown on the board")
+    bp = bsub.add_parser("rm", help="delete a board; its projects move to main")
+    bp.add_argument("name")
+    bp = bsub.add_parser("move", help="put a project on a board")
+    bp.add_argument("name", help="the project")
+    bp.add_argument("board")
+    p.set_defaults(func=cmd_board)
 
     p = sub.add_parser("ps", help="list packets of registered projects")
     p.add_argument("--all", action="store_true", help="include finished projects")
@@ -999,6 +1192,44 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project", help="only this project")
     p.set_defaults(func=cmd_tick)
 
+    p = sub.add_parser("sched", help="the pool: its queue with reasons, and halt, stop, "
+                       "resume, hold", description="Without an operation: the pool's mode, "
+                       "what its jobs hold, and every due packet in the order it would start, "
+                       "with what holds it back (docs/scheduler.md §6). halt: running steps "
+                       "finish, nothing new starts. stop: running steps are killed and their "
+                       "attempts not counted (needs -m). resume: run again. hold/release: "
+                       "start nothing in one project. jobs: each job record. doctor: can this pool run "
+                       "steps (batch commands, a probe job: shared file system, wpk and claude "
+                       "on a node, clock skew)?")
+    p.add_argument("op", nargs="?", choices=("show", "halt", "stop", "resume", "hold",
+                                             "release", "jobs", "doctor"))
+    p.add_argument("--no-probe", action="store_true",
+                   help="doctor: do not submit the probe job")
+    p.add_argument("project", nargs="?", help="hold, release: the project")
+    p.add_argument("-m", "--message", help="why (shown on the board)")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p.set_defaults(func=cmd_sched)
+
+    p = sub.add_parser("prio", help="set the priority class of a project or packet",
+                       description="Classes, highest first: urgent, high, normal (the "
+                       "default), low, background. A packet without its own class has its "
+                       "project's (docs/scheduler.md §3).")
+    p.add_argument("target", help="project name, or a packet (WPID prefix)")
+    p.add_argument("cls", nargs="?", metavar="CLASS")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--clear", action="store_true", help="back to the project's (or normal)")
+    g.add_argument("--next", action="store_true", help="run this packet next, once")
+    p.set_defaults(func=cmd_prio)
+
+    p = sub.add_parser("size", help="set the job size of a project or packet",
+                       description="The job a step runs in: a size from [sched.sizes] in "
+                       "config.toml (docs/scheduler.md §5.2). A memento's size: wins for "
+                       "one step.")
+    p.add_argument("target", help="project name, or a packet (WPID prefix)")
+    p.add_argument("size", nargs="?")
+    p.add_argument("--clear", action="store_true", help="back to the project's (or the default)")
+    p.set_defaults(func=cmd_size)
+
     p = sub.add_parser("dash", help="serve the web board",
                        description="Serve the board: every registered project by state, "
                        "with packet trees, timelines and step transcripts, and forms to create, "
@@ -1017,6 +1248,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-j", "--jobs", type=int, help="with --run: steps at once "
                    "(default: max_concurrent)")
     p.set_defaults(func=cmd_dash)
+
+    p = sub.add_parser("serve", help="run wpkd: the board and the scheduler, in one process",
+                       description="The same as `wpk dash --run`, for a login node or a "
+                       "server: with [server] listen = \"unix\" the board is on "
+                       "$WPK_HOME/run/wpkd.sock, reached with `ssh -L` (`wpk url` prints "
+                       "the line). One wpkd per home, by $WPK_HOME/wpkd.lease, across hosts "
+                       "that share the home (docs/scheduler.md §7.1).")
+    p.add_argument("--detach", action="store_true",
+                   help="start in the background; log in $WPK_HOME/log/wpkd.log")
+    p.add_argument("--ensure", action="store_true",
+                   help="start in the background unless a wpkd already runs (for cron)")
+    p.add_argument("--port", type=int, help="port (default [server] port, 7878)")
+    p.add_argument("-j", "--jobs", type=int, help="steps at once (default: the pool's jobs)")
+    p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("ide", help="open a packet or a work folder in VS Code",
                        description="Write or refresh the packet's VS Code workspace and print "
@@ -1043,6 +1288,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("target", help="WPID (or unique prefix), project name, or a packet or project directory")
     p.add_argument("--force", action="store_true",
                    help="run even if the packet is not due or not RUNNABLE")
+    p.add_argument("--lost", metavar="REASON",
+                   help="the scheduler ended the last attempt (Stop now, the farm took "
+                   "the slot): if it is unfinished, record it without counting it")
     p.set_defaults(func=cmd_step)
 
     p = sub.add_parser("recover", help="finish or clean up a crashed step; run no model")

@@ -268,6 +268,11 @@ Then hand it off again, or leave it held.
 
 ## 4. The runner daemon
 
+> Superseded in part by docs/scheduler.md: the loop is now its dispatcher
+> (slots, classes, sizes, budget), one per home is `wpkd.lease` rather than
+> the `runner.lock` flock, and the per-project limits are its §4.5 caps.
+> The daemon is `wpk serve` (docs/server.md §6).
+
 `wpk runner` runs in the foreground; the systemd user unit runs it in the
 background. It is `wpk tick` in a loop, plus what a loop needs:
 

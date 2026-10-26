@@ -7,8 +7,13 @@
   btn.onclick = function () { on = !on; try { localStorage.setItem("wpk-live", on ? "on" : "off"); } catch (e) {} show(); };
   show();
   // A form being filled in is never swapped out from under you.
-  document.addEventListener("input", function (e) { if (e.target.form) e.target.form.dataset.dirty = "1"; });
+  // (A search box's form, data-filter, is not: packets.js puts its choices back.)
+  document.addEventListener("input", function (e) {
+    var f = e.target.form;
+    if (f && !f.hasAttribute("data-filter")) f.dataset.dirty = "1";
+  });
   function busy() {
+    if (document.documentElement.classList.contains("wpk-dragging")) return true;   // board.js
     var a = document.activeElement, sel = window.getSelection && window.getSelection();
     if (sel && !sel.isCollapsed && document.getElementById("main").contains(sel.anchorNode)) return true;
     return !!document.querySelector("#main form[data-dirty]") ||

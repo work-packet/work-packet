@@ -227,13 +227,19 @@ def quota(steps, now=None):
     return out
 
 
-def board(entries, now=None, days=7):
-    """The board's "Who burns tokens": each project's last ``days`` days,
-    biggest first, with a bar per day; and the quota (``quota``) as of the
-    newest step of any project. ``{"rows", "quota"}``."""
-    now = now or clock.now()
+WINDOWS = (1, 7, 30)
+
+
+def board(entries, now=None, days=7, on=None):
+    """The Overview's token use over the last ``days`` days: a row per project
+    (biggest first, with a bar per day and its ``board``), a summary per board
+    (``boards``), the whole (``total``, with a full chart per day), and the quota
+    (``quota``) as of the newest step of any project. ``on``: the board names
+    (``registry.board_of``)."""
+    from .. import registry
     from .data import _zone
-    out, every = [], []
+    now = now or clock.now()
+    out, every, by_board, days_all = [], [], {}, {}
     for e in entries:
         if not os.path.isdir(e["path"]):
             continue
@@ -246,16 +252,44 @@ def board(entries, now=None, days=7):
                  and (_local_day(s, tz) or start) >= start]
         if not steps:
             continue
+        b = registry.board_of(e, on or [registry.DEFAULT_BOARD])
+        bb = by_board.setdefault(b, {"steps": [], "days": {}})
+        bb["steps"] += steps
         cols = []
         for i in range(days):
             d = start + timedelta(days=i)
-            v = _sum_values([s for s in steps if _local_day(s, tz) == d])
+            ss = [s for s in steps if (_local_day(s, tz) or start) == d]
+            bb["days"].setdefault(i, []).extend(ss)
+            days_all.setdefault(i, (d, []))[1].extend(ss)
+            v = _sum_values(ss)
             cols.append({"values": v, "title": _title(d.isoformat(), v)})
-        out.append(dict(stats.token_figures(steps), name=e["name"], steps=len(steps),
+        out.append(dict(stats.token_figures(steps), name=e["name"], board=b, steps=len(steps),
                         spark=chart(cols, CONTEXT, width=140, height=28, gap=1,
                                     label_h=0, left=0)))
     out.sort(key=lambda r: -(r["context_tokens"] or 0))
-    return {"rows": out, "quota": quota(every, now)}
+    boards = {}
+    for b, bb in by_board.items():
+        cols = []
+        for i in range(days):
+            v = _sum_values(bb["days"].get(i, []))
+            cols.append({"values": v, "title": _title("day %d" % (i + 1), v)})
+        boards[b] = dict(stats.token_figures(bb["steps"]), steps=len(bb["steps"]),
+                         spark=chart(cols, CONTEXT, width=140, height=28, gap=1,
+                                     label_h=0, left=0))
+    total = None
+    if out:
+        cols = []
+        for i in sorted(days_all):
+            d, ss = days_all[i]
+            v = _sum_values(ss)
+            cols.append({"label": d.strftime("%m-%d"), "values": v,
+                         "title": _title(d.isoformat(), v, sum(s.cost or 0 for s in ss))
+                         if ss else "%s: none" % d})
+        total = dict(stats.token_figures([s for r in by_board.values() for s in r["steps"]]),
+                     steps=sum(len(r["steps"]) for r in by_board.values()),
+                     chart=chart(cols, CONTEXT, height=90) if days > 1 else None)
+    return {"rows": out, "boards": boards, "total": total, "days": days,
+            "quota": quota(every, now)}
 
 
 def calls(transcript_path):

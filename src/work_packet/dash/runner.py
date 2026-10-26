@@ -1,16 +1,15 @@
 """The runner inside the board's process (docs/dash-tasks.md §7).
 
-A thread that runs ``scheduler.tick`` until nothing is due, then waits for a
-poke (a hand-off, an answer, a wake from the board) or for the next
-``wake_at``. One runner per home, by a lock on ``runner.lock``.
+A thread that runs the scheduler's dispatcher (docs/scheduler.md §7): it
+starts due packets in slots by class, share and size as slots free, and
+waits for a poke (a hand-off, an answer, a wake from the board), a job's
+end, or the next ``wake_at``. One runner per home, by ``wpkd.lease``.
 """
 
-import fcntl
 import logging
-import os
 import threading
 
-from .. import clock, registry, scheduler
+from .. import registry
 
 log = logging.getLogger("wpk.runner")
 
@@ -22,34 +21,38 @@ class RunnerBusy(Exception):
 
 
 class Runner:
-    def __init__(self, home=None, jobs=None, max_wait=MAX_WAIT_S):
+    def __init__(self, home=None, jobs=None, max_wait=MAX_WAIT_S, backend=None):
         self.home = home or registry.home()
         self.jobs = jobs
         self.max_wait = max_wait
+        self._backend = backend
         self._poke = threading.Event()
         self._stopping = threading.Event()
         self._thread = None
-        self._lock_fd = None
-        self.busy = False         # inside a scheduler pass
-        self.last = []            # the last few results, newest last
+        self._lease = None
+        self.dispatcher = None
 
     def acquire(self):
-        """Take ``runner.lock``, or raise ``RunnerBusy``."""
-        os.makedirs(self.home, exist_ok=True)
-        fd = os.open(os.path.join(self.home, "runner.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        """Take the home's ``wpkd.lease`` (sched/home_lease.py), or raise ``RunnerBusy``
+        naming the holder. It works across hosts that share the home."""
+        from ..sched.home_lease import HomeBusy, HomeLease
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(fd)
-            raise RunnerBusy("another runner holds %s"
-                             % os.path.join(self.home, "runner.lock"))
-        os.ftruncate(fd, 0)
-        os.write(fd, b"%d\n" % os.getpid())
-        self._lock_fd = fd
+            self._lease = HomeLease(self.home).acquire()
+        except HomeBusy as e:
+            raise RunnerBusy(str(e)) from None
+        self._lease.start_refresher(on_lost=self._lost)
+
+    def _lost(self):
+        log.error("another wpkd took this home's lease; starting nothing more")
+        self._stopping.set()
+        self._poke.set()
 
     def start(self):
-        if self._lock_fd is None:
+        from ..sched.dispatcher import Dispatcher
+        if self._lease is None:
             self.acquire()
+        self.dispatcher = Dispatcher(home=self.home, backend=self._backend, jobs=self.jobs,
+                                     report=self._report)
         self._thread = threading.Thread(target=self._loop, name="wpk-runner", daemon=True)
         self._thread.start()
 
@@ -63,38 +66,30 @@ class Runner:
         self._poke.set()
         if self._thread is not None:
             self._thread.join(timeout)
-        if self._lock_fd is not None:
-            os.close(self._lock_fd)
-            self._lock_fd = None
+        if self._lease is not None:
+            self._lease.release()
+            self._lease = None
 
     @property
     def alive(self):
         return self._thread is not None and self._thread.is_alive()
 
+    @property
+    def busy(self):
+        """Steps are running (jobs this runner started or adopted)."""
+        d = self.dispatcher
+        return bool(d is not None and d.live())
+
+    @property
+    def last(self):
+        """The last few results, newest last."""
+        return self.dispatcher.last if self.dispatcher is not None else []
+
     def _report(self, r):
         log.warning("%s %s: %s", r.due.project, r.due.wpid[:8], r.msg)
-        self.last = (self.last + [r])[-20:]
-
-    def _wait_s(self, entries):
-        t = scheduler.next_wake(entries)
-        if t is None:
-            return self.max_wait
-        return max(0.5, min(self.max_wait, (t - clock.now()).total_seconds() + 0.5))
 
     def _loop(self):
-        while not self._stopping.is_set():
-            self._poke.clear()
-            try:
-                es = registry.entries(self.home)
-                jobs = self.jobs or registry.load_config(self.home)["max_concurrent"]
-                self.busy = True
-                try:
-                    scheduler.tick(es, jobs=jobs, until_idle=True, report=self._report,
-                                   stop=self._stopping.is_set)
-                finally:
-                    self.busy = False
-                wait = self._wait_s(registry.entries(self.home))
-            except Exception:                      # keep the runner alive; say why
-                log.exception("runner pass failed")
-                wait = self.max_wait
-            self._poke.wait(wait)
+        try:
+            self.dispatcher.run(self._stopping, self._poke, max_wait=self.max_wait)
+        except Exception:                      # say why the pool stopped
+            log.exception("runner stopped")

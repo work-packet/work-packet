@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% import "_side.html" as sidem with context %}
+{% import "_tokens.html" as tkm %}
+{#- How every board is doing, what needs you, and token use (docs/overview.md). -#}
+{% block title %}Overview{% endblock %}
+{% block head %}
+{% set colour = {"Needs you": "NEEDS_INPUT", "Running": "running", "Ready": "RUNNABLE",
+  "Sleeping": "SLEEPING", "Paused": "PAUSED", "Failed": "FAILED", "Done": "COMPLETED"} %}
+<style>
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 6px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--line);
+  border-radius: 8px; padding: 8px 12px; color: inherit; }
+a.tile:hover { text-decoration: none; border-color: var(--link); }
+.tile .k { font-size: 12px; color: var(--muted); }
+.tile .v { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.tile .s { font-size: 12px; color: var(--muted); min-height: 1.2em; }
+.tile.hot { border-left-color: var(--NEEDS_INPUT); } .tile.bad { border-left-color: var(--FAILED); }
+.tile.run { border-left-color: var(--running); }
+ul.list { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+ul.list li { display: flex; gap: 10px; align-items: baseline; padding: 6px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+ul.list li:last-child { border-bottom: 0; }
+ul.list .what { flex: 1; min-width: 16ch; }
+ul.list .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; display: inline-block; vertical-align: bottom; }
+.bd { font-size: 11px; border: 1px solid var(--line); border-radius: 9px; padding: 0 6px; color: var(--muted); }
+table.bt td.c { text-align: right; font-variant-numeric: tabular-nums; }
+table.bt td.c a { color: inherit; }
+table.bt td.c.z { color: var(--muted); opacity: .5; }
+table.bt th.c { text-align: right; white-space: nowrap; }
+table.bt th.c::before { content: ""; }
+table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+{% for k, v in colour.items() %}table.bt th.c{{ loop.index }}::before, .split i.c{{ loop.index }} { background: var(--{{ v }}); }
+{% endfor %}
+.split { display: flex; height: 5px; border-radius: 3px; overflow: hidden; margin-top: 4px; background: var(--code); max-width: 220px; }
+.split i { display: block; width: auto; height: 100%; border-radius: 0; margin: 0; }
+.h2bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 22px 0 8px; }
+.h2bar h2 { margin: 0; }
+</style>
+{% endblock %}
+{% block main %}
+{% set t = ov.tiles %}
+{% set span = "today" if burn.days == 1 else "last %d days" % burn.days %}
+<div class="withside">
+{{ sidem.tab(side, None) }}
+<div>
+<div class="titlebar"><h1>Overview</h1>
+  <span class="muted">{{ side|sum(attribute="n") }} project{{ "s" if side|sum(attribute="n") != 1 }} on {{ side|length }} board{{ "s" if side|length != 1 }}</span></div>
+
+{% if not side|sum(attribute="n") %}
+<div class="panel">
+  <p>No projects are registered in <code>{{ home }}</code>.</p>
+  <p class="muted"><a href="/new"><strong>New task</strong></a> here, or <code>wpk setup</code> (a guided setup in a terminal), or <code>wpk new &lt;name&gt;</code> and then <code>wpk doctor &lt;name&gt;</code>.</p>
+</div>
+{% else %}
+
+<div class="tiles">
+  <a class="tile{{ ' hot' if t.needs }}" href="#attention"><div class="k">Needs you</div><div class="v">{{ t.needs }}</div>
+    <div class="s">{% if t.oldest %}oldest waiting {{ t.oldest }}{% endif %}</div></a>
+  <a class="tile{{ ' run' if t.running }}" href="#running"><div class="k">Running</div><div class="v">{{ t.running }}</div>
+    <div class="s">{% if ov.coming %}next wake {{ ov.coming[0].root.next.split(", ")[-1] }}{% endif %}</div></a>
+  <a class="tile{{ ' bad' if t.failed }}" href="#attention"><div class="k">Failed</div><div class="v">{{ t.failed }}</div>
+    <div class="s">{% if t.newest_fail %}newest {{ t.newest_fail }} ago{% endif %}</div></a>
+  <a class="tile" href="#tokens"><div class="k">Spend today</div><div class="v">{{ t.spend_today|money or "$0" }}</div>
+    <div class="s">{% if burn.days > 1 %}{{ t.spend|money or "$0" }} {{ span }}{% endif %}</div></a>
+  {% if t.quota %}
+  <a class="tile{{ ' bad' if t.quota.used >= 0.8 and not t.quota.reset }}" href="#tokens"><div class="k">Weekly quota</div>
+    <div class="v">{{ t.quota.used|pct }}</div>
+    <div class="s">{% if t.quota.reset %}reset {{ t.quota.resets }}{% elif t.quota.left %}resets in {{ t.quota.left }}{% endif %}</div></a>
+  {% endif %}
+  {% if sch %}
+  <a class="tile{{ ' bad' if sch.mode != 'run' }}" href="/sched"><div class="k">Pool</div>
+    <div class="v">{{ {"run": "running", "drain": "halted", "stop": "stopped"}[sch.mode] }}</div>
+    <div class="s">{{ sch.queued }} waiting{% if sch.next %}, {{ sch.next }} starting{% endif %}</div></a>
+  <a class="tile" href="/sched"><div class="k">Cores in use</div>
+    <div class="v">{{ sch.cores }}{% if sch.cores_max %}<span class="muted" style="font-size:15px">/{{ sch.cores_max }}</span>{% endif %}</div>
+    <div class="s">{{ sch.jobs }}{% if sch.jobs_max %}/{{ sch.jobs_max }}{% endif %} jobs</div></a>
+  {% if sch.spend %}
+  <a class="tile{{ ' hot' if sch.ahead }}" href="/sched"><div class="k">Budget</div>
+    <div class="v" style="font-size:17px">{{ sch.spend }}</div>
+    <div class="s">pace {{ sch.pace }}{% if sch.ahead %}: ahead of it{% endif %}</div></a>
+  {% endif %}
+  {% endif %}
+</div>
+
+<h2 id="attention">Needs attention</h2>
+{% if ov.attention %}
+<ul class="list">
+{% for a in ov.attention %}{% set c = a.card %}
+  <li>
+    {% if a.kind == "needs" %}<span class="state NEEDS_INPUT">ASKS</span>
+    {% elif a.kind == "setup" %}<span class="state PAUSED">SETUP</span>
+    {% else %}<span class="state FAILED">FAILED</span>{% endif %}
+    <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
+    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
+    <span class="what">
+    {% if a.kind == "needs" %}<span class="ell" title="{{ c.root.reason or '' }}">{{ c.root.reason or "has a question" }}</span>
+      <span class="muted">· <code>wpk answer {{ c.name }}</code></span>
+    {% elif a.kind == "failed" %}<span class="ell err" title="{{ c.root.reason or '' }}">{{ (c.root.reason if c.root else "") or "failed" }}</span>
+    {% elif a.kind == "trouble" %}{{ c.trouble }} packet{{ "s" if c.trouble != 1 }} below the root failed
+    {% else %}{% if c.setup.missing is none %}<span class="err">{{ c.setup.next }}</span>{% elif c.setup.missing %}{{ c.setup.missing }} missing · next <code>{{ c.setup.next }}</code>{% else %}ready to hand off{% endif %}
+    {% endif %}</span>
+    {% if a.kind == "needs" and c.root %}<a class="mini" href="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}#answer">Answer</a>
+    {% elif a.kind == "setup" %}<a class="mini" href="/p/{{ c.name|urlencode }}/compose">Set up</a>
+    {% else %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>{% endif %}
+  </li>
+{% endfor %}
+</ul>
+{% else %}
+<p class="muted">Nothing needs you.</p>
+{% endif %}
+
+<h2>Boards</h2>
+<div class="wrap"><table class="bt">
+  <tr><th>Board</th>{% for k in columns %}<th class="c c{{ loop.index }}">{{ k }}</th>{% endfor %}
+    <th class="num">Projects</th><th class="num">Packets</th><th class="num">Cost, {{ span }}</th><th class="num">Context</th>{% if burn.days > 1 %}<th>Per day</th>{% endif %}<th>Last step</th></tr>
+  {% for b in ov.boards %}
+  <tr><td><a href="/b/{{ b.name|urlencode }}"><strong>{{ b.name }}</strong></a>{% if b.title %} <span class="muted">{{ b.title }}</span>{% endif %}
+      {% if b.n %}<div class="split">{% for k, n, who in b.counts %}{% if n %}<i class="c{{ loop.index }}" style="flex: {{ n }}" title="{{ k }}: {{ n }}"></i>{% endif %}{% endfor %}</div>{% endif %}</td>
+    {% for k, n, who in b.counts %}<td class="c{{ ' z' if not n }}" title="{{ who }}">{% if n %}<a href="/b/{{ b.name|urlencode }}">{{ n }}</a>{% else %}0{% endif %}</td>{% endfor %}
+    <td class="num">{{ b.n }}{% if b.broken %} <span class="err" title="could not be read">+{{ b.broken }}?</span>{% endif %}</td>
+    <td class="num" title="{{ b.packets_title }}">{{ b.packets }}</td>
+    <td class="num">{{ b.tk.cost_usd|money if b.tk else "" }}</td>
+    <td class="num">{{ b.tk.context_tokens|tok if b.tk else "" }}</td>
+    {% if burn.days > 1 %}<td style="width:150px">{% if b.tk %}{{ tkm.chart(b.tk.spark, "context per day", legend=False) }}{% endif %}</td>{% endif %}
+    <td class="muted">{{ b.last_step }}</td></tr>
+  {% endfor %}
+</table></div>
+
+<div class="grid2">
+<div>
+<h2 id="running">Running now</h2>
+{% if ov.running %}
+<ul class="list">
+{% for c in ov.running %}
+  <li><span class="state running pulse">RUNNING</span>
+    <a href="/p/{{ c.name|urlencode }}/{{ c.running.wpid }}/live"><strong>{{ c.name }}</strong></a>
+    <span class="what">{{ c.running.name or c.running.short }} step {{ c.running.step }}{% if c.running.for %}, {{ c.running.for }}{% endif %}
+      {% if c.running.now %}<br><span class="muted ell">{{ c.running.now }}</span>{% endif %}</span>
+    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}</li>
+{% endfor %}
+</ul>
+{% else %}<p class="muted">Nothing is running.</p>{% endif %}
+</div>
+<div>
+<h2>Coming up</h2>
+{% if ov.coming %}
+<ul class="list">
+{% for c in ov.coming %}
+  <li><span class="state SLEEPING">WAKES</span>
+    <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
+    <span class="what muted">{{ c.root.next }}</span>
+    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}</li>
+{% endfor %}
+{% if ov.more_coming %}<li class="muted">and {{ ov.more_coming }} more</li>{% endif %}
+</ul>
+{% else %}<p class="muted">Nothing is asleep.</p>{% endif %}
+</div>
+</div>
+
+<div class="h2bar" id="tokens"><h2>Tokens, {{ span }}</h2>
+  <span class="tabs">{% for d in windows %}<a class="{{ 'on' if d == burn.days }}" href="/?days={{ d }}#tokens">{{ "1 day" if d == 1 else "%d days" % d }}</a>{% endfor %}</span></div>
+{{ tkm.quota(burn.quota) }}
+{% if burn.total %}
+{{ tkm.summary(burn.total, burn.total.steps) }}
+{% if burn.total.chart %}{{ tkm.chart(burn.total.chart, "Context read per day") }}{% endif %}
+{% set top = 10 %}
+{% macro prow(r) -%}
+  <tr><td><a href="/p/{{ r.name|urlencode }}#tokens">{{ r.name }}</a></td>{% if side|length > 1 %}<td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>{% endif %}
+    {% if burn.days > 1 %}<td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>{% endif %}
+    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.quota_week|pct }}</td>
+    <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
+    <td class="num">{{ r.output_tokens|tok }}</td><td class="num">{{ r.thinking_share|pct }}</td>
+    <td class="num {{ 'err' if r.failed_share and r.failed_share > 0.1 }}">{{ r.failed_share|pct }}</td></tr>
+{%- endmacro %}
+{% macro phead() -%}
+  <tr><th>Project</th>{% if side|length > 1 %}<th>Board</th>{% endif %}{% if burn.days > 1 %}<th>Per day</th>{% endif %}<th class="num">Steps</th><th class="num">Cost</th><th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
+{%- endmacro %}
+<div class="wrap"><table>
+  {{ phead() }}
+  {% for r in burn.rows[:top] %}{{ prow(r) }}{% endfor %}
+</table></div>
+{% if burn.rows|length > top %}
+<details id="tk-more"><summary class="muted">{{ burn.rows|length - top }} more project{{ "s" if burn.rows|length - top != 1 }}</summary>
+<div class="wrap"><table>
+  {{ phead() }}
+  {% for r in burn.rows[top:] %}{{ prow(r) }}{% endfor %}
+</table></div>
+</details>
+{% endif %}
+{% else %}
+<p class="muted">No steps with token counts {{ span }}.</p>
+{% endif %}
+{% endif %}
+
+{% if broken %}
+<h2>Projects that could not be read</h2>
+<table>{% for b in broken %}<tr><td>{{ b.name }}</td>{% if side|length > 1 %}<td>{{ b.board }}</td>{% endif %}<td class="err">{{ b.why }}</td></tr>{% endfor %}</table>
+{% endif %}
+</div>
+</div>
+{% endblock %}

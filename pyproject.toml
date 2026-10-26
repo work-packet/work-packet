@@ -51,7 +51,7 @@ version = {attr = "work_packet.__about__.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-work_packet = ["prompts/*.md", "dash/templates/*.html", "dash/live.js", "dash/pane.js", "dash/compose.js", "dash/shell.js", "dash/new.js", "dash/ide.js", "dash/vendor/*", "profiles.toml"]
+work_packet = ["prompts/*.md", "dash/templates/*.html", "dash/live.js", "dash/pane.js", "dash/compose.js", "dash/shell.js", "dash/new.js", "dash/ide.js", "dash/board.js", "dash/packets.js", "dash/sched.js", "dash/vendor/*", "profiles.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
