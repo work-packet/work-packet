@@ -18,7 +18,7 @@ except ImportError:          # Python 3.10
 REQUIRED_ENTRIES = ("status.md", "memento.md", "state", "journal.jsonl")
 KNOWN_ENTRIES = REQUIRED_ENTRIES + (
     "identity", "children", "steps", ".lease", ".pending", ".state.old",
-    "stack", "mailbox", "work",
+    "stack", "mailbox", "work", "report.md",
     ".vscode",          # wpk ide's workspace file (docs/vscode-plan.md §2); not packet format
 )
 

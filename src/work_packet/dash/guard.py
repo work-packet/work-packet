@@ -5,6 +5,10 @@ caller is the local user; on the tailnet listener tailscaled says who it is,
 and only logins in ``allow`` get in. On both: the ``Host`` header must name
 this machine (DNS rebinding), and a request that can change something must
 come from the board's own origin and carry the CSRF token.
+
+On the network listener (docs/unix-login.md) a signed session cookie says
+who it is; without one, only ``/login`` is served. Anyone but the owner gets
+the board read-only.
 """
 
 import hashlib
@@ -64,22 +68,28 @@ def is_loopback(host):
 
 class Guard:
     def __init__(self, app, kind, secret, tailnet=None, allow=(), extra_hosts=(),
-                 local_user=None):
-        assert kind in ("loopback", "tailnet", "unix")
+                 local_user=None, gate=None, names=()):
+        """``gate`` (a ``login.Gate``) and ``names`` (this host's names and
+        addresses) are for the network listener."""
+        assert kind in ("loopback", "tailnet", "unix", "network")
         if kind == "tailnet" and tailnet is None:
             raise ValueError("the tailnet listener needs tailscaled")
+        if kind == "network" and gate is None:
+            raise ValueError("the network listener needs a sign-in gate")
         self.app = app
         self.kind = kind
         self.tailnet = tailnet
         self.allow = tuple(allow)
         self.extra_hosts = tuple(h.lower() for h in extra_hosts)
         self.local_user = local_user
+        self.gate = gate
+        self.names = {n.lower() for n in names}
         self.token = csrf_token(secret)
 
     # -- the checks -------------------------------------------------------
 
     def host_names(self):
-        names = set(LOOPBACK_NAMES) | set(self.extra_hosts)
+        names = set(LOOPBACK_NAMES) | set(self.extra_hosts) | self.names
         if self.tailnet is not None:
             names |= self.tailnet.names() | {ip.lower() for ip in self.tailnet.ips()}
         return names
@@ -137,14 +147,27 @@ class Guard:
                 return await _refuse(send, 403, "this board was reached through a proxy; "
                                      "use its tailnet address instead", scope)
             user = self.local_user
+        elif self.kind == "network":
+            user = self.gate.user_of(headers)
+            if user is None:
+                return await self._signed_out(scope, receive, send)
+            if scope.get("path") == "/login":
+                return await self._respond(send, 303, [(b"location", b"/")])
         else:
             user, why = await anyio.to_thread.run_sync(self.who, scope.get("client"))
             if user is None:
                 log.warning("refused: %s", why)
                 return await _refuse(send, 403, "not allowed: %s" % why, scope)
         scope.setdefault("state", {})["user"] = user
-        scope["state"]["csrf"] = self.token       # the pages put it in every form
+        token = self.gate.csrf(user) if self.kind == "network" else self.token
+        scope["state"]["csrf"] = token            # the pages put it in every form
         scope["state"]["listener"] = self.kind
+        if self.kind == "network" and user != self.gate.owner:
+            method = scope.get("method", "GET")
+            if ws or scope.get("path", "").startswith(IDE_PREFIX) or \
+                    (method not in SAFE_METHODS and scope.get("path") != "/logout"):
+                return await _refuse(send, 403, "read-only: this board is %s's"
+                                     % self.gate.owner, scope)
 
         if ws:
             # A WebSocket is not covered by the same-origin policy, so the Origin
@@ -163,9 +186,12 @@ class Guard:
         if scope["method"] not in SAFE_METHODS and not ide:
             # Web VS Code's own requests carry no token; the Origin check above
             # is what stops another site (docs/vscode-plan.md §4.1).
-            receive, token = await self._token(headers, receive, scope)
-            if not (token and hmac.compare_digest(token, self.token)):
+            receive, got = await self._token(headers, receive, scope)
+            if not (got and hmac.compare_digest(got, token)):
                 return await _refuse(send, 403, "missing or wrong CSRF token", scope)
+            if self.kind == "network" and scope.get("path") == "/logout":
+                return await self._respond(send, 303, [(b"location", b"/login")] +
+                                           self.gate.clear_headers(self.gate.session_cookie))
 
         # 'self' covers ws: and wss: in CSP 3, but older Safari wants them named:
         # the shell's WebSocket goes to this same host (docs/dash-tasks.md §5).
@@ -183,6 +209,31 @@ class Guard:
             await send(msg)
 
         await self.app(scope, receive, send_with_headers)
+
+    async def _signed_out(self, scope, receive, send):
+        """No session: ``/login`` itself, a redirect to it, or a refusal."""
+        if scope["type"] == "websocket":
+            return await _refuse(send, 401, "not signed in", scope)
+        method, path = scope.get("method"), scope.get("path", "")
+        if method not in ("GET", "HEAD"):
+            return await _refuse(send, 401, "not signed in: open /login", scope)
+        if path != "/login":
+            nxt = path + ("?" + scope["query_string"].decode("latin-1")
+                          if scope.get("query_string") else "")
+            loc = "/login?next=" + urllib.parse.quote(nxt, safe="/")
+            return await self._respond(send, 303, [(b"location", loc.encode())])
+        status, extra, page = await anyio.to_thread.run_sync(
+            self.gate.login, scope["headers"], scope.get("query_string") or b"")
+        await self._respond(send, status, extra + [(b"cache-control", b"no-store")],
+                            page.encode() if page else b"",
+                            b"text/html; charset=utf-8" if page else b"text/plain")
+
+    async def _respond(self, send, status, headers, body=b"", ctype=b"text/plain"):
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", ctype),
+                                (b"content-length", str(len(body)).encode())] +
+                    list(headers) + SECURITY_HEADERS})
+        await send({"type": "http.response.body", "body": body})
 
     async def _token(self, headers, receive, scope=None):
         """The CSRF token from the header or a urlencoded form; and a ``receive``

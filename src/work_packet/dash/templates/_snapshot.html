@@ -1,0 +1,45 @@
+{# The packet page's Snapshot: what the packet is and where it is at (docs/packet-page.md §2.2). #}
+{% macro panel(e, card, tl, on) -%}
+{% set base = "/p/" ~ (e.name|urlencode) %}
+<style>
+.snap .kv2 { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); gap: 3px 12px; margin: 0 0 10px; }
+.snap .kv2 dt { color: var(--muted); }
+.snap .kv2 dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .snap .kv2 { grid-template-columns: max-content minmax(0, 1fr); } }
+svg.tl { display: block; width: 100%; height: auto; }
+svg.tl text { fill: var(--ink); font: 11px system-ui, sans-serif; }
+svg.tl .tick { stroke: var(--line); }
+svg.tl .ticklabel { fill: var(--muted); font-size: 10px; }
+svg.tl .lane { fill: var(--code); }
+svg.tl rect.committed { fill: var(--COMPLETED); } svg.tl rect.failed { fill: var(--FAILED); }
+svg.tl rect.running { fill: var(--running); }
+</style>
+<div class="panel snap wrap" id="snapshot">
+<dl class="kv2">
+  <dt>Directory</dt><dd><code>{{ e.path }}</code></dd>
+  <dt>Tasks</dt><dd>{{ card.tasks }}{% for st, k in card.counts %} · {{ k }} {{ st }}{% endfor %}</dd>
+  <dt>Documents</dt><dd><a href="{{ base }}/doc?path=work">work/</a> <span class="muted">· read and mark up</span></dd>
+  <dt>Spend</dt><dd><a href="{{ base }}/cost">{{ card.spend_total|money or "$0" }}</a> total, {{ card.spend_today|money or "$0" }} today</dd>
+  <dt>Board</dt><dd><a href="/b/{{ on|urlencode }}">{{ on }}</a></dd>
+  <dt>Last step</dt><dd>{% if card.last_step != "never" %}<a href="{{ base }}/steps">{{ card.last_step }}</a>{% else %}never{% endif %}</dd>
+</dl>
+{% if tl %}
+<svg class="tl" viewBox="0 0 {{ tl.width }} {{ tl.height }}" role="img" aria-label="Steps over time, one row per task">
+  {% for r in tl.rows %}
+    <rect class="lane" x="{{ tl.label }}" y="{{ r.y + 3 }}" width="{{ tl.width - tl.label - 10 }}" height="{{ tl.row - 6 }}" rx="3"></rect>
+    <a href="{{ base }}/{{ r.wpid }}"><text x="0" y="{{ r.y + tl.row - 7 }}">{{ r.label }}</text></a>
+    {% for b in r.bars %}
+    <a href="{{ base }}/{{ r.wpid }}/{{ b.dir }}"><rect class="{{ b.outcome }}" x="{{ b.x }}" y="{{ r.y + 4 }}" width="{{ b.w }}" height="{{ tl.row - 8 }}" rx="2"><title>{{ b.title }}</title></rect></a>
+    {% endfor %}
+  {% endfor %}
+  {% for t in tl.ticks %}
+    <line class="tick" x1="{{ t.x }}" x2="{{ t.x }}" y1="{{ tl.height - 22 }}" y2="{{ tl.height - 16 }}"></line>
+    <text class="ticklabel" x="{{ t.x }}" y="{{ tl.height - 4 }}" text-anchor="middle">{{ t.label }}</text>
+  {% endfor %}
+</svg>
+<div class="muted" style="font-size:12px">{{ tl.start|when }} to {{ tl.end|when }}. Gaps are sleeps or waits for <code>wpk tick</code>; click a bar for its step.</div>
+{% else %}
+<p class="muted" style="margin:0">No steps yet.</p>
+{% endif %}
+</div>
+{%- endmacro %}

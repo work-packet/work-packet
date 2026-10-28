@@ -52,6 +52,10 @@ table.pk .tree { color: var(--muted); } table.pk.sorted .tree { display: none; }
   </select>
   <button class="mini" name="op" value="prio">Set class</button>
   {% if sizes|length > 1 %}<button class="mini" name="op" value="size">Set size</button>{% endif %}
+  {% if boards|length > 1 %}<select name="board" aria-label="board to move to"><option value="">board…</option>
+    {% for b in boards %}<option value="{{ b.name }}">{{ b.name }}</option>{% endfor %}
+  </select>
+  <button class="mini" name="op" value="board" title="A board holds projects: this moves each ticked packet's whole project">Move to board</button>{% endif %}
 </div>
 <div class="wrap"><table class="pk" id="pk">
   <thead><tr>
@@ -71,7 +75,7 @@ table.pk .tree { color: var(--muted); } table.pk.sorted .tree { display: none; }
     <td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>
     <td><a href="/p/{{ r.project|urlencode }}">{{ r.project }}</a></td>
     <td class="nm" data-sort="{{ r.name }}">{% if r.depth %}<span class="tree" style="padding-left:{{ (r.depth - 1) * 10 }}px">└ </span>{% endif %}<a href="/p/{{ r.project|urlencode }}/{{ r.wpid }}{{ '/live' if r.state == 'running' }}" title="{{ r.wpid }}">{{ r.name }}</a></td>
-    <td data-sort="{{ r.state }}"><span class="state {{ r.state }}{{ ' pulse' if r.state == 'running' }}">{{ r.state }}</span></td>
+    <td data-sort="{{ r.state }}">{% if r.state == 'NEEDS_INPUT' %}<a class="state NEEDS_INPUT" href="/p/{{ r.project|urlencode }}/{{ r.wpid }}#answer" title="Answer its questions">NEEDS_INPUT</a>{% else %}<span class="state {{ r.state }}{{ ' pulse' if r.state == 'running' }}">{{ r.state }}</span>{% endif %}</td>
     <td class="num" data-sort="{{ r.step if r.step is number else -1 }}">{{ r.step }}</td>
     <td data-sort="{{ r.last.isoformat() if r.last else '' }}">{{ r.last|when if r.last else "-" }}</td>
     <td class="num" data-sort="{{ r.cost_usd or 0 }}">{{ r.cost_usd|money or "-" }}</td>
@@ -87,7 +91,7 @@ table.pk .tree { color: var(--muted); } table.pk.sorted .tree { display: none; }
 </form>
 <p class="muted" id="pk-none" hidden>No packet matches.</p>
 {% else %}
-<div class="panel"><p class="muted" style="margin:0">No packets yet. <a href="/new">New task</a> makes a project and its first packet.</p></div>
+<div class="panel"><p class="muted" style="margin:0">No packets yet. <a href="/new">New packet</a> makes one.</p></div>
 {% endif %}
 {% if broken %}
 <h2>Projects that could not be read</h2>

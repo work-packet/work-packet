@@ -190,6 +190,16 @@ def cmd_show(args) -> int:
     return 0
 
 
+def cmd_report(args) -> int:
+    from . import registry, views
+    try:
+        for line in views.report_lines(_packet(args.target)):
+            print(line)
+    except (registry.LookupFailed, OSError) as e:
+        return _err(str(e))
+    return 0
+
+
 def cmd_log(args) -> int:
     from . import registry, views
     try:
@@ -531,6 +541,68 @@ def cmd_note(args) -> int:
     return out.code
 
 
+def _text_arg(args):
+    """-m TEXT, or --note-file F (- for stdin); None if neither."""
+    if getattr(args, "note_file", None) == "-":
+        return sys.stdin.read()
+    if getattr(args, "note_file", None):
+        with open(args.note_file, encoding="utf-8") as fp:
+            return fp.read()
+    return args.message
+
+
+def cmd_request(args) -> int:
+    from . import registry, requests
+    if args.op == "sync":
+        for e, msg in requests.sync():
+            print("%s %s: %s" % (e["from"]["wpid"][:8], e["id"], msg))
+        return 0
+    if args.op == "list":
+        wpid = None
+        if args.target:
+            try:
+                wpid = _packet(args.target).wpid
+            except registry.LookupFailed as e:
+                return _err(str(e))
+        es = requests.entries(wpid=wpid)
+        if not es:
+            print("no requests")
+        for e in es:
+            print("%s %-9s %s" % (e["from"]["wpid"][:8], e["state"], requests.describe(e)))
+        return 0
+    try:
+        pkt = _packet(args.target)
+    except registry.LookupFailed as e:
+        return _err(str(e))
+    try:
+        if args.op == "send":
+            e = requests.send(pkt, args.id, to=args.to, path=args.dir, external=args.external)
+            t = e["to"]
+            if "external" in t:
+                print("Recorded request %s as taken outside wpk. When it is done: "
+                      "`wpk request done %s %s -m RESULT`." % (e["id"], pkt.wpid[:8], e["id"]))
+            elif t.get("created"):
+                print("Created project %s at %s for request %s; its root %s is PAUSED." % (
+                    t["project"], os.path.dirname(os.path.dirname(t["path"])), e["id"],
+                    t["wpid"][:8]))
+                print("Next: `wpk setup %s --apply` (or `wpk doctor %s`), then "
+                      "`wpk handoff %s`." % ((t["project"],) * 3))
+            else:
+                print("Sent request %s to project %s: its root %s has it as batch %d." % (
+                    e["id"], t["project"], t["wpid"][:8], t["batch"]))
+            return 0
+        try:
+            text = _text_arg(args)
+        except OSError as ex:
+            return _err(str(ex))
+        ok = requests.done(pkt, args.id, text)
+        print("Delivered request %s to %s%s." % (args.id, pkt.wpid[:8], "" if ok else
+              "; its journal record waits for the running step to end (`wpk request sync`)"))
+        return 0
+    except requests.RequestError as e:
+        return _err(str(e))
+
+
 def cmd_answer(args) -> int:
     from . import actions, registry
     answers = {}
@@ -818,8 +890,12 @@ def cmd_dash(args) -> int:
             return _err("%s; is another `wpk dash --run` or `wpk serve` up?" % e)
 
     def ready(board):
-        for url in board.urls["loopback"]:
+        for url in board.urls["network"] + board.urls["loopback"]:
             print("wpk dash: %s (Ctrl-C to stop)" % url, file=sys.stderr)
+        if board.gate is not None:
+            print("wpk dash: sign in as %s%s; see `wpk url`" % (board.gate.owner, (
+                " (read-only: %s)" % ", ".join(cfg["allow"])) if cfg["allow"] else ""),
+                file=sys.stderr)
         if runner is not None:
             print("wpk dash: running due packets (one runner for %s)" % runner.home,
                   file=sys.stderr)
@@ -942,6 +1018,41 @@ def cmd_url(args) -> int:
     for url in st.get("urls", []):
         if not st.get("sock") or not url.startswith("http://localhost"):
             print(url)
+    if st.get("auth") == "unix":
+        from .dash import login
+        cfg = registry.load_server_config()
+        print("# sign in: open the URL, then run the `wpk login CODE` it shows "
+              "(in any shell here)")
+        if cfg["allow"]:
+            print("# read-only for: %s" % ", ".join(cfg["allow"]))
+            stop = login.reachable_by_others(registry.home())
+            if stop:
+                print("# but they cannot reach %s: chmod o+x %s (and each directory above)"
+                      % (login.drop_dir(registry.home()), stop))
+    return 0
+
+
+def cmd_login(args) -> int:
+    """``wpk login CODE``: prove to a board (yours, or ``--home``'s) that you
+    are the Unix user running this (docs/unix-login.md)."""
+    import getpass
+    from . import registry
+    from .dash import login
+    home = os.path.abspath(os.path.expanduser(args.home)) if args.home else registry.home()
+    try:
+        path = login.drop(home, args.code)
+    except ValueError as e:
+        return _err(str(e))
+    except FileExistsError:
+        return _err("that code was already used")
+    except FileNotFoundError:
+        return _err("no board takes sign-ins at %s (no login/ there); is it the right "
+                    "--home?" % home)
+    except PermissionError:
+        return _err("cannot write to %s: is %s's board shared with you "
+                    "([server] allow)?" % (login.drop_dir(home), home))
+    print("wpk: signed in as %s; the browser carries on by itself (%s)"
+          % (getpass.getuser(), path), file=sys.stderr)
     return 0
 
 
@@ -1025,6 +1136,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("target", help="WPID (or unique prefix), project name or directory")
     p.set_defaults(func=cmd_show)
 
+    p = sub.add_parser("report", help="print a finished packet's completion report: outcome, "
+                       "decisions, deliverables and open items, with its children's")
+    p.add_argument("target", help="WPID (or unique prefix), project name or directory")
+    p.set_defaults(func=cmd_report)
+
     p = sub.add_parser("log", help="print a packet's journal, or one step")
     p.add_argument("target", help="WPID (or unique prefix), project name or directory")
     p.add_argument("--step", type=int, help="show this step's summary, diff and meta")
@@ -1082,6 +1198,34 @@ def build_parser() -> argparse.ArgumentParser:
                    "usually expired, so the first call costs the whole context again)")
     p.add_argument("--force", action="store_true", help="hand off with uncommitted changes")
     p.set_defaults(func=cmd_next)
+
+    p = sub.add_parser("request", help="hand work to another project's agent, and bring "
+                       "the result back", description="A packet's brief in "
+                       "state/requests/<id>.md goes to the root of another project, new or "
+                       "stopped; when that finishes, its outcome comes back as a note "
+                       "(docs/delegation.md).")
+    rsub = p.add_subparsers(dest="op", required=True)
+    rp = rsub.add_parser("send", help="send a request")
+    rp.add_argument("target", help="the requester: WPID (or unique prefix) or project name")
+    rp.add_argument("id", help="the brief, state/requests/<id>.md")
+    rp.add_argument("--to", help="the project that does it (default: the brief's to:)")
+    rp.add_argument("--dir", help="where a new project goes (default: next to the "
+                    "requester's project)")
+    rp.add_argument("--external", metavar="NOTE",
+                    help="no packet: you take it elsewhere; finish with `wpk request done`")
+    rp.set_defaults(func=cmd_request)
+    rp = rsub.add_parser("list", help="the requests, from the index")
+    rp.add_argument("target", nargs="?", help="only this packet's (sent or received)")
+    rp.set_defaults(func=cmd_request)
+    rp = rsub.add_parser("done", help="deliver a result by hand")
+    rp.add_argument("target", help="the requester: WPID (or unique prefix) or project name")
+    rp.add_argument("id")
+    g = rp.add_mutually_exclusive_group(required=True)
+    g.add_argument("-m", "--message", help="the result")
+    g.add_argument("--note-file", help="the result, from a file (- for stdin)")
+    rp.set_defaults(func=cmd_request)
+    rp = rsub.add_parser("sync", help="deliver finished requests now")
+    rp.set_defaults(func=cmd_request, target=None)
 
     p = sub.add_parser("answer", help="answer a packet's open questions and hand it off",
                        description="Answer the questions of a NEEDS_INPUT packet (`wpk show` "
@@ -1281,6 +1425,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("url", help="print the running board's URLs",
                        description="Print the URLs the running `wpk dash` listens on.")
     p.set_defaults(func=cmd_url)
+
+    p = sub.add_parser("login", help="sign a browser in to a board",
+                       description="Sign in the browser showing CODE on a board's login "
+                       "page, as the Unix user running this command (docs/unix-login.md).")
+    p.add_argument("code", help="the code the login page shows, like K7QF-29XA")
+    p.add_argument("--home", help="the board's runner home, if it is not yours "
+                   "(the login page shows it)")
+    p.set_defaults(func=cmd_login)
 
     p = sub.add_parser("step", help="run one step of a packet",
                        description="Run exactly one step. Exit status: 0 committed, "

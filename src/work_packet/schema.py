@@ -56,7 +56,11 @@ SERVER_DEFAULTS = {                   # server.md §6
     "tls": "off",
     "extra_hosts": [],
     "run": False,                      # dash-tasks.md §7: the runner in the server
-    "listen": "",                      # "unix": $WPK_HOME/run/wpkd.sock, not 127.0.0.1 (§7.1)
+    "listen": "",                      # "unix": $WPK_HOME/run/wpkd.sock, not 127.0.0.1 (§7.1);
+                                       # "network": every address, with auth = "unix" (unix-login.md)
+    "tls_cert": "",                    # tls = "files": your own certificate and key
+    "tls_key": "",
+    "session_days": 30,                # auth = "unix": how long a sign-in lasts
 }
 IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
     "desktop": True,                   # vscode:// buttons
@@ -112,8 +116,9 @@ SCHED_BACKEND_KEYS = {
 }
 _MEM_RX = re.compile(r"^(\d+)([KMGT]?)$")
 IDE_BACKENDS = ("serve-web", "openvscode-server")   # docs/vscode-plan.md §4.4
-SERVER_AUTH = ("tailscale", "none")
-SERVER_TLS = ("off", "tailscale")        # server.md §2.3    # token, pam: server.md S3
+SERVER_AUTH = ("tailscale", "unix", "none")    # unix: docs/unix-login.md
+SERVER_TLS = ("off", "tailscale", "self-signed", "files")   # server.md §2.3
+SERVER_LISTEN = ("", "unix", "network")
 PERMISSION_DEFAULTS = {
     "allowed_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
     "permission_mode": "acceptEdits",
@@ -130,6 +135,7 @@ JOURNAL_TYPES = {
     "handoff": ("by", "from", "to"),
     "config": ("by", "changes"),
     "seed": ("files",),               # docs/setup.md §10: the root filled from the project root
+    "request": ("op", "id", "by"),    # docs/delegation.md: sent, received, done
 }
 DECISION_FIELDS = ("state", "resume_expr", "wake_at", "reason", "model",
                    "summary", "spawn")
@@ -492,14 +498,33 @@ def _validate_server(d):
                         % ", ".join(SERVER_AUTH)))
     elif t.get("auth") == "none" and t.get("tailnet"):
         out.append(_err("server.auth", "\"none\" cannot be used with tailnet = true"))
+    elif t.get("auth") == "unix" and t.get("tailnet"):
+        out.append(_err("server.auth", "\"unix\" is for listen = \"network\", not the tailnet"))
     for k in ("allow", "extra_hosts"):
         v = t.get(k, [])
         if not (isinstance(v, list) and all(isinstance(x, str) and x for x in v)):
             out.append(_err("server." + k, "must be a list of strings"))
-    if t.get("listen", "") not in ("", "unix"):
-        out.append(_err("server.listen", "must be \"unix\" or empty (a TCP port on loopback)"))
+    if t.get("listen", "") not in SERVER_LISTEN:
+        out.append(_err("server.listen", "must be \"unix\", \"network\" or empty "
+                        "(a TCP port on loopback)"))
     if t.get("tls", "off") not in SERVER_TLS:
         out.append(_err("server.tls", "must be one of %s" % ", ".join(SERVER_TLS)))
+    for k in ("tls_cert", "tls_key"):
+        if not isinstance(t.get(k, ""), str):
+            out.append(_err("server." + k, "must be a path"))
+    if t.get("tls") == "files" and not (t.get("tls_cert") and t.get("tls_key")):
+        out.append(_err("server.tls", "\"files\" needs tls_cert and tls_key"))
+    days = t.get("session_days", 30)
+    if not (isinstance(days, int) and not isinstance(days, bool) and 0 < days <= 366):
+        out.append(_err("server.session_days", "must be a number of days (1 to 366)"))
+    if t.get("listen") == "network":
+        if t.get("auth") != "unix":
+            out.append(_err("server.listen", "\"network\" needs auth = \"unix\" "
+                            "(docs/unix-login.md)"))
+        if t.get("tls", "off") not in ("self-signed", "files"):
+            out.append(_err("server.tls", "listen = \"network\" needs tls = \"self-signed\" "
+                            "or \"files\": a session cookie must not cross the network "
+                            "in clear"))
     return out
 
 

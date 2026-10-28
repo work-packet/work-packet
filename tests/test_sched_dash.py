@@ -132,7 +132,7 @@ def test_pages_show_class_size_and_why(home):
     control.set_prio(a.wpid, "low", authz.principal_cli())
     page = c.get("/p/aaa/%s" % a.wpid).text
     assert "Scheduling" in page and "low" in page and "Starts next" in page
-    page = c.get("/p/aaa").text
+    page = c.get("/p/aaa/settings").text
     assert "Scheduling" in page and "Hold" in page
     control.hold("aaa", authz.principal_cli())
     page = c.get("/p/aaa/%s" % a.wpid).text

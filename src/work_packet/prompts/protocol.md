@@ -41,8 +41,14 @@ executor; if you change one, this step is thrown away.
   | `now` | run the next step as soon as possible |
   | `in <N> minutes\|hours\|days\|weeks` | sleep, then run the next step |
   | `at <ISO 8601 date or time>` | sleep until then (no offset: $tz) |
-  | `done` | the task is finished; the body may be empty |
-  | `fail` | the task cannot be done; add `reason: <why>` |
+  | `done` | the task is finished; the body may be empty; write the report (below) |
+  | `fail` | the task cannot be done; add `reason: <why>` and write the report |
+
+  `done` means every item in `state/outline.md` is `[x]` or `[-]`; a step
+  that says `done` with open items is rejected. If the next item is for
+  the owner (a review, an approval, answers to questions), use `ask:`; if
+  work can go on, use `now`. Questions for the owner go in `ask:`, not
+  only in the report.
 
   If the task has a plan, add `item: <id>`: the plan item this step
   worked on, as `outline.md` names it (such as `2a`), or a list if it
@@ -88,6 +94,84 @@ executor; if you change one, this step is thrown away.
 
 Do not sleep, wait, count steps or create packets yourself: the executor
 does all of that from what you write in `.pending/memento.md`.
+
+## Requests: work for another agent
+
+Some work belongs in a repo this task can't change: a tool bug, a missing
+feature in a dependency. Don't work around it silently, and don't change
+that repo yourself. Write a **request**: a brief another agent works from,
+in another project.
+
+1. Write `.pending/state/requests/<id>.md` (`<id>`: `[a-z0-9_-]`):
+
+   ```markdown
+   ---
+   title: Lower reg_c register access in pssc sv-native
+   to: pssc-reg-lowering           # the project that does it (new or existing)
+   repo:                           # optional: what a new project clones
+     - name: pssc
+       from: ~/projects/pssc       # a URL or a local clone
+   ---
+   ## Background
+   ## Task
+   ## Reproduce
+   ## Done when
+   ## Meanwhile
+   ```
+
+   The other agent has seen nothing of this task, so the brief must stand
+   alone: a minimal input copied into the brief, the exact command, what it
+   prints now and what it should print. Use paths in the other repo, not in
+   this packet. "Done when" is a check you will also run when the result
+   comes back. "Meanwhile" says what this task does until then.
+2. Ask the owner to send it, with a question that names it; a yes sends it:
+
+   ```yaml
+   ask:
+     - id: pssc
+       q: Send request pssc-reg (lower reg_c in pssc) to a new project pssc-reg-lowering?
+       recommend: "yes"
+       request: pssc-reg
+   ```
+
+   Write the body as usual: what to do while the request is out. Prefer
+   going on with a workaround over waiting.
+3. The prompt lists your requests under "Requests". The result comes back
+   as a note from the owner: the other agent's outcome, deliverables and
+   report path. Run your "Done when" check before relying on it, and record
+   the result in the outline.
+
+## Finishing: the report
+
+With `resume: done` or `resume: fail`, also write `.pending/report.md`.
+The owner reads it to learn what the whole task produced, often without
+having seen any step, so it covers the whole task, not just this step.
+Build it from `state/log.md`, the outline, `state/history/` and the
+earlier work, not from memory of this step alone:
+
+```markdown
+---
+outcome: One line: what now exists, or why it failed.
+deliverables:                     # each file or folder the owner should open
+  - path: state/plan.md           # under state/ or work/; must exist
+    what: The full plan, with phases and risks
+---
+## Outcome
+A short paragraph: what was asked, and what was done.
+
+## Decisions
+- Each choice made along the way, and why; options rejected, and why.
+
+## Deliverables
+Anything about the files above the owner needs to know (leave it empty
+otherwise; the list above is shown here).
+
+## Open items
+- What is unchecked, guessed, left out, or should be done next.
+```
+
+All four sections are required; write "none" in one that has nothing.
+A step that says `done` without a valid report is rejected.
 
 ## Notes from the owner
 

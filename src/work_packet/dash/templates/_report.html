@@ -1,0 +1,56 @@
+{# The completion report (docs/completion-report.md); `r` is data.report(). #}
+{% macro deliverables(r) %}
+  {% if r.deliverables %}
+  <ul class="deliv">
+    {% for d in r.deliverables %}
+    <li><a href="{{ d.href }}"><code>{{ d.path }}</code></a>{% if d.commit %} <span class="muted">@ <code>{{ d.commit[:12] }}</code></span>{% endif %}: {{ d.what }}{% if d.snap and d.snap != "copied" %} <span class="muted" title="the step kept no copy of it, so the link opens it as it is now">({{ "too large to keep" if d.snap == "too large" else "not kept" }}; as it is now)</span>{% endif %}
+      <div class="muted path"><code>{{ d.abs }}</code></div></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+{% endmacro %}
+
+{% macro outcome(r) %}{% if r.outcome_html is not none %}{{ r.outcome_html|safe }}{% else %}{{ r.outcome }}{% endif %}{% endmacro %}
+
+{% macro text(s) %}{% if s.html is not none %}<div class="md">{{ s.html|safe }}</div>{% else %}<pre>{{ s.text }}</pre>{% endif %}{% endmacro %}
+
+{% macro body(e, r, top=True) %}
+  {% for s in r.sections if s.name == "Outcome" and s.text and s.text != r.outcome %}
+  <div class="lead">{{ text(s) }}</div>
+  {% endfor %}
+  {% set listed = namespace(done=False) %}
+  {% for s in r.sections if s.name != "Outcome" %}
+  {% if s.name == "Deliverables" %}{% set listed.done = True %}
+  {% if r.deliverables or s.text %}<h3>Deliverables</h3>{{ deliverables(r) }}{% if s.text %}{{ text(s) }}{% endif %}{% endif %}
+  {% else %}
+  <h3>{{ s.name }}</h3>{% if s.text %}{{ text(s) }}{% else %}<p class="muted">none</p>{% endif %}
+  {% endif %}
+  {% endfor %}
+  {% if not listed.done and r.deliverables %}<h3>Deliverables</h3>{{ deliverables(r) }}{% endif %}
+  {% if r.children %}
+  <h3>Children</h3>
+  {% for c in r.children %}
+  <details class="kid" {{ "open" if top and r.children|length <= 3 }}>
+    <summary><a href="/p/{{ e.name|urlencode }}/{{ c.wpid }}">{{ c.name or c.short }}</a>
+      {% if c.state == "NEEDS_INPUT" %}<a class="state NEEDS_INPUT" href="/p/{{ e.name|urlencode }}/{{ c.wpid }}#answer" title="Answer its questions">NEEDS_INPUT</a>{% else %}<span class="state {{ c.state }}">{{ c.state or "?" }}</span>{% endif %}
+      {% if c.report %}{{ outcome(c.report) }}{% elif c.state in ("COMPLETED", "FAILED") %}<span class="muted">finished without a report</span>{% else %}<span class="muted">no report yet</span>{% endif %}</summary>
+    {% if c.report %}{{ body(e, c.report, False) }}{% endif %}
+  </details>
+  {% endfor %}
+  {% endif %}
+{% endmacro %}
+
+{% macro panel(e, p, steps_href="#steps") %}
+{% if p.report %}
+<section id="report" class="panel report {{ p.meta.state }}">
+  <div class="muted kicker">{{ "Finished" if p.meta.state == "COMPLETED" else "Failed" }}{% if p.meta.updated %} · {{ p.meta.updated }}{% endif %} · <a href="{{ steps_href }}">{{ p.steps|length }} step{{ "s" if p.steps|length != 1 }}</a></div>
+  <p class="outcome">{{ outcome(p.report) }}</p>
+  {{ body(e, p.report) }}
+</section>
+{% elif p.meta.state in ("COMPLETED", "FAILED") %}
+<section id="report" class="panel report {{ p.meta.state }}">
+  <div class="muted kicker">{{ "Finished" if p.meta.state == "COMPLETED" else "Failed" }} without a completion report (it predates them). Last summary:</div>
+  {% if p.summary_html is not none %}<div class="md">{{ p.summary_html|safe }}</div>{% else %}<pre>{{ p.summary }}</pre>{% endif %}
+</section>
+{% endif %}
+{% endmacro %}

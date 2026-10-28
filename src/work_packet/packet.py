@@ -19,6 +19,7 @@ class Packet:
 
     status_path = property(lambda s: s._p("status.md"))
     memento_path = property(lambda s: s._p("memento.md"))
+    report_path = property(lambda s: s._p("report.md"))
     state_dir = property(lambda s: s._p("state"))
     identity_dir = property(lambda s: s._p("identity"))
     children_dir = property(lambda s: s._p("children"))

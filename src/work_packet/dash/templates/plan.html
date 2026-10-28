@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{# The packet's plan as a tree, and the versions of it (docs/plan-tree.md). #}
+{% set q = e.name|urlencode %}
+{% set base = "/p/" ~ q ~ "/" ~ pl.wpid %}
+{% macro href(v=None, changes=None, open=None) -%}
+?{{ ("v=" ~ v|urlencode ~ "&") if v }}{{ "changes=1&" if changes }}{{ ("open=" ~ open) if open }}
+{%- endmacro %}
+{% block title %}plan · {{ pl.short }} · {{ e.name }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ q }}">{{ e.name }}</a> / <a href="{{ base }}"><code>{{ pl.short }}</code></a> / plan{% endblock %}
+{% block head %}
+<style>
+.plangrid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(220px, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .plangrid { grid-template-columns: minmax(0, 1fr); } }
+.tree { padding: 10px 12px; }
+.tree details > summary { list-style: none; cursor: pointer; }
+.tree details > summary::-webkit-details-marker { display: none; }
+.tree details > summary::before { content: "▸"; display: inline-block; width: 1em; color: var(--muted); }
+.tree details[open] > summary::before { content: "▾"; }
+.tree .leaf { padding-left: 1em; }
+.tree .pr { padding: 2px 4px; border-radius: 4px; line-height: 1.45; }
+.tree .kids { margin-left: .45em; padding-left: .9em; border-left: 1px solid var(--line); }
+.tree .mark { display: inline-block; width: 1.3em; text-align: center; }
+.tree .id { font-weight: 600; margin-right: .3em; }
+.tree .done > .pr, .tree .done > summary > .pr { color: var(--muted); }
+.tree .done > .pr .mark, .tree .done > summary > .pr .mark { color: var(--COMPLETED); }
+.tree .deferred > .pr .txt, .tree .deferred > summary > .pr .txt { text-decoration: line-through; color: var(--muted); }
+.tree .active > .pr .mark, .tree .active > summary > .pr .mark,
+.tree .cur > .pr .mark, .tree .cur > summary > .pr .mark { color: var(--running); }
+.tree .cur > .pr, .tree .cur > summary > .pr { font-weight: 600; background: var(--hunk); }
+.tree .pt-group > summary > .pr { font-weight: 600; }
+.tree .pm { font-size: 12px; color: var(--muted); margin-left: .4em; white-space: nowrap; }
+.tree .pm a { color: var(--muted); text-decoration: underline dotted; }
+.tree .chg { font-size: 11px; font-weight: 700; border-radius: 3px; padding: 0 4px; margin-left: .4em; white-space: nowrap; }
+.tree .chg.c-new { background: var(--add); } .tree .chg.c-state { background: var(--hunk); }
+.tree .chg.c-edited { background: var(--code); }
+.tree .det { list-style: disc; margin: 0 0 2px 1.3em; padding: 0; font-size: 13px; color: var(--muted); }
+.tree .note { font-size: 13px; color: var(--muted); margin: 2px 0 4px 1em; }
+.tree code { font-size: 12px; }
+.planbar { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin: 0 0 10px; }
+.bar { height: 6px; background: var(--code); border-radius: 3px; overflow: hidden; margin: 4px 0 10px; }
+.bar span { display: block; height: 100%; background: var(--COMPLETED); }
+.vers { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.vers li { padding: 3px 6px; border-radius: 4px; }
+.vers li.sel { background: var(--hunk); font-weight: 600; }
+.vers .sum { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
+.vers h3 { font-size: 13px; margin: 10px 0 2px; } .vers h3:first-child { margin-top: 0; }
+.vers .why { font-size: 12px; color: var(--muted); margin: 0 0 4px; }
+ul.gone { list-style: none; padding: 8px 12px; }
+.gone li { text-decoration: line-through; color: var(--muted); }
+</style>
+{% endblock %}
+
+{% macro row(n) -%}
+<span class="pr">{% if n.kind == "group" %}{{ n.text|inline }}{% else %}<span class="mark" title="{{ n.state }}">{{ MARK.get(n.state, "○") }}</span>{% if n.id %}<span class="id">{{ n.id }}</span>{% endif %}<span class="txt">{{ n.text|inline }}</span>{% endif %}
+{%- if n.change == "new" %}<span class="chg c-new">new</span>{% elif n.change == "state" %}<span class="chg c-state">was {{ n.was }}</span>{% elif n.change == "edited" %}<span class="chg c-edited">edited</span>{% endif %}
+{%- set d, t = n.count %}{% if t %}<span class="pm">{{ d }}/{{ t }}</span>{% endif %}
+{%- if n.steps %}<span class="pm">step{{ "s" if n.steps|length > 1 }} {% for s in n.steps %}<a href="{{ base }}/{{ s.dir }}" title="{{ s.summary or '' }}">{{ s.n }}{% if s.outcome == "failed" %}✗{% endif %}</a>{{ " " if not loop.last }}{% endfor %}</span>{% endif %}
+{%- if n.cost %}<span class="pm">{{ n.cost|money }}</span>{% endif %}
+{%- if n.id and n.id in pl.notes %}<span class="pm"><a href="{{ base }}/file?path={{ ('state/notes/' ~ n.id ~ '.md')|urlencode }}">notes</a></span>{% endif %}
+</span>
+{%- endmacro %}
+
+{% macro node(n) -%}
+{% if not pl.changes or n.change or n.changed %}
+{% set cls = ("pt-" ~ n.kind ~ " " ~ (n.state or "") ~ (" cur" if n.current else ""))|trim %}
+{% if n.children or n.details or n.notes %}
+<details class="{{ cls }}"{{ " open" if n.open }}><summary>{{ row(n) }}</summary>
+<div class="kids">
+{% if n.details %}<ul class="det">{% for d in n.details %}<li>{{ d|inline }}</li>{% endfor %}</ul>{% endif %}
+{% for t in n.notes %}<div class="note">{{ t|inline }}</div>{% endfor %}
+{% for c in n.children %}{{ node(c) }}{% endfor %}
+</div></details>
+{% else %}<div class="leaf {{ cls }}">{{ row(n) }}</div>{% endif %}
+{% endif %}
+{%- endmacro %}
+
+{% block main %}
+{% if not pl.versions %}
+<h1>Plan</h1>
+<p class="muted">No outline yet: a packet's plan is <code>state/outline.md</code>, a Markdown checklist (<code>- [ ] 1 ...</code>).</p>
+{% else %}
+{% set d, t = pl.done %}
+<h1>{{ pl.tree.title|inline if pl.tree.title else "Plan" }}</h1>
+<div class="planbar muted">
+  <span><strong>{{ d }}</strong> of {{ t }} done</span>
+  <span>{{ pl.v.label }}{% if pl.v.step and pl.v.dir %} · <a href="{{ base }}/{{ pl.v.dir }}">step {{ pl.v.step }}</a>{% endif %}{% if pl.v.item %} · item {{ pl.v.item }}{% endif %}</span>
+  {% if pl.current %}<span>now: <strong>{{ pl.current.id or "" }}</strong> {{ pl.current.text|truncate(60) }}</span>{% endif %}
+  <span><a href="{{ href(pl.v.key if not pl.latest, pl.changes, 'all') }}">expand all</a> · <a href="{{ href(pl.v.key if not pl.latest, pl.changes, 'none') }}">collapse all</a>
+  · {% if pl.changes %}<a href="{{ href(pl.v.key if not pl.latest) }}">whole plan</a>{% else %}<a href="{{ href(pl.v.key if not pl.latest, True, 'all') }}">changes only</a>{% endif %}</span>
+  {% if pl.latest %}<a href="{{ base }}/file?path={{ 'state/outline.md'|urlencode }}">outline.md</a>{% endif %}
+</div>
+{% if t %}<div class="bar"><span style="width:{{ (100 * d / t)|round(1) }}%"></span></div>{% endif %}
+<div class="plangrid">
+  <section>
+    <div class="panel tree">
+      {% for t in pl.tree.notes %}<div class="note" style="margin-left:0">{{ t|inline }}</div>{% endfor %}
+      {% for c in pl.tree.children %}{{ node(c) }}{% endfor %}
+      {% if pl.changes and not pl.tree.changed %}<p class="muted">Nothing changed in this version{% if pl.gone %} but removals{% endif %}.</p>{% endif %}
+    </div>
+    {% if pl.gone %}
+    <h3>Removed in this version</h3>
+    <ul class="gone panel">{% for n in pl.gone %}<li>{% if n.id %}<strong>{{ n.id }}</strong> {% endif %}{{ n.text|inline }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if pl.children %}
+    <h2>Children</h2>
+    {% for c in pl.children %}
+    <div class="panel tree" style="margin-bottom:8px">
+      <details{{ " open" if c.state not in ("COMPLETED",) }}><summary><span class="pr"><a href="/p/{{ q }}/{{ c.wpid }}/plan"><code>{{ c.short }}</code></a> <span class="state {{ c.state }}">{{ c.state }}</span>{% if c.done[1] %}<span class="pm">{{ c.done[0] }}/{{ c.done[1] }}</span>{% endif %}</span></summary>
+      <div class="kids">{% if c.tree %}{% for k in c.tree.children %}{{ node(k) }}{% endfor %}{% else %}<p class="muted">No outline.</p>{% endif %}</div>
+      </details>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </section>
+  <aside>
+    <h2 style="margin-top:0">Versions</h2>
+    <div class="panel"><ul class="vers">
+      {% set ns = namespace(b=None) %}
+      {% for v in pl.versions|reverse %}
+      {% if v.batch != ns.b %}{% set ns.b = v.batch %}<li style="padding:0"><h3>Batch {{ v.batch }}</h3>{% set first = pl.versions|selectattr("batch", "equalto", v.batch)|first %}{% if first.instruction %}<p class="why" title="{{ first.instruction }}">{{ first.instruction|truncate(140) }}</p>{% endif %}</li>{% endif %}
+      <li class="{{ 'sel' if v.key == pl.v.key }}"><a href="{{ href(v.key, pl.changes, 'all' if pl.changes) }}">{{ v.label }}</a>{% if v.item %} <span class="muted">· {{ v.item }}</span>{% endif %}{% if v.summary %}<span class="sum">{{ v.summary|truncate(90) }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul></div>
+  </aside>
+</div>
+{% endif %}
+{% endblock %}

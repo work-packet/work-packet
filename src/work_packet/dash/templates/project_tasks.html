@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% import "_tabs.html" as tabs with context %}
+{% import "_project_tasks.html" as ptm %}
+{% block title %}{{ e.name }} · tasks{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / tasks{% endblock %}
+{% block main %}
+{{ tabs.top(e, card, "tasks", work) }}
+{% if states|length > 1 %}<p><span class="tabs">
+  <a class="{{ 'on' if not state }}" href="?">all</a>{% for s in states %}<a class="{{ 'on' if s == state }}" href="?state={{ s|urlencode }}">{{ s }}</a>{% endfor %}
+</span></p>{% endif %}
+{{ ptm.table(e, tasks, full=True) }}
+<p class="muted" style="font-size:12px">A task is one instruction run until it is done; one handed off through Compose follows the last, and one split off by a task is nested under it (<code>docs/concepts.md</code>).</p>
+{% endblock %}

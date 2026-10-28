@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "_tabs.html" as tabs with context %}
+{% block title %}{{ e.name }} · steps{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / steps{% endblock %}
+{% block main %}
+{{ tabs.top(e, card, "steps", work) }}
+{% set base = "/p/" ~ (e.name|urlencode) %}
+<form method="get" class="row" style="margin-bottom:10px">
+  <label>Task <select name="task" onchange="this.form.submit()">
+    <option value="">all</option>
+    {% for t in tasks %}<option value="{{ t.key }}"{{ " selected" if t.key == task }}>{{ "  " * t.depth }}{{ t.label }}</option>{% endfor %}
+  </select></label>
+  <noscript><button class="mini">Show</button></noscript>
+  <span class="muted">{{ total }} step{{ "s" if total != 1 }}{% if pages > 1 %}, page {{ page }} of {{ pages }}{% endif %}</span>
+</form>
+{% if steps %}
+<div class="wrap"><table>
+  <tr><th>Started</th><th>Task</th><th>Step</th><th>Outcome</th><th class="num">Time</th><th class="num">Cost</th><th>Summary</th></tr>
+  {% for t, s in steps %}
+  <tr>
+    <td style="white-space:nowrap">{{ s.start|when }}</td>
+    <td><a href="{{ base }}/steps?task={{ t.key }}">{{ t.label }}</a></td>
+    <td><a href="{{ base }}/{{ t.wpid }}/{{ s.dir }}">{{ s.n }}{% if s.outcome == "failed" %}.{{ s.attempt }}{% endif %}</a></td>
+    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span></td>
+    <td class="num">{{ s.duration_s|secs }}</td>
+    <td class="num">{{ s.cost_usd|money }}</td>
+    <td>{% if s.why %}<span class="err">{{ s.why }}</span>{% else %}{{ s.summary }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% if pages > 1 %}<p>{% if page > 1 %}<a href="?task={{ task|urlencode }}&page={{ page - 1 }}">← newer</a>{% endif %}
+  {% if page < pages %}{% if page > 1 %} · {% endif %}<a href="?task={{ task|urlencode }}&page={{ page + 1 }}">older →</a>{% endif %}</p>{% endif %}
+{% else %}
+<p class="muted">None yet.</p>
+{% endif %}
+{% endblock %}

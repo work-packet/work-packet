@@ -9,6 +9,7 @@ import os
 import urllib.parse
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from markupsafe import Markup
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
@@ -17,10 +18,12 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import __about__, clock, registry
-from . import data, tokens
+from . import data, markup, plan, tokens
 from . import sched as dsched
 from ..sched.classes import CLASSES
 from .guard import split_host
+
+FILE_MAX = 4 * 1024 * 1024    # bytes of a deliverable the page serves
 
 TEMPLATES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "live.js"), "rb") as _fp:
@@ -30,7 +33,7 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pane.js"), "
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Served from the package: compose.js, shell.js and the vendored xterm.js (no CDN, the CSP
 # is script-src 'self'). Name -> media type.
-STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript",
+STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript",
           "vendor/xterm.js": "text/javascript", "vendor/addon-fit.js": "text/javascript",
           "vendor/xterm.css": "text/css"}
 REFRESH_S = 10
@@ -38,6 +41,12 @@ LIVE_MS = 3000             # the live view refreshes faster
 log = logging.getLogger("wpk.dash")
 UPLOAD_MAX = 16 << 20      # bytes of one uploaded input
 PROCS_MAX = 60             # rows of the live view's Processes panel (a -j32 build has hundreds)
+
+
+def _inline(text):
+    """One line of Markdown as HTML (the text as it is without markdown-it)."""
+    h = data.md_inline(text)
+    return Markup(h) if h is not None else text
 
 
 def _money(v):
@@ -79,6 +88,13 @@ def _view(request, default):
     return "log" if request.query_params.get("view") == "log" else default
 
 
+def ask_text(rel):
+    """The note or instruction that asks for the markup in ``rel`` to be resolved."""
+    return ("Resolve the CriticMarkup in %s: make each change it suggests "
+            "({++ insert ++}, {-- delete --}, {~~ old ~> new ~~}) or say why not, answer "
+            "each comment ({== text ==}{>> comment <<}), then remove the markup." % rel)
+
+
 def create_app(home=None, runner=None, shells=None, ide_backend=None):
     """The app, reading the registry under ``home`` (default: ``WPK_HOME``).
 
@@ -89,15 +105,16 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
     when ``[ide] web`` is on (docs/vscode-plan.md §4)."""
     env = Environment(loader=FileSystemLoader(TEMPLATES),
                       autoescape=select_autoescape(["html"]))
-    env.filters.update(money=_money, secs=_secs, when=_when, bytes=_bytes, tok=_tok, pct=_pct)
+    env.filters.update(inline=_inline, money=_money, secs=_secs, when=_when, bytes=_bytes, tok=_tok, pct=_pct)
     stamp = max(os.path.getmtime(os.path.join(HERE, n)) for n in STATIC)
     env.globals.update(version=__about__.__version__, refresh_s=REFRESH_S,
                        asset_v="%s-%d" % (__about__.__version__, stamp),
-                       columns=data.COLUMNS)
+                       columns=data.COLUMNS, ask_text=ask_text)
 
     def render(request, name, status=200, **ctx):
         ctx["user"] = request.scope.get("state", {}).get("user")
         ctx["csrf"] = request.scope.get("state", {}).get("csrf")
+        ctx["signout"] = request.scope.get("state", {}).get("listener") == "network"
         ctx["flash"] = request.query_params.get("msg")
         ctx["flash_ok"] = request.query_params.get("ok") == "1"
         ctx["runner"] = runner is not None
@@ -202,6 +219,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                     cls[r["wpid"]] = dsched.packet_info(snap, e, r["wpid"])
         return render(request, "packets.html", rows=rows, broken=broken, states=states,
                       sch=cls, classes=CLASSES, sizes=list((snap or {}).get("sizes", {})),
+                      boards=registry.boards(home),
                       side=data.side(home, cols, broken), live=True)
 
     def local(url, default="/"):
@@ -345,6 +363,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         if not picks:
             return back("/packets", executor.Outcome(executor.USAGE, "tick some packets first"),
                         poke_runner=False)
+        to = one("board")
+        if op == "board" and not to:
+            return back("/packets", executor.Outcome(executor.USAGE, "pick a board to move to"),
+                        poke_runner=False)
         action = {"prio": "prio", "size": "size", "hold": "hold"}.get(op)
         if action:
             no = denied(request, action)
@@ -372,6 +394,17 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                     return None
                 held.add(project)
                 return control.hold(project, by, None, home)
+            if op == "board":
+                if project in held:             # a board holds projects: move each once
+                    return None
+                held.add(project)
+                try:
+                    was = registry.move(project, to, home)
+                except (registry.BoardError, OSError) as ex:
+                    return executor.Outcome(executor.USAGE, "%s: %s" % (project, ex))
+                return executor.Outcome(executor.OK, "%s is on %s already" % (project, to)
+                                        if was == to else "moved project %s from %s to %s"
+                                        % (project, was, to))
             return executor.Outcome(executor.USAGE, "unknown action %r" % op)
         for p in picks:
             project, _, wpid = p.partition("/")
@@ -380,24 +413,93 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                 continue
             lines.append(out.msg)
             worst = max(worst, out.code)
-        return back("/packets", executor.Outcome(worst, "\n".join(lines)))
+        return back("/packets", executor.Outcome(worst, "\n".join(lines)), poke_runner=op != "board")
 
-    async def project(request):
-        e = entry(request)
-        if e is None:
-            return not_found(request, "project %s" % request.path_params["project"])
-        now = clock.now()
-        nodes = data.tree(e, now)
-        recent = sorted(((n, s) for n in nodes for s in n["steps"] if s["start"]),
-                        key=lambda ns: ns[1]["start"], reverse=True)[:50]
+    def packet_top(e, now, nodes):
+        """What every tab of the packet page needs: the card, with its counts by task."""
+        ts = data.tasks(e, nodes)
+        card = data.card(e, now, nodes)
+        counts = {}
+        for t in ts:
+            counts[t["state"]] = counts.get(t["state"], 0) + 1
+        card.update(tasks=len(ts), counts=sorted(counts.items(), key=lambda kv: str(kv[0])))
+        return card, ts
+
+    def project_page(tab):
+        async def handle(request):
+            e = entry(request)
+            if e is None:
+                return not_found(request, "project %s" % request.path_params["project"])
+            now = clock.now()
+            nodes = data.tree(e, now)
+            card, ts = packet_top(e, now, nodes)
+            kw = dict(e=e, card=card, nodes=nodes, tasks=ts, work=work_rows(e))
+            return await tab(request, e, now, kw)
+        return handle
+
+    async def project_overview(request, e, now, kw):
+        nodes = kw["nodes"]
+        root = nodes[0] if nodes else None
+        # A finished project leads with its root packet's completion report.
+        rp = (data.packet(e, root["wpid"])
+              if root and root["state"] in ("COMPLETED", "FAILED") else None)
+        bs = registry.boards(home)
+        from .. import questions
+        from ..packet import Packet
+        # Whatever in the tree is waiting on an answer leads the page, form and all.
+        asks = [(n, qs) for n in nodes if n["state"] == "NEEDS_INPUT" and not n["running"]
+                for qs in [questions.of_packet(Packet(n["path"]))] if qs]
+        return render(request, "project.html", rp=rp, live=True, asks=asks,
+                      on=registry.board_of(e, [b["name"] for b in bs]),
+                      tl=data.timeline(kw["tasks"], now), **kw)
+
+    async def project_tasks(request, e, now, kw):
+        state = request.query_params.get("state", "")
+        states = sorted({t["state"] for t in kw["tasks"]}, key=str)
+        if state:
+            kw["tasks"] = [t for t in kw["tasks"] if t["state"] == state]
+        return render(request, "project_tasks.html", state=state, states=states, **kw)
+
+    async def project_task(request, e, now, kw):
+        try:
+            n = int(request.path_params["n"])
+        except ValueError:
+            n = 0
+        t = data.task(e, kw["tasks"], n)
+        if t is None:
+            return not_found(request, "task %s" % request.path_params["n"])
+        return render(request, "task.html", t=t, live=bool(t["task"]["running"]), **kw)
+
+    STEPS_PAGE = 50
+
+    async def project_steps(request, e, now, kw):
+        # Task keys: "<n>" for the root's tasks, a wpid for a child's.
+        opts = [dict(t, key=str(t["n"]) if t["kind"] == "task" else t["wpid"],
+                     label=t["name"] or t["short"]) for t in kw["tasks"]]
+        task = request.query_params.get("task", "")
+        match = [t for t in opts if t["key"] == task]
+        task = task if match else ""
+        pick = match or opts
+        rows = sorted(((t, s) for t in pick for s in t["steps"] if s["start"]),
+                      key=lambda ts: ts[1]["start"], reverse=True)
+        pages = max(1, -(-len(rows) // STEPS_PAGE))
+        try:
+            page = min(max(1, int(request.query_params.get("page", "1"))), pages)
+        except ValueError:
+            page = 1
+        kw["tasks"] = opts
+        return render(request, "project_steps.html", task=task, total=len(rows), page=page,
+                      pages=pages, steps=rows[(page - 1) * STEPS_PAGE:page * STEPS_PAGE], **kw)
+
+    async def project_cost(request, e, now, kw):
+        return render(request, "project_cost.html", tk=tokens.project(e, now), **kw)
+
+    async def project_settings(request, e, now, kw):
         bs = registry.boards(home)
         snap = await run_in_threadpool(dsched.snapshot, home)
-        return render(request, "project.html", e=e, card=data.card(e, now), nodes=nodes,
-                      sch=dsched.project_info(snap, e), classes=CLASSES,
-                      boards=bs, on=registry.board_of(e, [b["name"] for b in bs]),
-                      recent=recent, tl=data.timeline(nodes, now), live=True,
-                      settings=data.settings(e), tk=tokens.project(e, now),
-                      work=work_rows(e))
+        return render(request, "project_settings.html", settings=data.settings(e),
+                      sch=dsched.project_info(snap, e), classes=CLASSES, boards=bs,
+                      on=registry.board_of(e, [b["name"] for b in bs]), **kw)
 
     async def packet(request):
         e = entry(request)
@@ -469,6 +571,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         else:
             out = executor.Outcome(executor.USAGE, "unknown action %r" % op)
         url = "/p/%s/%s" % (urllib.parse.quote(e["name"]), wpid)
+        if one("back") == "project":
+            url = "/p/%s" % urllib.parse.quote(e["name"])
         return back(url + "/live" if one("back") == "live" else url, out)
 
     async def ide_open(request):
@@ -546,7 +650,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         except project_mod.ProjectError as ex:
             out = executor.Outcome(executor.USAGE, str(ex))
         url = compose_url(e, "#settings") if one("back") == "compose" else \
-            "/p/%s" % urllib.parse.quote(e["name"])
+            local(one("back"), "/p/%s/settings" % urllib.parse.quote(e["name"]))
         return back(url, out, poke_runner=False)
 
     # --- new task and Compose (docs/dash-tasks.md §3, §4) ---------------------------
@@ -614,6 +718,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                 pass
         elif request.query_params.get("last") == "1":
             c["instruction"] = c["last_instruction"]
+        elif request.query_params.get("instruction"):
+            c["instruction"] = request.query_params["instruction"]
         return render(request, "compose.html", e=e, c=c, settings=data.settings(e),
                       shells=shells.of_project(e["name"]) if shells else [],
                       shell_ok=shells is not None)
@@ -856,6 +962,133 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                                  headers={"content-disposition": 'inline; filename="%s-%s.jsonl"'
                                           % (wpid[:8], d)})
 
+    def file_page(request, e, p, rel, link, wpid=None, listing=None, editable=True):
+        """A Markdown file formatted, with markup (docs/doc-markup.md); ?raw=1 for
+        its source; other text as it is; a binary file as a download."""
+        if os.path.getsize(p) > FILE_MAX:
+            return PlainTextResponse("%s: %d bytes, too large to show here; it is at %s\n"
+                                     % (rel, os.path.getsize(p), p))
+        with open(p, "rb") as fp:
+            raw = fp.read()
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return Response(raw, media_type="application/octet-stream", headers={
+                "content-disposition": 'attachment; filename="%s"' % os.path.basename(p)})
+        html = (data.md(text, link(os.path.dirname(os.path.normpath(rel))), lines=True)
+                if p.lower().endswith((".md", ".markdown"))
+                and not request.query_params.get("raw") else None)
+        if html is None:
+            return PlainTextResponse(text)
+        return render(request, "doc.html", e=e, wpid=wpid, rel=rel, html=html,
+                      sha=markup.sha(text), writable=editable and os.access(p, os.W_OK),
+                      items=text.count("{++") + text.count("{--") + text.count("{~~")
+                      + text.count("{>>") + text.count("{=="))
+
+    async def deliverable(request):
+        """A file or folder the packet's completion report lists, or one in its
+        ``state/`` (docs/plan-tree.md)."""
+        e = entry(request)
+        wpid, rel = request.path_params["wpid"], request.query_params.get("path", "")
+        step = request.query_params.get("step") or None      # its copy, as it was then
+        hit = data.deliverable(e, wpid, rel, step) if e is not None else None
+        editable = step is None
+        if hit is None and e is not None and step is None:
+            hit = data.state_file(e, wpid, rel)
+            if hit is not None:
+                hit, editable = hit[:2], hit[2]
+        if hit is None:
+            return not_found(request, "deliverable %s" % rel)
+        p, is_dir = hit
+        if is_dir:
+            names = sorted(n + ("/" if os.path.isdir(os.path.join(p, n)) else "")
+                           for n in os.listdir(p))
+            return PlainTextResponse("%s/\n\n%s\n" % (rel.rstrip("/"), "\n".join(names)))
+        return file_page(request, e, p, rel, lambda d: data.file_link(e, wpid, d, step),
+                         wpid=wpid, editable=editable)
+
+    async def plan_view(request):
+        """The packet's plan as a tree, and its versions (docs/plan-tree.md)."""
+        e = entry(request)
+        wpid = request.path_params["wpid"]
+        q = request.query_params
+        pl = None
+        if e is not None and data.schema.is_wpid(wpid):
+            pkt = data.Packet(os.path.join(e["path"], "packets", wpid))
+            if os.path.isdir(pkt.path):
+                pl = await run_in_threadpool(
+                    plan.page, e, wpid, data.steps(pkt), q.get("v"), q.get("changes") == "1",
+                    q.get("open") if q.get("open") in ("all", "none") else None)
+        if pl is None:
+            return not_found(request, "packet %s" % wpid)
+        return render(request, "plan.html", e=e, pl=pl, MARK=plan.MARK)
+
+    async def doc(request):
+        """A file or folder in the project's ``work/`` (docs/doc-markup.md)."""
+        e = entry(request)
+        rel = os.path.normpath(request.query_params.get("path") or "work")
+        hit = data.work_doc(e, rel) if e is not None else None
+        if hit is None:
+            return not_found(request, "file %s" % rel)
+        p, is_dir = hit
+        if is_dir:
+            return render(request, "doc.html", e=e, wpid=None, rel=rel, html=None,
+                          listing=data.doc_listing(p, rel))
+        return file_page(request, e, p, rel, lambda d: data.doc_link(e, d))
+
+    async def markup_post(request):
+        """Mark up, or resolve an item in, a Markdown file shown by deliverable() or
+        doc(). JSON in, JSON out: ``{"sha"}`` or ``{"error"}``."""
+        from .. import actions
+        from ..packet import Packet
+        e = entry(request)
+        if e is None:
+            return JSONResponse({"error": "no such project"}, status_code=404)
+        try:
+            f = await request.json()
+            assert isinstance(f, dict)
+        except (ValueError, AssertionError):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        wpid, rel, op = f.get("wpid"), str(f.get("path") or ""), f.get("op")
+        hit = data.deliverable(e, wpid, rel) if wpid else data.work_doc(e, rel)
+        if hit is None and wpid:
+            hit = data.state_file(e, wpid, rel)
+            if hit is not None and not hit[2] and op != "ask":
+                return JSONResponse({"error": "the runner owns this packet's state/ now; "
+                                     "pause it first"}, status_code=409)
+            hit = hit[:2] if hit else None
+        if hit is None or hit[1] or not hit[0].lower().endswith((".md", ".markdown")):
+            return JSONResponse({"error": "not a Markdown file this board shows"},
+                                status_code=404)
+        if op == "ask":
+            if not wpid:
+                return JSONResponse({"error": "ask is for a packet's file"}, status_code=400)
+            pkt = Packet(os.path.join(e["path"], "packets", wpid))
+            out = await run_in_threadpool(actions.note, pkt, ask_text(rel), who(request))
+            if out.code == 0:
+                poke()
+            return JSONResponse({"msg": out.msg} if out.code == 0 else {"error": out.msg},
+                                status_code=200 if out.code == 0 else 400)
+        try:
+            if op in ("accept", "reject"):
+                fn = lambda t: markup.resolve(t, str(f.get("raw") or ""), int(f.get("n") or 0),
+                                              op == "accept")
+            else:
+                lines = tuple(int(x) for x in str(f.get("lines") or "").split("-"))
+                if len(lines) != 2:
+                    raise markup.MarkupError("no block to mark up")
+                fn = lambda t: markup.mark(t, lines, str(f.get("sel") or ""),
+                                           int(f.get("at") or 0), op, str(f.get("text") or ""))
+            sha = await run_in_threadpool(markup.edit, hit[0], str(f.get("sha") or ""), fn)
+        except markup.Stale as ex:
+            return JSONResponse({"error": str(ex), "stale": True}, status_code=409)
+        except (markup.MarkupError, ValueError) as ex:
+            return JSONResponse({"error": str(ex)}, status_code=400)
+        except OSError as ex:
+            return JSONResponse({"error": "cannot write %s: %s" % (rel, ex.strerror)},
+                                status_code=500)
+        return JSONResponse({"sha": sha})
+
     async def log_txt(request):
         e = entry(request)
         wpid, d = request.path_params["wpid"], request.path_params["step"]
@@ -933,11 +1166,20 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         WebSocketRoute("/p/{project}/shell/{sid}", shell_ws),
         Route("/p/{project}/settings", configure, methods=["POST"]),
         Route("/p/{project}/ide", ide_open, methods=["POST"]),
+        Route("/p/{project}/doc", doc),
+        Route("/p/{project}/markup", markup_post, methods=["POST"]),
         Route("/p/{project}/{wpid}/act", act, methods=["POST"]),
         Route("/p/{project}/{wpid}/live", live_view),
+        Route("/p/{project}/{wpid}/file", deliverable),
+        Route("/p/{project}/{wpid}/plan", plan_view),
         Route("/p/{project}/{wpid}/{step}/raw", raw),
         Route("/p/{project}/{wpid}/{step}/log.txt", log_txt),
-        Route("/p/{project}", project),
+        Route("/p/{project}", project_page(project_overview)),
+        Route("/p/{project}/tasks", project_page(project_tasks)),
+        Route("/p/{project}/tasks/{n}", project_page(project_task)),
+        Route("/p/{project}/steps", project_page(project_steps)),
+        Route("/p/{project}/cost", project_page(project_cost)),
+        Route("/p/{project}/settings", project_page(project_settings)),
         Route("/p/{project}/{wpid}", packet),
         Route("/p/{project}/{wpid}/{step}", step),
     ])

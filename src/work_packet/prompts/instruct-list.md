@@ -16,3 +16,5 @@ Every step:
   left, with the files and checks it needs. Not the whole plan.
 - If you need a decision you cannot make, stop and ask (ask:).
 - Continue with resume: now. Use resume: done when the task is done.
+  With it, write the completion report: what was decided and where
+  the results are.

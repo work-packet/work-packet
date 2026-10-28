@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% import "_tabs.html" as tabs with context %}
+{% import "_settings.html" as sm with context %}
+{% import "_sched.html" as schm with context %}
+{% block title %}{{ e.name }} · settings{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / settings{% endblock %}
+{% block main %}
+{{ tabs.top(e, card, "settings", work) }}
+{% set here = "/p/" ~ (e.name|urlencode) ~ "/settings" %}
+<h2 id="settings">Permissions, limits and model</h2>
+{% if settings %}{{ sm.panel(e, settings, here) }}{% else %}<p class="muted">No settings to show (project.toml unreadable).</p>{% endif %}
+{{ schm.project_panel(e, sch, classes, here) }}
+<h2 id="board">Board</h2>
+<div class="panel">
+{% if boards|length > 1 %}<form class="act row" method="post" action="/p/{{ e.name|urlencode }}/board" style="margin:0">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="{{ here }}">
+  On <select name="board" aria-label="board">{% for b in boards %}<option value="{{ b.name }}"{{ " selected" if b.name == on }}>{{ b.name }}</option>{% endfor %}</select>
+  <button class="mini">Move</button> <a href="/b/{{ on|urlencode }}">open {{ on }}</a></form>
+{% else %}On <a href="/b/{{ on|urlencode }}">{{ on }}</a> <span class="muted">(make another board from the side tab of the Overview to move it)</span>{% endif %}
+</div>
+{% endblock %}

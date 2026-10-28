@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{# A Markdown file formatted, with markup (docs/doc-markup.md): a deliverable of a
+   completion report (app.deliverable), or a file in the project's work/ (app.doc). #}
+{% set q = e.name|urlencode %}
+{% block title %}{{ rel }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ q }}">{{ e.name }}</a> / {% if wpid %}<a href="/p/{{ q }}/{{ wpid }}">{{ wpid[:8] }}</a> / {{ rel }}{% else %}{% set parts = rel.split("/") %}{% for p in parts %}{% if not loop.last %}<a href="/p/{{ q }}/doc?path={{ parts[:loop.index]|join('/')|urlencode }}">{{ p }}</a> / {% else %}{{ p }}{% endif %}{% endfor %}{% endif %}{% endblock %}
+{% block head %}
+<style>
+.md .cm { border-radius: 3px; padding: 0 1px; }
+.md ins.cm-ins, .md .cm-sub > ins { background: var(--add); color: inherit; text-decoration: none;
+  box-shadow: inset 0 -2px 0 var(--COMPLETED); }
+.md del.cm-del, .md .cm-sub > del { background: var(--del); color: inherit; text-decoration-color: var(--FAILED); }
+.md mark.cm-mark { background: #fff2a8; color: inherit; }
+.md .cm-comment { font-size: .85em; background: var(--hunk); border: 1px solid var(--line);
+  border-radius: 9px; padding: 0 6px; margin: 0 2px; color: var(--ink); }
+.md .cm-comment::before { content: "\1F4AC\00a0"; }
+@media (prefers-color-scheme: dark) { .md mark.cm-mark { background: #5a4d12; } }
+.md .cm[data-cm] { cursor: pointer; }
+.md .cm.cm-on { outline: 2px solid var(--link); }
+.docbar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 0 0 10px; }
+.docbar .hint { margin-left: auto; font-size: 12px; }
+.mkpop { position: absolute; z-index: 50; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.18); padding: 6px; display: none;
+  max-width: min(420px, calc(100vw - 32px)); }
+.mkpop .row { display: flex; gap: 4px; flex-wrap: wrap; }
+.mkpop textarea { display: block; width: 100%; min-width: 260px; box-sizing: border-box; min-height: 3.5em;
+  margin: 6px 0; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg); color: var(--ink); }
+.mkpop .err { color: var(--FAILED); font-size: 12px; margin: 4px 2px 0; }
+.mkpop .what { font-size: 12px; color: var(--muted); margin: 0 2px 4px; }
+ul.files { list-style: none; padding-left: 0; } ul.files li { margin: 4px 0; }
+</style>
+{% endblock %}
+{% block main %}
+{% if listing is defined and listing is not none %}
+<h1><code>{{ rel }}/</code></h1>
+<div class="panel">
+{% if listing %}<ul class="files">{% for f in listing %}
+<li><a href="/p/{{ q }}/doc?path={{ f.path|urlencode }}">{{ "📁 " if f.dir }}{{ f.name }}</a></li>{% endfor %}</ul>
+{% else %}<p class="muted">No folders or Markdown files here.</p>{% endif %}
+</div>
+{% else %}
+<div class="docbar muted">
+  <code>{{ rel }}</code>
+  <a href="?path={{ rel|urlencode }}&amp;raw=1">raw</a>
+  {% if wpid %}<a href="/p/{{ q }}/{{ wpid }}#report">back to the report</a>{% endif %}
+  {% if items %}<span><strong>{{ items }}</strong> markup item{{ "s" if items != 1 }}</span>
+    {% if wpid %}<button class="mini" id="mk-ask" type="button">Ask the packet to resolve them</button>
+    {% else %}<a href="/p/{{ q }}/compose?instruction={{ ask_text(rel)|urlencode }}">Ask Claude to resolve them (new task)</a>{% endif %}{% endif %}
+  <span class="hint">{% if writable %}Select text to comment or suggest a change · click markup to accept or reject{% else %}read-only: the file cannot be written{% endif %}</span>
+</div>
+<article class="panel md" id="mk-doc" data-post="/p/{{ q }}/markup" data-path="{{ rel }}"
+  data-wpid="{{ wpid or '' }}" data-sha="{{ sha }}" data-csrf="{{ csrf or '' }}"
+  data-writable="{{ '1' if writable else '' }}">{{ html|safe }}</article>
+<script src="/static/markup.js?v={{ asset_v }}"></script>
+{% endif %}
+{% endblock %}

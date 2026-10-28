@@ -6,13 +6,14 @@ import functools
 import json
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
 from dataclasses import dataclass
 
 from . import (clock, faults, frontmatter, fsutil, harness, journal, model, notes, procs,
-               profiles, prompt, questions, registry, schema, spawn, workspace)
+               profiles, prompt, questions, registry, report, schema, spawn, workspace)
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, project_of, settings
@@ -186,7 +187,12 @@ def _apply(pkt, st, rec):
             meta["next_size"] = d["size"]
         else:
             meta.pop("next_size", None)
-        pkt.save_status(meta, d["summary"])
+        body = d["summary"]
+        if d.get("report"):         # the outcome leads, so ps and the board show it
+            body = "%s\n\n%s" % (d["report"]["outcome"], body)
+        pkt.save_status(meta, body)
+    if d.get("report"):
+        shutil.copyfile(os.path.join(pkt.step_dir(n), report.NAME), pkt.report_path)
     faults.point("after-status")
 
     end = {"type": "commit-end", "t": _ts(), "step": n}
@@ -389,6 +395,29 @@ def _children(pkt, meta):
     return out
 
 
+_OPEN_ITEM = re.compile(r"^\s*[-*]\s+\[([ >+])\]\s*(\S+)")
+
+
+def _open_items(path):
+    """The open items of an outline (``[ ]``, ``[>]``, ``[+]``): the first word of
+    each, at most five, then ``...``. Empty when there is no outline."""
+    try:
+        text = fsutil.read_text(path)
+    except OSError:
+        return []
+    left = [m.group(2).rstrip(".:") for m in map(_OPEN_ITEM.match, text.splitlines()) if m]
+    return left[:5] + (["..."] if len(left) > 5 else [])
+
+
+def _requests_section(pkt):
+    """The step prompt's "Requests" (docs/delegation.md §5); "" if it can't be read."""
+    from . import requests
+    try:
+        return requests.section(pkt.wpid)
+    except (OSError, KeyError, TypeError):
+        return ""
+
+
 def _validate_pending(pkt, st=None):
     """(memento meta, problem message or None). ``st``: the project's settings,
     for the sizes its steps may ask for."""
@@ -413,6 +442,32 @@ def _validate_pending(pkt, st=None):
         return None, ".pending/summary.md is missing or empty"
     if not os.path.isdir(os.path.join(pkt.pending_dir, "state")):
         return None, ".pending/state/ was removed"
+    from . import requests              # it imports this module
+    for q in questions.normalise(mm.get("ask")):
+        if q.get("request"):
+            try:
+                requests.load_brief(os.path.join(pkt.pending_dir, "state"), q["request"])
+            except requests.RequestError as e:
+                return None, ".pending/memento.md: ask %s: %s" % (q["id"], e)
+    kind = clock.parse_resume(mm["resume"]).kind
+    if kind == "done":
+        left = _open_items(os.path.join(pkt.pending_dir, "state", "outline.md"))
+        if left:
+            return None, "resume: done, but state/outline.md has open items: %s. " \
+                "Use ask: if the next one needs the owner, resume: now if work can " \
+                "go on, or mark them [-] with a reason" % ", ".join(left)
+    if kind in ("done", "fail"):
+        rpath = os.path.join(pkt.pending_dir, report.NAME)
+        if not os.path.isfile(rpath):
+            return None, ".pending/report.md was not written (it is required with " \
+                "resume: %s)" % kind
+        try:
+            rm, rbody = frontmatter.load(rpath)
+        except (OSError, frontmatter.FrontMatterError) as e:
+            return None, ".pending/report.md: %s" % e
+        probs = report.validate(rm, rbody, pkt.path, os.path.join(pkt.pending_dir, "state"))
+        if probs:
+            return None, ".pending/report.md: %s" % probs[0]
     return mm, None
 
 
@@ -508,7 +563,8 @@ def step(target, force=False, lost=None):
 NUDGE = ("wpk: your turn ended, but the step is not finished: %s. Nothing you "
          "started in the background is still running for you, and its result "
          "will not arrive. Check what it left (its output file, `git status`), "
-         "then write `.pending/summary.md` and `.pending/memento.md` now. If the "
+         "then write `.pending/summary.md` and `.pending/memento.md` now (and, with "
+         "resume: done or fail, `.pending/report.md`, as the protocol says). If the "
          "work is not done, say so in the summary and give the exact next action "
          "in the memento, with `resume: now`.")
 NUDGE_WAIT_S = 600          # wait this long for processes the first run left
@@ -622,7 +678,7 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
                         state_dir=pkt.state_dir,
                         handoffs=handoffs,
                         last_attempt=_last_attempt(pkt, n), notes=queued,
-                        sizes=_size_list(st))
+                        sizes=_size_list(st), requests=_requests_section(pkt))
     fsutil.atomic_write(os.path.join(sd, "prompt.md"), text)
     # 7. step-start, then 5. snapshot (so the journal line is part of it).
     run_no = pkt.next_run(n)     # not the attempt: that restarts at 1 on a resume
@@ -712,6 +768,13 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
     fsutil.atomic_write(os.path.join(sd, "state.diff"), state_diff(pkt.state_dir, pend_state))
     shutil.copyfile(os.path.join(pkt.pending_dir, "memento.md"), os.path.join(sd, "result.md"))
     fsutil.atomic_write(os.path.join(sd, "summary.md"), summary)
+    hd = workspace.heads(pkt)
+    rep = None
+    if state in ("COMPLETED", "FAILED") and not ask:
+        rm, rbody = frontmatter.load(os.path.join(pkt.pending_dir, report.NAME))
+        rep = report.stamp(rm, hd)
+        fsutil.atomic_write(os.path.join(sd, report.NAME), frontmatter.dump(rep, rbody))
+        report.snapshot(rep, pkt.path, pend_state, sd)
     decision = {
         "state": state, "resume_expr": " ".join(mm["resume"].split()),
         "wake_at": _ts(wake) if wake else None,
@@ -724,7 +787,9 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
     seen = notes.committed(sd, pkt)
     if seen:
         decision["notes"] = seen
-    hd = workspace.heads(pkt)
+    if rep is not None:
+        decision["report"] = {"outcome": rep["outcome"].strip(),
+                              "deliverables": [d["path"] for d in rep["deliverables"]]}
     if hd:
         decision["heads"] = hd
     # 13-18. Commit.
@@ -779,6 +844,22 @@ def _archive_outline(pkt, batch):
         rel = os.path.join("history", "outline-%d.%d.md" % (batch, n))
         dst = os.path.join(pkt.state_dir, rel)
     os.rename(src, dst)
+    return "state/" + rel
+
+
+def _archive_report(pkt, batch):
+    """``report.md`` to ``state/history/report-<batch>.md``; the new path or None."""
+    if not os.path.isfile(pkt.report_path):
+        return None
+    rel = os.path.join("history", "report-%d.md" % batch)
+    dst = os.path.join(pkt.state_dir, rel)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    n = 1
+    while os.path.exists(dst):
+        n += 1
+        rel = os.path.join("history", "report-%d.%d.md" % (batch, n))
+        dst = os.path.join(pkt.state_dir, rel)
+    os.rename(pkt.report_path, dst)
     return "state/" + rel
 
 
@@ -849,6 +930,10 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
                     extra["outline"] = moved
                 if carry_session:
                     extra["carry_session"] = True
+            rmoved = _archive_report(pkt, batch_of(records)) if old in (
+                "COMPLETED", "FAILED") else None   # it no longer says where things stand
+            if rmoved:
+                extra["report"] = rmoved
             meta.update(state="RUNNABLE", reason=None, wake_at=None, attempts=0)
         else:
             raise ValueError(op)

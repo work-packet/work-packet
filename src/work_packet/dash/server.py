@@ -1,4 +1,5 @@
-"""Serving the board on loopback and on the tailnet (server.md §2.2).
+"""Serving the board on loopback and on the tailnet (server.md §2.2), or on
+every address with a Unix sign-in (docs/unix-login.md).
 
 Each listener is its own uvicorn server with its own ``Guard``, all in one
 event loop. The loopback one starts at once. The tailnet one waits for
@@ -95,6 +96,19 @@ def _url(host, port, scheme="http"):
     return "%s://%s:%d/" % (scheme, "[%s]" % host if ":" in host else host, port)
 
 
+def host_names(extra=()):
+    """This host's names and addresses, as a browser might put them in ``Host``."""
+    import subprocess
+    names = {socket.gethostname(), socket.getfqdn()} | set(extra)
+    for n in list(names):
+        with contextlib.suppress(OSError, UnicodeError):
+            names |= {a[4][0] for a in socket.getaddrinfo(n, None)}
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        out = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5)
+        names |= set(out.stdout.split())
+    return {n.lower() for n in names if n and not n.startswith("127.") and n != "::1"}
+
+
 def _bind(ip, port):
     fam = socket.AF_INET6 if ":" in ip else socket.AF_INET
     s = socket.socket(fam, socket.SOCK_STREAM)
@@ -145,19 +159,34 @@ class Board:
         self.app = create_app(home, runner=runner, shells=self.shells, ide_backend=self.ide)
         self.secret = load_secret(self.home)
         self.user = getpass.getuser()
-        want_tn = cfg["tailnet"] if host is None else not is_loopback(host)
+        self.network = cfg["auth"] == "unix" and (
+            cfg.get("listen") == "network" if host is None else not is_loopback(host))
+        want_tn = not self.network and (cfg["tailnet"] if host is None
+                                         else not is_loopback(host))
         self.tailnet = (tailnet or Tailnet()) if want_tn else None
         if want_tn and cfg["auth"] != "tailscale":
             raise ServeError("auth = %r cannot listen beyond this machine; "
-                             "use auth = \"tailscale\"" % cfg["auth"])
-        self.urls = {"loopback": [], "tailnet": []}
+                             "use auth = \"tailscale\" (or \"unix\" with TLS: "
+                             "docs/unix-login.md)" % cfg["auth"])
+        if self.network and cfg.get("tls") not in ("self-signed", "files"):
+            raise ServeError("the network listener needs tls = \"self-signed\" or \"files\": "
+                             "a session cookie must not cross the network in clear")
+        self.gate = None
+        if self.network:
+            from ..sched import authz
+            from .login import Gate
+            self.gate = Gate(self.home, self.secret, self.port, authz.home_owner(self.home),
+                             cfg["allow"], cfg.get("session_days", 30))
+        self.urls = {"loopback": [], "tailnet": [], "network": []}
         self.sock = None
+        self.names = set()
         self._stop = None
 
     def guard(self, kind):
         return Guard(self.app, kind, self.secret, tailnet=self.tailnet,
                      allow=self.cfg["allow"], extra_hosts=self.cfg["extra_hosts"],
-                     local_user=self.user)
+                     local_user=self.user, gate=self.gate if kind == "network" else None,
+                     names=self.names if kind == "network" else ())
 
     def _start(self, kind, socks, tls=None):
         """``tls``: ``(cert, key)`` paths for an https listener."""
@@ -173,7 +202,9 @@ class Board:
     def _write_state(self):
         fsutil.atomic_write(state_path(self.home), json.dumps({
             "pid": os.getpid(), "started": schema.format_timestamp(clock.now()),
-            "port": self.port, "urls": self.urls["loopback"] + self.urls["tailnet"],
+            "port": self.port,
+            "urls": self.urls["network"] + self.urls["loopback"] + self.urls["tailnet"],
+            "auth": self.cfg["auth"] if self.network else None,
             "runner": self.runner is not None, "sock": self.sock,
             "host": socket.gethostname(),
         }, indent=1) + "\n")
@@ -190,6 +221,41 @@ class Board:
         if new:
             log.warning("fetched the certificate for %s", name)
         return (cp, kp, new, name), None
+
+    def _network_tls(self):
+        from . import tls as tls_mod
+        try:
+            if self.cfg.get("tls") == "files":
+                cp = os.path.expanduser(self.cfg["tls_cert"])
+                kp = os.path.expanduser(self.cfg["tls_key"])
+            else:
+                cp, kp = tls_mod.self_signed(self.home, self.names)
+            tls_mod.context(cp, kp)
+        except tls_mod.TlsError as e:
+            raise ServeError(str(e))
+        return cp, kp
+
+    def _start_network(self):
+        """Every address (or ``--host``), https only, sign-in required."""
+        from .login import ensure_drop_dir
+        self.names = host_names(self.cfg["extra_hosts"])
+        if self.host is not None:
+            self.names.add(self.host.lower())
+        tls = self._network_tls()
+        ensure_drop_dir(self.home)
+        socks = []
+        for ip in ([self.host] if self.host else ["0.0.0.0", "::"]):
+            try:
+                socks.append(_bind(ip, self.port))
+            except OSError as e:
+                if ip == "::" and socks:        # no IPv6 here: IPv4 is enough
+                    continue
+                for s_ in socks:
+                    s_.close()
+                raise ServeError("cannot listen on %s:%d: %s" % (ip, self.port, e))
+        fqdn = socket.getfqdn()
+        self.urls["network"] = [_url(self.host or fqdn, self.port, "https")]
+        return self._start("network", socks, tls)
 
     async def _tailnet(self, ips_only=None):
         """Keep a server on this node's tailnet addresses (or ``ips_only``)."""
@@ -254,7 +320,9 @@ class Board:
             loop.add_signal_handler(sig, self._stop.set)
         tasks, servers = [], []
         try:
-            if self.host is not None and self.tailnet is not None:
+            if self.network:
+                servers.append(self._start_network())
+            elif self.host is not None and self.tailnet is not None:
                 tasks.append(asyncio.ensure_future(self._tailnet([self.host])))
             else:
                 if self.host is None and self.cfg.get("listen") == "unix":

@@ -100,7 +100,7 @@ def test_dash_side_tab_and_board_pages(home, client):
     assert "Delete board" in page and "Tokens, last 7 days" not in page
     over = client.get("/").text
     assert 'href="/b/rtl"><strong>rtl<' in over
-    assert 'value="rtl" selected' in client.get("/p/alpha").text
+    assert 'value="rtl" selected' in client.get("/p/alpha/settings").text
     assert client.get("/b/nope").status_code == 404
     r = client.post("/b/rtl/delete", follow_redirects=False)
     assert r.headers["location"].startswith("/?") and "alpha+moved+to+main" in \
@@ -119,3 +119,23 @@ def test_all_packets_table(home, client):
     assert '<option value="rtl">' in r.text                   # the board filter
     assert 'class="item on" href="/packets"' in r.text
     assert 'data-filter' in r.text                            # typing does not stop live refresh
+
+
+def test_all_packets_moves_ticked_packets_to_a_board(home, client):
+    from urllib.parse import unquote_plus
+    assert 'value="board"' not in client.get("/packets").text   # one board: nothing to move to
+    registry.new_board("rtl")
+    page = client.get("/packets").text
+    assert 'name="board"' in page and 'value="board"' in page
+    a, b = registry.get("alpha")["root"], registry.get("beta")["root"]
+    picks = ["alpha/%s" % a, "alpha/%s" % a, "beta/%s" % b]
+    r = client.post("/packets/bulk", data={"op": "board", "board": "rtl", "pick": picks},
+                    follow_redirects=False)
+    msg = unquote_plus(r.headers["location"])
+    assert "ok=1" in msg and msg.count("moved project") == 2     # each project once
+    assert _on("alpha") == "rtl" and _on("beta") == "rtl"
+    r = client.post("/packets/bulk", data={"op": "board", "pick": picks}, follow_redirects=False)
+    assert "pick a board" in unquote_plus(r.headers["location"])
+    r = client.post("/packets/bulk", data={"op": "board", "board": "nope", "pick": picks[:1]},
+                    follow_redirects=False)
+    assert "ok=0" in r.headers["location"] and _on("alpha") == "rtl"

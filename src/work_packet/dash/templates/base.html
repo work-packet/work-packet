@@ -54,6 +54,7 @@ td.num { font-variant-numeric: tabular-nums; }
 .wrap { overflow-x: auto; }
 .state { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .03em;
   padding: 1px 7px; border-radius: 9px; color: #fff; background: var(--unknown); }
+a.state { text-decoration: none; } a.state:hover { filter: brightness(1.1); text-decoration: underline; }
 .state.RUNNABLE { background: var(--RUNNABLE); } .state.SLEEPING { background: var(--SLEEPING); }
 .state.NEEDS_INPUT { background: var(--NEEDS_INPUT); } .state.PAUSED { background: var(--PAUSED); } .state.FAILED { background: var(--FAILED); }
 .state.COMPLETED { background: var(--COMPLETED); } .state.running { background: var(--running); }
@@ -83,6 +84,22 @@ button.go { font: inherit; padding: 4px 12px; border-radius: 5px; border: 1px so
   background: var(--panel); color: var(--ink); cursor: pointer; }
 button.go.primary { background: var(--link); border-color: var(--link); color: #fff; }
 .ask { border-left: 4px solid var(--NEEDS_INPUT); }
+.report { border-left: 5px solid var(--COMPLETED); margin: 0 0 16px; padding: 14px 18px; }
+.report.FAILED { border-left-color: var(--FAILED); }
+.report .kicker { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.report .outcome { font-size: 1.35em; font-weight: 600; margin: 6px 0 4px; line-height: 1.3; }
+.report h3 { margin: 16px 0 6px; font-size: 1em; }
+.report .lead { margin: 4px 0 0; }
+.md table { display: block; width: max-content; max-width: 100%; overflow-x: auto; margin: 8px 0; }
+.md th { color: var(--ink); font-size: inherit; border-bottom: 2px solid var(--line); }
+.md td, .md th { border: 1px solid var(--line); }
+.md code { background: var(--code); padding: 1px 4px; border-radius: 3px; }
+.md pre code { background: none; padding: 0; }
+.report .md > :first-child { margin-top: 0; } .report .md > :last-child { margin-bottom: 0; }
+.report ul.deliv { margin: 0; padding-left: 20px; } .report ul.deliv li { margin: 4px 0; }
+.report .path { font-size: 12px; overflow-wrap: anywhere; }
+.report details.kid { border-top: 1px solid var(--line); padding: 6px 0; }
+.report details.kid > :not(summary) { margin-left: 16px; }
 .q { margin: 10px 0 14px; } .q .text { font-weight: 600; margin-bottom: 4px; }
 .q .opts { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 4px 0; }
 .q .opts label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
@@ -170,8 +187,8 @@ td.path { font-family: ui-monospace, monospace; font-size: 12px; word-break: bre
   <a class="brand" href="/">wpk dash</a>
   <span class="crumbs">{% block crumbs %}{% endblock %}</span>
   {% if live %}<button id="live" type="button" data-refresh-ms="{{ refresh_ms or refresh_s * 1000 }}" title="Refresh every {{ ((refresh_ms or refresh_s * 1000) / 1000)|round(1) }} s">live</button>{% endif %}
-  <a class="newtask" href="/new">New task</a>
-  <span class="muted ver" style="font-size:12px" title="{{ 'This server runs due packets' if runner else 'Nothing runs packets here: start with --run, or use wpk tick' }}">{{ 'runner on' if runner else 'runner off' }} · {% if user %}{{ user }} · {% endif %}work-packet {{ version }}</span>
+  <a class="newtask" href="/new">New packet</a>
+  <span class="muted ver" style="font-size:12px" title="{{ 'This server runs due packets' if runner else 'Nothing runs packets here: start with --run, or use wpk tick' }}">{{ 'runner on' if runner else 'runner off' }} · {% if user %}{{ user }}{% if signout %} <form method="post" action="/logout" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" class="linkish" style="font-size:12px;background:none;border:0;padding:0;color:inherit;text-decoration:underline;cursor:pointer">sign out</button></form>{% endif %} · {% endif %}work-packet {{ version }}</span>
 </header>
 <main id="main">{% if sched_mode %}<div class="modebar" role="status"><strong>Pool {{ "halted" if sched_mode.mode == "drain" else "stopped" }}</strong>{% if sched_mode.by %} by {{ sched_mode.by }}{% endif %}{% if sched_mode.at %} at {{ sched_mode.at }}{% endif %}{% if sched_mode.reason %}: {{ sched_mode.reason }}{% endif %}. No new agent step starts. <a href="/sched">Scheduler</a></div>{% endif %}{% if flash %}<div class="flash {{ 'ok' if flash_ok else 'bad' }}">{{ flash }}</div>{% endif %}{% block main %}{% endblock %}</main>
 <script src="/static/pane.js"></script>

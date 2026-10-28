@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% import "_tabs.html" as tabs with context %}
+{% import "_report.html" as rpm %}
+{% import "_project_tasks.html" as ptm %}
+{% block title %}{{ e.name }} · {{ t.task.name }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <a href="/p/{{ e.name|urlencode }}/tasks">tasks</a> / {{ t.task.name }}{% endblock %}
+{% block main %}
+{% set base = "/p/" ~ (e.name|urlencode) %}
+{% set k = t.task %}
+{{ tabs.top(e, card, "tasks", work) }}
+<p class="row" style="justify-content:space-between">
+  <span>{% if t.prev %}<a href="{{ base }}/tasks/{{ t.prev }}">← task {{ t.prev }}</a>{% endif %}</span>
+  <span>{% if t.next %}<a href="{{ base }}/tasks/{{ t.next }}">task {{ t.next }} →</a>{% endif %}</span>
+</p>
+<h2 style="margin-top:0">{{ k.name|capitalize }}
+  {% if k.running %}<span class="state running pulse">RUNNING</span>{% elif k.state == "NEEDS_INPUT" %}<a class="state NEEDS_INPUT" href="{{ base }}#answer" title="Answer its questions">NEEDS_INPUT</a>{% else %}<span class="state {{ k.state }}">{{ k.state }}</span>{% endif %}</h2>
+<p class="muted">{% if k.first %}<a href="{{ base }}/steps?task={{ k.n }}">steps {{ k.first }}{% if k.last != k.first %}–{{ k.last }}{% endif %}</a>{% else %}no steps yet{% endif %}
+  · {{ k.cost_usd|money }}{% if k.running %} · <a href="{{ base }}/{{ k.wpid }}/live">live view</a>{% elif k.next %} · next: {{ k.next }}{% endif %}</p>
+{% if k.reason %}<p class="{{ 'err' if k.state == 'FAILED' }}">[{{ k.reason }}]</p>{% endif %}
+
+<h3>Instruction</h3>
+{% if k.text %}<div class="panel">{% if t.text_html is not none %}<div class="md">{{ t.text_html|safe }}</div>{% else %}<pre>{{ k.text }}</pre>{% endif %}</div>
+{% else %}<p class="muted">{{ "The packet's first instruction (it is not recorded per task)." if k.n == 1 else "Resumed with no new instruction." }}</p>{% endif %}
+
+{% set r = t.report %}
+{% if r %}
+<section id="report" class="panel report {{ k.state }}">
+  <div class="muted kicker">{{ "Failed" if k.state == "FAILED" else "Finished" }} · completion report{% if k.report_step %} · written by <a href="{{ base }}/{{ k.wpid }}/{{ k.report_step }}">step {{ k.report_step|int }}</a>{% elif k.report != "report.md" %} · <a href="{{ base }}/{{ k.wpid }}/file?path={{ k.report|urlencode }}">{{ k.report }}</a>{% endif %}</div>
+  <p class="outcome">{{ rpm.outcome(r) }}</p>
+  {{ rpm.body(e, r) }}
+  {% if r.snapshot %}<p class="muted" style="font-size:12px">Deliverables open as they were when this task finished.</p>
+  {% elif r.deliverables %}<p class="muted" style="font-size:12px">Deliverables open as they are now: this report predates the copy a step keeps of them.</p>{% endif %}
+</section>
+{% elif k.state in ("COMPLETED", "FAILED") and not k.running %}
+<section id="report" class="panel report {{ k.state }}">
+  <div class="muted kicker">{{ "Failed" if k.state == "FAILED" else "Finished" }} without a completion report. Last summary:</div>
+  <p>{{ k.summary or "(none)" }}</p>
+</section>
+{% endif %}
+
+{% if t.children %}
+<h3>Sub-tasks</h3>
+{{ ptm.table(e, t.children, full=True) }}
+{% endif %}
+
+<h3>Steps</h3>
+{% if k.steps %}
+<div class="wrap"><table>
+  <tr><th>Step</th><th>Started</th><th>Outcome</th><th class="num">Time</th><th class="num">Cost</th><th>Summary</th></tr>
+  {% for s in k.steps %}
+  <tr>
+    <td><a href="{{ base }}/{{ k.wpid }}/{{ s.dir }}">{{ s.n }}{% if s.outcome == "failed" %}.{{ s.attempt }}{% endif %}</a></td>
+    <td style="white-space:nowrap">{{ s.start|when }}</td>
+    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span></td>
+    <td class="num">{{ s.duration_s|secs }}</td>
+    <td class="num">{{ s.cost_usd|money }}</td>
+    <td>{% if s.why %}<span class="err">{{ s.why }}</span>{% else %}{{ s.summary }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<p class="muted">None yet.</p>
+{% endif %}
+{% endblock %}

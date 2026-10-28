@@ -43,6 +43,13 @@ def answer(pkt, answers=None, note=None, take_recommendations=False, by=None):
             return executor.Outcome(executor.LEASED, str(e))
         if ch:
             done.append("granted " + ", ".join(t.split(" ", 1)[1] for t in ch))
+    for rid in questions.requests(qs, got):
+        from . import requests
+        try:
+            e = requests.send(pkt, rid, by=by)
+        except requests.RequestError as ex:
+            return executor.Outcome(executor.USAGE, "request %s: %s" % (rid, ex))
+        done.append("sent request %s to %s" % (rid, requests._where(e)))
     out = executor.admin(pkt, "handoff", note=note, answers=got, by=by)
     if out.code != executor.OK:
         return out

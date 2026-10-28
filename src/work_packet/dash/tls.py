@@ -130,3 +130,58 @@ def context(cert, key):
     except (OSError, ssl.SSLError) as e:
         raise TlsError("%s: %s" % (cert, e)) from None
     return ctx
+
+
+# -- the network listener (docs/unix-login.md) -----------------------------------
+
+SELF_DAYS = 397
+
+
+def self_signed(home, names, now=None):
+    """``(cert path, key path)`` of a self-signed pair for ``names`` (host names
+    and addresses), made with ``openssl`` when missing, ending, or not covering
+    every name."""
+    import ipaddress
+    import json
+    import shutil
+    import subprocess
+    now = time.time() if now is None else now
+    d = tls_dir(home)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    os.chmod(d, 0o700)
+    cp, kp = os.path.join(d, "self-signed.crt"), os.path.join(d, "self-signed.key")
+    meta = os.path.join(d, "self-signed.json")
+    names = sorted({n.lower() for n in names if n})
+    try:
+        with open(meta) as fp:
+            have = set(json.load(fp).get("names") or [])
+    except (OSError, ValueError):
+        have = set()
+    if os.path.exists(cp) and os.path.exists(kp) and set(names) <= have and \
+            not_after(cp) - now > RENEW_DAYS * 86400:
+        return cp, kp
+    if not shutil.which("openssl"):
+        raise TlsError("tls = \"self-signed\" needs openssl on PATH")
+    san = []
+    for n in names:
+        try:
+            ipaddress.ip_address(n)
+            san.append("IP:" + n)
+        except ValueError:
+            san.append("DNS:" + n)
+    tmp_c, tmp_k = cp + ".new", kp + ".new"
+    r = subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+         "-nodes", "-days", str(SELF_DAYS), "-subj", "/CN=%s" % (names[0] if names else "wpk"),
+         "-addext", "subjectAltName=" + ",".join(san),
+         "-addext", "basicConstraints=critical,CA:FALSE",
+         "-addext", "extendedKeyUsage=serverAuth",
+         "-keyout", tmp_k, "-out", tmp_c],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        raise TlsError("openssl could not make a certificate: %s" % r.stderr.strip()[-300:])
+    os.chmod(tmp_k, 0o600)
+    os.replace(tmp_k, kp)
+    os.replace(tmp_c, cp)
+    fsutil.atomic_write(meta, json.dumps({"names": names}) + "\n")
+    return cp, kp

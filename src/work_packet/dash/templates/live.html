@@ -99,7 +99,7 @@ table.procs td.cmd code { font-size: 11px; }
       {% endfor %}
     </ul>
     {% endif %}
-    <h2>Outline{% if l.outline %} <span class="muted" style="font-weight:400;font-size:13px">{{ l.outline.done }} of {{ l.outline.total }} done · <code>{{ l.outline.file }}</code></span>{% endif %}</h2>
+    <h2>Outline{% if l.outline %} <span class="muted" style="font-weight:400;font-size:13px">{{ l.outline.done }} of {{ l.outline.total }} done · <code>{{ l.outline.file }}</code> · <a href="/p/{{ e.name|urlencode }}/{{ l.wpid }}/plan">as a tree, with its history</a></span>{% endif %}</h2>
     {% if l.outline %}
     <div class="bar"><span style="width:{{ (100 * l.outline.done / l.outline.total)|round(1) }}%"></span></div>
     <ul class="tasks panel">

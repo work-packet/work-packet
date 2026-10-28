@@ -57,7 +57,7 @@
   <section class="col" id="col-{{ loop.index }}" data-follow="no">
     <h2><span>{{ col }}</span><span class="muted">{{ cols[col]|length }}</span></h2>
     {% for c in cols[col] %}
-    <a class="card {{ c.column }}" draggable="true" data-project="{{ c.name }}" href="/p/{{ c.name|urlencode }}{% if c.running %}/{{ c.running.wpid }}/live{% elif c.setup %}/compose{% elif c.column == 'Needs you' and c.root %}/{{ c.root.wpid }}#answer{% endif %}">
+    <a class="card {{ c.column }}" draggable="true" data-project="{{ c.name }}" href="/p/{{ c.name|urlencode }}{% if c.running %}/{{ c.running.wpid }}/live{% elif c.setup %}/compose{% elif c.column == 'Needs you' %}#answer{% endif %}">
       <div class="name"><span>{{ c.name }}</span>
         {% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</div>
       {% if c.running %}

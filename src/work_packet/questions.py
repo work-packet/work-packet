@@ -3,7 +3,7 @@
 from . import schema
 
 YES = ("yes", "y", "true", "ok", "approve", "approved", "grant", "granted")
-QUESTION_FIELDS = ("id", "q", "recommend", "choices", "grants")
+QUESTION_FIELDS = ("id", "q", "recommend", "choices", "grants", "request")
 
 
 def validate(ask):
@@ -38,6 +38,8 @@ def validate(ask):
             if v is not None and not (isinstance(v, list) and v and
                                       all(isinstance(x, str) and x.strip() for x in v)):
                 out.append(P("%s.%s" % (w, k), "must be a non-empty list of strings"))
+        if "request" in q and not schema.is_name(q["request"]):
+            out.append(P(w + ".request", "must name a brief, state/requests/<id>.md"))
     return out
 
 
@@ -48,14 +50,15 @@ def _text(v):
 
 
 def normalise(ask):
-    """``ask:`` as a list of ``{id, q, recommend, choices, grants}``; [] for None."""
+    """``ask:`` as a list of ``{id, q, recommend, choices, grants, request}``; [] for None."""
     if ask is None:
         return []
     if isinstance(ask, str):
         return [{"id": "q1", "q": " ".join(ask.split()), "recommend": None, "choices": [],
-                 "grants": []}]
+                 "grants": [], "request": None}]
     return [{"id": q["id"], "q": q["q"].strip(), "recommend": _text(q.get("recommend")),
-             "choices": list(q.get("choices") or []), "grants": list(q.get("grants") or [])}
+             "choices": list(q.get("choices") or []), "grants": list(q.get("grants") or []),
+             "request": q.get("request")}
             for q in ask]
 
 
@@ -93,6 +96,12 @@ def fill(qs, answers, take_recommendations=False):
             if q["id"] not in out and q.get("recommend"):
                 out[q["id"]] = q["recommend"]
     return out
+
+
+def requests(qs, answers):
+    """Request ids to send: the ``request`` of every question answered yes
+    (docs/delegation.md §3)."""
+    return [q["request"] for q in qs if q.get("request") and is_yes(answers.get(q["id"]))]
 
 
 def grants(qs, answers):

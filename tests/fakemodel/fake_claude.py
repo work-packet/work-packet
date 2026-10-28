@@ -10,6 +10,7 @@ Runs the behaviour named by ``WPK_FAKE_BEHAVIOR`` (a module in
   error        a result event with is_error true
   bad-memento  write front matter that does not parse
   no-summary   skip .pending/summary.md
+  no-report    skip .pending/report.md on resume: done or fail
   write-outside  also change state/ and memento.md directly
   bad-resume   resume: every monday
   forgetful    end the turn without writing .pending/, unless nudged

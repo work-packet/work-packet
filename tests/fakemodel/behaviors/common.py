@@ -40,7 +40,19 @@ def finish(meta, body, summary, fault=""):
               "---\n" + yaml.safe_dump(meta, sort_keys=False) + "---\n" + body)
     if fault != "no-summary":
         write(".pending/summary.md", summary)
+    if meta.get("resume") in ("done", "fail") and fault != "no-report":
+        write(".pending/report.md", report(summary))
     if fault == "write-outside":
         write("state/count.md", "999\n")
         write("state/extra.md", "not allowed\n")
         write("memento.md", "hijacked\n")
+
+
+def report(outcome, deliverables=()):
+    """A completion report (docs/completion-report.md) with ``outcome`` and
+    ``deliverables``: (path, what) pairs."""
+    meta = {"outcome": outcome.strip().splitlines()[0],
+            "deliverables": [{"path": p, "what": w} for p, w in deliverables]}
+    return ("---\n" + yaml.safe_dump(meta, sort_keys=False) + "---\n"
+            "## Outcome\n%s\n\n## Decisions\nnone\n\n## Deliverables\n\n"
+            "## Open items\nnone\n" % outcome.strip())

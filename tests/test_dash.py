@@ -168,11 +168,13 @@ def test_pages(tree, client):
     r = client.get("/")
     assert r.status_code == 200 and 'data-project=' not in r.text
     assert "Needs attention" in r.text and "Which colour" in r.text \
-        and "wpk answer asking" in r.text and "/p/asking/%s#answer" % tree["asking"][1].wpid in r.text
+        and "wpk answer asking" in r.text and "/p/asking#answer" in r.text
     assert "/p/failed\"><strong>failed<" in r.text            # failed root, in the attention list
     assert 'title="ready">1<' not in r.text and 'title="ready"><a href="/b/main">1<' in r.text
     assert "/p/running/%s/live" % tree["running"][1].wpid in r.text
     assert ">sleeping</strong>" in r.text and "Coming up" in r.text
+    up = r.text[r.text.index("Coming up"):]                  # ready first, then the sleepers
+    assert ">READY<" in up and up.index(">ready</strong>") < up.index(">sleeping</strong>")
     r = client.get("/p/done")
     assert r.status_code == 200 and "<svg" in r.text and "hello" in r.text
     r = client.get("/p/done/" + root)
@@ -193,12 +195,12 @@ def test_token_panels(tree, client):
     assert bar["link"].endswith("/0001") and [g["cls"] for g in bar["segs"]] == ["tk-new"]  # the fake: uncached only
     assert tokens.chart([], tokens.CONTEXT) is None
     r = client.get("/")
-    assert "Tokens, last 7 days" in r.text and 'href="/p/done#tokens"' in r.text
+    assert "Tokens, last 7 days" in r.text and 'href="/p/done/cost"' in r.text
     assert "Context read per day" in r.text
     for d, head in ((1, "Tokens, today"), (30, "Tokens, last 30 days"), (5, "Tokens, last 7 days")):
         assert head in client.get("/?days=%d" % d).text
-    r = client.get("/p/done")
-    assert 'id="tokens"' in r.text and "Context read per day" in r.text and "By packet" in r.text
+    r = client.get("/p/done/cost")
+    assert 'id="tokens"' in r.text and "Context read per day" in r.text and "By task" in r.text
     r = client.get("/p/done/" + root.wpid)
     assert "Context read per step" in r.text and "<th class=\"num\">Context</th>" in r.text
     r = client.get("/p/done/%s/0001" % root.wpid)
@@ -210,7 +212,7 @@ def test_where_the_context_went(tree, client):
     from test_toolcost import transcript
     e, root = tree["done"]
     transcript(os.path.join(root.step_dir(1), "transcript.jsonl"))
-    for url in ("/p/done", "/p/done/" + root.wpid, "/p/done/%s/0001" % root.wpid):
+    for url in ("/p/done/cost", "/p/done/" + root.wpid, "/p/done/%s/0001" % root.wpid):
         r = client.get(url)
         assert "Where the context went" in r.text and "python -m pytest" in r.text, url
         assert "Lines read again in the same step" in r.text, url
@@ -321,7 +323,7 @@ def test_note_box(acting):
 
 def test_settings_panel(acting):
     e, root, client = acting
-    r = client.get("/p/q")
+    r = client.get("/p/q/settings")
     assert 'id="settings"' in r.text and 'name="tool" value="Read"' in r.text
     client.post("/p/q/settings", data={"action": "allow", "tool": "Bash(git commit *)"})
     client.post("/p/q/settings", data={"action": "deny", "tool": "Glob"})
@@ -341,7 +343,19 @@ def test_settings_panel(acting):
 def test_needs_you_card_links_to_the_answer(acting):
     e, root, client = acting
     r = client.get("/")
-    assert "/p/q/%s#answer" % root.wpid in r.text
+    assert "/p/q#answer" in r.text
+
+
+def test_project_page_carries_the_answer_form(acting):
+    e, root, client = acting
+    r = client.get("/p/q")
+    assert r.status_code == 200 and 'id="answer"' in r.text and 'name="a.bash"' in r.text
+    assert ">Answer</a>" in r.text and 'class="btn hi" href="/p/q#answer"' in r.text  # action bar
+    assert 'class="state NEEDS_INPUT" href="/p/q#answer"' in r.text
+    r = client.post("/p/q/%s/act" % root.wpid,
+                    data={"action": "recommend", "back": "project"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/p/q?")
+    assert 'id="answer"' not in client.get("/p/q").text
 
 
 # --- the live view -----------------------------------------------------------
@@ -472,3 +486,22 @@ def test_log_view(live_pkt):
     assert client.get("/p/q/%s/0009/log.txt" % root.wpid).status_code == 404
     assert client.get("/static/pane.js").status_code == 200
     os.remove(root.lease_path)
+
+
+def test_tasks_nest_children_under_the_task_that_spawned_them(tmp_path):
+    """docs/concepts.md: a hand-off starts a task; a child is a sub-task of its spawner's."""
+    from conftest import _commit, make_project
+    from work_packet import journal
+    proj, root = make_project(tmp_path, steps=2)
+    journal.append(root.journal_path, {"type": "handoff", "t": NOW, "from": "FAILED",
+                                       "to": "RUNNABLE", "batch": 2,
+                                       "instruction": "Try again.\nslowly",
+                                       "report": "state/history/report-1.md"})
+    _commit(root, 3, spawn=["hello"])
+    e = {"name": "demo", "path": proj, "root": root.wpid}
+    ts = data.tasks(e, data.tree(e, data._ts(NOW)))
+    assert [(t["kind"], t["name"], t["depth"]) for t in ts] == [
+        ("task", "task 1", 0), ("task", "task 2", 0), ("child", "hello", 1)]
+    assert ts[0]["state"] == "FAILED" and ts[0]["report"] == "state/history/report-1.md"
+    assert (ts[1]["first"], ts[1]["last"], ts[1]["instruction"]) == (3, 3, "Try again.")
+    assert data.tasks(e, []) == []

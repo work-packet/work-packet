@@ -1,11 +1,14 @@
 """``wpk tick``: one scheduler pass over every registered project (stage1-plan §5)."""
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 from . import clock, frontmatter, lease, schema
 from .packet import Packet
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(order=True)
@@ -108,6 +111,7 @@ def tick(entries, jobs=1, until_idle=False, max_steps=None, report=lambda r: Non
     d = Dispatcher(home=home, backend=Local(home), jobs=jobs, report=report,
                    entries=lambda: entries)
     res = TickResult()
+    _sync_requests(home)
     while not stop():
         budget = None if max_steps is None else max_steps - len(res.ran)
         if budget is not None and budget <= 0:
@@ -119,6 +123,20 @@ def tick(entries, jobs=1, until_idle=False, max_steps=None, report=lambda r: Non
         res.passes += 1
         res.ran += ran
         # Stop when nothing committed or failed: what is left is leased or not runnable.
+        _sync_requests(home)
         if not until_idle or not any(r.code in (0, 1) for r in ran):
             break
     return res
+
+
+def _sync_requests(home):
+    """Bring back the results of finished requests (docs/delegation.md §5). Never raises:
+    a request that can't be delivered now is tried again on the next pass."""
+    from . import requests
+    try:
+        moved = requests.sync(home)
+    except Exception:                  # noqa: BLE001 - keep the scheduler going
+        log.exception("request sync failed")
+        return
+    for e, msg in moved:
+        log.info("request %s of %s: %s", e["id"], e["from"]["wpid"][:8], msg)

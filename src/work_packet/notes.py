@@ -22,8 +22,9 @@ def inbox(pkt):
     return os.path.join(pkt.path, "mailbox")
 
 
-def add(pkt, text, by):
-    """Queue a note; returns it."""
+def add(pkt, text, by, nid=None):
+    """Queue a note; returns it. ``nid``: a fixed id (a request's result,
+    docs/delegation.md §5), so writing it again replaces it."""
     text = (text or "").strip()
     if not text:
         raise ValueError("the note is empty")
@@ -32,7 +33,7 @@ def add(pkt, text, by):
     from . import clock
     now = clock.now()
     # The id sorts by time; the nanosecond counter orders notes sent within a second.
-    note = {"id": "%s-%x" % (now.strftime("%Y%m%dT%H%M%S"), time.time_ns()),
+    note = {"id": nid or "%s-%x" % (now.strftime("%Y%m%dT%H%M%S"), time.time_ns()),
             "t": format_timestamp(now), "by": by, "text": text}
     d = inbox(pkt)
     os.makedirs(d, exist_ok=True)

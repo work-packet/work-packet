@@ -1,0 +1,26 @@
+{# The packet's tasks, sub-tasks nested under the task that split them off (docs/concepts.md). #}
+{% macro table(e, rows, full=False) -%}
+{% set base = "/p/" ~ (e.name|urlencode) %}
+{% if rows %}
+<div class="wrap"><table>
+  <tr><th>Task</th><th>State</th><th class="num">Steps</th>{% if full %}<th>Next</th>{% endif %}<th class="num">Spend</th><th>{{ "Instruction / last summary" if full else "Last summary" }}</th></tr>
+  {% for n in rows %}
+  <tr{% if n.kind == "task" %} id="task-{{ n.n }}"{% endif %}>
+    <td class="tree" style="padding-left: {{ 8 + n.depth * 22 }}px; white-space:nowrap">{% if n.depth %}<span class="muted">└ </span>{% endif %}
+      {% if n.kind == "task" %}<a href="{{ base }}/tasks/{{ n.n }}">{{ n.name }}</a>{% if n.first %} <a class="muted" style="font-size:12px" href="{{ base }}/steps?task={{ n.n }}">steps {{ n.first }}{% if n.last != n.first %}–{{ n.last }}{% endif %}</a>{% endif %}
+      {% else %}<a href="{{ base }}/{{ n.wpid }}">{{ n.name or n.short }}</a>{% if n.name %} <span class="muted"><code>{{ n.short }}</code></span>{% endif %}{% endif %}
+      {% if n.running %}<a class="muted" href="{{ base }}/{{ n.wpid }}/live" title="live view" style="font-size:12px">live</a>{% endif %}</td>
+    <td>{% if n.running %}<span class="state running pulse">RUNNING</span>{% elif n.state == "NEEDS_INPUT" %}<a class="state NEEDS_INPUT" href="{{ base }}/{{ n.wpid }}#answer" title="Answer its questions">NEEDS_INPUT</a>{% else %}<span class="state {{ n.state }}">{{ n.state }}</span>{% endif %}</td>
+    <td class="num">{{ n.step }}</td>
+    {% if full %}<td>{% if n.running %}step {{ n.running.step }} attempt {{ n.running.attempt }}{% else %}{{ n.next }}{% endif %}</td>{% endif %}
+    <td class="num">{{ n.cost_usd|money }}</td>
+    <td>{% if full and n.instruction %}<div><strong>{{ n.instruction }}</strong></div>{% endif %}
+      {% if n.reason %}<span class="{{ 'err' if n.state == 'FAILED' }}">[{{ n.reason }}]</span> {% endif %}{{ n.summary }}
+      {% if full and n.report %} · <a href="{{ base }}/{{ 'tasks/' ~ n.n ~ '#report' if n.kind == 'task' else n.wpid ~ '#report' }}">report</a>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<p class="muted">No tasks yet.</p>
+{% endif %}
+{%- endmacro %}

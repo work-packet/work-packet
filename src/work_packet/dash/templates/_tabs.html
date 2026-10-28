@@ -1,0 +1,60 @@
+{# The packet page's top, on every tab: header, action bar, tab strip (docs/packet-page.md §2.1).
+   Import "with context" (csrf, ide, ide_web, ide_sizes). #}
+{% macro top(e, card, active, work=None) -%}
+{% set base = "/p/" ~ (e.name|urlencode) %}
+<style>
+.pbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 12px; }
+.pbar .btn { display: inline-block; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px; text-decoration: none; color: var(--ink); background: var(--code); font-size: 13.5px; }
+.pbar .btn.hi { background: var(--link); border-color: var(--link); color: #fff; font-weight: 600; }
+.pbar details.menu { position: relative; margin: 0; }
+.pbar details.menu > summary { list-style: none; }
+.pbar details.menu > summary::-webkit-details-marker { display: none; }
+.pbar details.menu > .panel { position: absolute; z-index: 5; top: 110%; left: 0; min-width: 320px; max-width: calc(100vw - 32px); box-shadow: 0 4px 16px rgba(0,0,0,.15); }
+.pbar details.menu table { margin: 0; }
+nav.ptabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--line); margin: 0 0 14px; }
+nav.ptabs a { padding: 6px 14px; text-decoration: none; color: var(--muted); border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; margin-bottom: -1px; }
+nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(--bg); font-weight: 600; }
+</style>
+<h1 style="margin-bottom:4px">{{ e.name }}
+  {% if card.running %}<span class="state running pulse">RUNNING</span>{% endif %}
+  {% if card.root and card.root.state == "NEEDS_INPUT" and not card.running %}<a class="state NEEDS_INPUT" href="{{ base }}#answer" title="Answer its questions">NEEDS_INPUT</a>
+  {% elif card.root %}<span class="state {{ card.root.state }}">{{ card.root.state }}</span>{% endif %}</h1>
+{% set can_task = card.root and not card.running and card.root.state in ("COMPLETED", "NEEDS_INPUT", "PAUSED", "FAILED") %}
+<div class="pbar">
+  {% if card.root and card.root.state == "NEEDS_INPUT" and not card.running %}<a class="btn hi" href="{{ base }}#answer" title="It is waiting on you: answer its questions">Answer</a>{% endif %}
+  {% if can_task %}<a class="btn hi" href="{{ base }}/compose" title="Compose: instruction, inputs, settings, shell">{{ "Set it up" if card.setup else "New task" }}</a>{% endif %}
+  {% if card.running %}<a class="btn hi" href="{{ base }}/{{ card.running.wpid }}/live">Live view</a>{% endif %}
+  {% if ide.desktop %}
+  <details class="menu" id="vscode"><summary class="btn">Open in VS Code ▾</summary>
+  <div class="panel">
+  <form class="act row" method="post" action="{{ base }}/ide">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <button class="go" name="go" value="desktop">Open the project</button>
+    {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
+    <span class="muted" style="font-size:12px">{{ "The root packet's worktrees and state/." if card.root and not card.setup else "Its root: work/, state/ and the prompt." }}</span>
+  </form>
+  {% if work %}
+  <table style="margin-top:8px">
+  {% for name, git, tree in work %}
+  <tr><td><code>work/{{ name }}</code></td>
+  <td><form class="act row" method="post" action="{{ base }}/ide">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <input type="hidden" name="repo" value="{{ name }}">
+    <button class="go" name="go" value="desktop">{{ "Your clone" if git else "Open (shared)" }}</button>
+    {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}
+    {% if git and tree %}<button class="go" name="go" value="desktop-packet">Packet worktree</button>
+    {% if ide_web %}<button class="go" name="go" value="web-packet" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}{% endif %}
+  </form></td></tr>
+  {% endfor %}
+  </table>
+  {% endif %}
+  </div>
+  </details>
+  {% endif %}
+</div>
+<nav class="ptabs" aria-label="packet">
+  {% for key, label, href in (("overview", "Overview", base), ("tasks", "Tasks", base ~ "/tasks"), ("steps", "Steps", base ~ "/steps"), ("cost", "Cost", base ~ "/cost"), ("settings", "Settings", base ~ "/settings")) %}
+  <a href="{{ href }}"{% if key == active %} class="on" aria-current="page"{% endif %}>{{ label }}</a>
+  {% endfor %}
+</nav>
+{%- endmacro %}

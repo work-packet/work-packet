@@ -487,6 +487,7 @@ class Dispatcher:
             try:
                 ended = self.reap()
                 if poked or ended or want_fill or time.monotonic() - last_fill > FALLBACK_S:
+                    scheduler._sync_requests(self.h)
                     self.fill()
                     last_fill = time.monotonic()
                 want_fill = False

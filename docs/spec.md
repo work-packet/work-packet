@@ -37,6 +37,8 @@ expression is resolved (§5) or a time is shown to a person.
   sched/                the scheduler's state (§2.4)
   run/wpkd.sock         the board, with [server] listen = "unix" (directory 0700)
   log/wpkd.log          wpk serve --detach's output
+  requests/<wpid>--<id>.json  where each request stands: sending, open, delivering,
+                        delivered (docs/delegation.md §4)
 ```
 
 `templates/` is reserved (`docs/runner.md`). `runner.lock`, which an older
@@ -211,6 +213,7 @@ Roots get a random (v4) WPID; children get a deterministic (v5) one (§6).
 ```
 <WPID>/
   status.md          executor-owned (§4.1)
+  report.md          the completion report, once the packet finishes (§4.7)
   memento.md         the next instruction (§4.2)
   state/             private working files
   identity/          symlinks to outside resources; read-only by convention
@@ -237,7 +240,9 @@ the top level is a warning.
 ### 4.1 `status.md`
 
 Markdown with YAML front matter. The body is the summary of the last
-committed step (empty at step 0). Keys appear in this order; all are
+committed step (empty at step 0). When that step finished the packet with a
+report (§4.7), the body is the report's `outcome`, a blank line, then the
+summary, so a view that shows the first line shows the outcome. Keys appear in this order; all are
 present, unknown keys are errors.
 
 | Key | Type | Meaning |
@@ -351,6 +356,7 @@ a warning, not an error; the executor ignores it.
 | `handoff` | `wpk handoff`: `NEEDS_INPUT`, `PAUSED` or `FAILED` to `RUNNABLE`; `wpk next` (the next batch, docs/dash-tasks.md §6): those or `COMPLETED` to `RUNNABLE`, with a new instruction | `by`, `from`, `to`; optional `asked` (the one-line summary, from `NEEDS_INPUT`), `questions` (the normalised list), `answers` (`{id: text}`), `note`, `heads` (`{repo: sha}` of the packet's `work/` repos) and `commits` (`{repo: ["sha subject", …]}` since the last step's `heads`). A next batch adds `batch` (2, 3, …), `instruction`, `outline` (where the finished `state/outline.md` went) and `carry_session`. The step prompt shows every `handoff` after the last `commit-end` under "Hand-off" |
 | `config` | `wpk allow`, `deny`, `set` changed `project.toml` (root packet only) | `by`, `changes` (a list of strings) |
 | `seed` | the root's first step copied the project's `state/` and `prompt.md` into it (docs/setup.md §10); at most once, and only if something was copied | `files` (the paths written) |
+| `request` | a request to another project (docs/delegation.md): `sent` (requester: `to`, `title`), `received` (the delegate's root: `from`, `title`), `done` (requester: `outcome`, `note`, the id of the note that carried the result) | `op`, `id`, `by` |
 | `note` | anything else worth recording (stale lease removed, ...) | `msg` |
 
 `decision` holds everything needed to finish the commit without the model:
@@ -382,6 +388,9 @@ journal ends in an unfinished commit (a warning: run `wpk recover`).
 | `stderr.log` | the model process's stderr |
 | `result.md` | the proposed `memento.md` |
 | `summary.md` | the proposed `summary.md` |
+| `report.md` | the completion report (§4.7), with `commit` added; only on `done`/`fail` |
+| `deliverables/` | a copy of each file or folder `report.md` lists, at its path (`state/…`, `work/…`), as it was at the commit; `.git` left out; only on `done`/`fail` |
+| `deliverables.json` | `{path: "copied" \| "too large" \| "missing"}` for that copy; past 64 MiB a step copies only what fits |
 | `state.diff` | `diff -ruN` of `state/` before and after |
 | `meta.json` | start, end, harness, profile (`name@version`), model, session id, `carried_from`, exit code, cost (this step's; `session_cost_usd` is what Claude Code reported for the session), tokens (summed over the step's runs: `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`, `thinking_tokens`, `cache_write_1h`, `cache_write_5m`), `context` (`first`, `peak`, `last`, `calls`, `base`, `cache_breaks`, `cache_rewrite`), `duration_s`, `api_s` |
 
@@ -409,9 +418,44 @@ Created by the executor at the start of a step. The model writes:
   `commit-begin` record.
 - `.pending/state/`: the executor copies `state/` here before the model runs;
   the model edits the copy.
+- `.pending/report.md` (required with `resume: done` or `resume: fail`): the
+  completion report, §4.7.
+
+A step that says `resume: done` while `.pending/state/outline.md` has open
+items (`[ ]`, `[>]`, `[+]`) is rejected. The message names the items and
+points to `ask:` (when the next item is the owner's) or `resume: now`.
 
 `.pending/` with no live lease is a crashed step: a warning, cleaned up by
 `wpk recover` or the next `wpk step`.
+
+### 4.7 `report.md`
+
+The completion report (docs/completion-report.md): what the whole packet
+did, for an owner who has seen none of its steps. The step that says
+`resume: done` or `resume: fail` writes it as `.pending/report.md`; a step
+without a valid one is rejected (and nudged, §7). Markdown with YAML front
+matter:
+
+| Key | Required | Content |
+|---|---|---|
+| `outcome` | yes | one line: what now exists, or why it failed |
+| `deliverables` | yes (may be empty) | list of `{path, what}`; `path` is under `state/` or `work/`, relative to the packet, and must exist after the commit |
+
+Each deliverable under `work/<repo>/` whose repo is a git checkout gets
+`commit: <HEAD>` when the executor stores it. The body has the sections
+`## Outcome`, `## Decisions`, `## Deliverables` and `## Open items`, in any
+order; one with nothing to say says "none".
+
+The executor stores it as `steps/NNNN/report.md`, copies the files it
+lists to `steps/NNNN/deliverables/` (§4.4), copies it to
+`report.md`, and the `commit-begin` decision gets `report: {outcome,
+deliverables: [paths]}`. Leaving COMPLETED or FAILED (a next batch, a
+resume or a hand-off) moves `report.md` to `state/history/report-<batch>.md`;
+the `handoff` record names it as `report`.
+
+Children's reports are not copied into the parent's: `wpk report`, `wpk
+show` and the board's packet page roll them up (recursively) when they show
+the parent, since a parent often finishes in the step that spawns them.
 
 ## 5. Resume expressions
 
@@ -467,7 +511,8 @@ Full detail: `docs/stage1-plan.md` §4.
    place, add the `children/` link.
 3. Rename `state` to `.state.old`, then `.pending/state` to `state`.
 4. Rename `.pending/memento.md` to `memento.md`.
-5. Write `status.md` (temp file, fsync, rename).
+5. Write `status.md` (temp file, fsync, rename); copy the step's
+   `report.md`, if any, to `report.md`.
 6. `commit-end`; remove `.state.old` and `.pending/`; release the lease.
 
 Each sub-step can tell whether it already happened, so recovery reads the
@@ -484,7 +529,7 @@ or `wpk recover`.
 
 Before giving up on an attempt whose model ended its turn cleanly but left
 `.pending/` incomplete (no memento, a memento that does not parse, no
-summary), the executor **nudges** it once: it appends `step-nudge`, waits
+summary, no valid report with `done` or `fail`), the executor **nudges** it once: it appends `step-nudge`, waits
 up to 10 minutes for processes the step left running, then resumes the
 session (forked, as in carry-over) with a message naming what is missing.
 The second run is added to the same transcript, and `meta.json` gets

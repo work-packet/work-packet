@@ -246,7 +246,7 @@ def handoff_section(handoffs):
 
 def build(*, status, last_summary, instruction, step, attempt, max_attempts,
           now, tz, children=(), agent_md=None, state_dir=None, handoffs=(),
-          last_attempt="", notes=(), sizes=()):
+          last_attempt="", notes=(), sizes=(), requests=""):
     """The prompt text. ``now`` is aware UTC; ``tz`` a tzinfo for local display."""
     wake_line = ""
     if status.get("state") == "SLEEPING" and status.get("wake_at"):
@@ -264,7 +264,8 @@ def build(*, status, last_summary, instruction, step, attempt, max_attempts,
         wpid=status["wpid"], project=status["project"], step=step, attempt=attempt,
         max_attempts=max_attempts, now=schema.format_timestamp(now),
         now_local=now.astimezone(tz).strftime("%Y-%m-%d %H:%M %Z"),
-        wake_line=wake_line, handoff=handoff_section(handoffs) + _notes.section(notes),
+        wake_line=wake_line,
+        handoff=handoff_section(handoffs) + _notes.section(notes) + requests,
         last_attempt=last_attempt,
         last_summary=(last_summary or "").strip() or "None: this is the first step.",
         children=children_table(children), agent_md=agent,

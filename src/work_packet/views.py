@@ -3,7 +3,7 @@
 import json
 import os
 
-from . import clock, frontmatter, schema
+from . import clock, frontmatter, report, schema
 from .packet import Packet
 from .project import ProjectError, load_project
 
@@ -121,8 +121,23 @@ def show(pkt):
                 extra.append("choices: %s" % " / ".join(q["choices"]))
             if q["grants"]:
                 extra.append("yes grants: %s" % ", ".join(q["grants"]))
+            if q.get("request"):
+                extra.append("yes sends request %s (state/requests/%s.md)" % (
+                    q["request"], q["request"]))
             if extra:
                 out.append("    " + "; ".join(extra))
+    if meta["state"] in ("COMPLETED", "FAILED"):
+        rep = report.render(pkt)
+        if rep is not None:
+            out += ["", "## report.md (wpk report prints it on its own)", ""]
+            out += [report._demote(x, 1) for x in rep[2:]]
+    from . import requests
+    rs = requests.entries(wpid=pkt.wpid)
+    if rs:
+        out += ["", "## requests (docs/delegation.md)", ""]
+        for e in rs:
+            out.append(("from %s (%s): " % (e["from"]["project"], e["from"]["wpid"][:8])
+                        if e["from"]["wpid"] != pkt.wpid else "") + requests.describe(e))
     out += ["", "## memento.md", "", open(pkt.memento_path, encoding="utf-8").read().rstrip()]
     kids = meta.get("children") or []
     out += ["", "## children", ""]
@@ -137,6 +152,20 @@ def show(pkt):
         except (OSError, frontmatter.FrontMatterError):
             out.append("%s  (unreadable)" % c)
     return out
+
+
+def report_lines(pkt):
+    """``wpk report``: the completion report with its children rolled up, or,
+    for a packet that has none, the last step's summary and a note saying so."""
+    rep = report.render(pkt)
+    if rep is not None:
+        return rep
+    meta, body = pkt.load_status()
+    why = "has not finished" if meta["state"] not in ("COMPLETED", "FAILED") else \
+        "finished without one (before reports were required)"
+    return ["# %s (%s)" % (pkt.wpid, meta["state"]), "",
+            "No completion report: the packet %s. Last summary:" % why, "",
+            body.strip() or "(none)"]
 
 
 def _detail(r):

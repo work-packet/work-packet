@@ -1,152 +1,35 @@
 {% extends "base.html" %}
-{% import "_tokens.html" as tkm %}
-{% import "_settings.html" as sm with context %}
-{% import "_sched.html" as schm with context %}
+{% import "_tabs.html" as tabs with context %}
+{% import "_snapshot.html" as snap %}
+{% import "_report.html" as rpm %}
+{% import "_project_tasks.html" as ptm %}
+{% import "_answer.html" as ans with context %}
 {% block title %}{{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a>{% endblock %}
 {% block head %}
-<style>
-svg.tl { display: block; width: 100%; height: auto; }
-svg.tl text { fill: var(--ink); font: 11px system-ui, sans-serif; }
-svg.tl .tick { stroke: var(--line); }
-svg.tl .ticklabel { fill: var(--muted); font-size: 10px; }
-svg.tl .lane { fill: var(--code); }
-svg.tl rect.committed { fill: var(--COMPLETED); } svg.tl rect.failed { fill: var(--FAILED); }
-svg.tl rect.running { fill: var(--running); }
-td.tree a { white-space: nowrap; }
-</style>
+<script>
+// Old anchors moved to tabs (docs/packet-page.md §2.5).
+(function () {
+  var to = {"#tokens": "/cost", "#context": "/cost#context", "#settings": "/settings",
+            "#sched": "/settings#sched", "#vscode": "#vscode"};
+  var h = location.hash, base = location.pathname.replace(/\/$/, "");
+  if (to[h] && to[h].charAt(0) === "/") location.replace(base + to[h]);
+  if (h === "#vscode") addEventListener("DOMContentLoaded", function () {
+    var d = document.getElementById("vscode"); if (d) d.open = true; });
+})();
+</script>
 {% endblock %}
 {% block main %}
-<h1>{{ e.name }}
-  {% if card.running %}<span class="state running pulse">RUNNING</span>{% endif %}
-  {% if card.root %}<span class="state {{ card.root.state }}">{{ card.root.state }}</span>{% endif %}</h1>
+{{ tabs.top(e, card, "overview", work) }}
+{% for n, qs in asks %}{{ ans.form(e, n.wpid, qs, "answer" if loop.first else "answer-" ~ n.short,
+   (n.name or n.short) if n.depth else None, "project") }}{% endfor %}
+{{ snap.panel(e, card, tl, on) }}
 {% set runs = nodes|selectattr("running")|list %}
 {% if runs %}
-<div class="panel" style="margin-bottom:12px">{% for n in runs %}{% if not loop.first %}<br>{% endif %}Running: {{ n.name or n.short }} step {{ n.running.step }}{% if n.running.attempt and n.running.attempt > 1 %}, attempt {{ n.running.attempt }}{% endif %}.
+<div class="panel" style="margin:12px 0">{% for n in runs %}{% if not loop.first %}<br>{% endif %}Running: {{ n.name or n.short }} step {{ n.running.step }}{% if n.running.attempt and n.running.attempt > 1 %}, attempt {{ n.running.attempt }}{% endif %}.
   <a href="/p/{{ e.name|urlencode }}/{{ n.wpid }}/live"><strong>Live view</strong></a> · <a href="/p/{{ e.name|urlencode }}/{{ n.wpid }}/live#procs">processes</a>{% endfor %}</div>
 {% endif %}
-{% if card.root and not card.running and card.root.state in ("COMPLETED", "NEEDS_INPUT", "PAUSED", "FAILED") %}
-<p><a href="/p/{{ e.name|urlencode }}/compose"><strong>{{ "Set it up" if card.setup else "Next batch" }}</strong></a> <span class="muted">· Compose: instruction, inputs, settings, shell</span></p>
-{% endif %}
-<dl class="kv panel">
-  <dt>Directory</dt><dd><code>{{ e.path }}</code></dd>
-  <dt>Packets</dt><dd>{{ card.packets }}{% for st, k in card.counts %} · {{ k }} {{ st }}{% endfor %}</dd>
-  <dt>Spend</dt><dd>{{ card.spend_total|money or "$0" }} total, {{ card.spend_today|money or "$0" }} today</dd>
-  <dt>Last step</dt><dd>{{ card.last_step }}</dd>
-  <dt>Board</dt><dd>{% if boards|length > 1 %}<form class="act" method="post" action="/p/{{ e.name|urlencode }}/board" style="display:inline-flex;gap:6px;align-items:center">
-    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
-    <select name="board" aria-label="board">{% for b in boards %}<option value="{{ b.name }}"{{ " selected" if b.name == on }}>{{ b.name }}</option>{% endfor %}</select>
-    <button class="mini">Move</button> <a href="/b/{{ on|urlencode }}">open {{ on }}</a></form>
-  {% else %}<a href="/b/{{ on|urlencode }}">{{ on }}</a> <span class="muted">(make another board from the side tab of the Overview to move it)</span>{% endif %}</dd>
-</dl>
-{{ schm.project_panel(e, sch, classes) }}
-
-{% if ide.desktop %}
-<h2 id="vscode">VS Code</h2>
-<div class="panel">
-<form class="act row" method="post" action="/p/{{ e.name|urlencode }}/ide">
-  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
-  <button class="go" name="go" value="desktop">Open the project</button>
-  {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
-  <span class="muted" style="font-size:12px">{{ "The root packet's worktrees and state/." if card.root and not card.setup else "Its root: work/, state/ and the prompt." }}</span>
-</form>
-{% if work %}
-<table style="margin-top:8px">
-{% for name, git, tree in work %}
-<tr><td><code>work/{{ name }}</code></td>
-<td><form class="act row" method="post" action="/p/{{ e.name|urlencode }}/ide">
-  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
-  <input type="hidden" name="repo" value="{{ name }}">
-  <button class="go" name="go" value="desktop">{{ "Your clone" if git else "Open (shared)" }}</button>
-  {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}
-  {% if git and tree %}<button class="go" name="go" value="desktop-packet">Packet worktree</button>
-  {% if ide_web %}<button class="go" name="go" value="web-packet" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}{% endif %}
-</form></td></tr>
-{% endfor %}
-</table>
-{% endif %}
-</div>
-{% endif %}
-
-<h2>Timeline</h2>
-{% if tl %}
-<div class="panel wrap">
-<svg class="tl" viewBox="0 0 {{ tl.width }} {{ tl.height }}" role="img" aria-label="Steps over time, one row per packet">
-  {% for r in tl.rows %}
-    <rect class="lane" x="{{ tl.label }}" y="{{ r.y + 3 }}" width="{{ tl.width - tl.label - 10 }}" height="{{ tl.row - 6 }}" rx="3"></rect>
-    <a href="/p/{{ e.name|urlencode }}/{{ r.wpid }}"><text x="0" y="{{ r.y + tl.row - 7 }}">{{ r.label }}</text></a>
-    {% for b in r.bars %}
-    <a href="/p/{{ e.name|urlencode }}/{{ r.wpid }}/{{ b.dir }}"><rect class="{{ b.outcome }}" x="{{ b.x }}" y="{{ r.y + 4 }}" width="{{ b.w }}" height="{{ tl.row - 8 }}" rx="2"><title>{{ b.title }}</title></rect></a>
-    {% endfor %}
-  {% endfor %}
-  {% for t in tl.ticks %}
-    <line class="tick" x1="{{ t.x }}" x2="{{ t.x }}" y1="{{ tl.height - 22 }}" y2="{{ tl.height - 16 }}"></line>
-    <text class="ticklabel" x="{{ t.x }}" y="{{ tl.height - 4 }}" text-anchor="middle">{{ t.label }}</text>
-  {% endfor %}
-</svg>
-<div class="muted" style="font-size:12px">{{ tl.start|when }} to {{ tl.end|when }}. Gaps are sleeps or waits for <code>wpk tick</code>; click a bar for its step.</div>
-</div>
-{% else %}
-<p class="muted">No steps yet.</p>
-{% endif %}
-
-<h2 id="tokens">Tokens</h2>
-{% if tk %}
-<div class="panel">
-  {{ tkm.quota(tk.quota) }}
-  {{ tkm.summary(tk.figures, tk.steps) }}
-  {{ tkm.chart(tk.days, "Context read per day") }}
-  {{ tkm.chart(tk.days_out, "Output per day") }}
-</div>
-<h3>By packet</h3>
-{{ tkm.table(tk.packets, "Packet", "/p/" ~ (e.name|urlencode)) }}
-{% if tk.by_item %}<h3>By plan item</h3>
-{{ tkm.table(tk.by_item, "Item") }}
-<p class="muted" style="font-size:12px">From the memento's <code>item</code>; a failed attempt counts toward its step's item.</p>{% endif %}
-{% if tk.tools %}<h3 id="context">Where the context went</h3>{{ tkm.tools(tk.tools) }}{% endif %}
-{% else %}
-<p class="muted">No token counts yet.</p>
-{% endif %}
-
-<h2>Packets</h2>
-<div class="wrap"><table>
-  <tr><th>Packet</th><th>State</th><th class="num">Step</th><th>Next</th><th class="num">Spend</th><th>Last summary</th></tr>
-  {% for n in nodes %}
-  <tr>
-    <td class="tree" style="padding-left: {{ 8 + n.depth * 22 }}px">{% if n.depth %}<span class="muted">└ </span>{% endif %}<a href="/p/{{ e.name|urlencode }}/{{ n.wpid }}">{{ n.name or n.short }}</a>
-      <a class="muted" href="/p/{{ e.name|urlencode }}/{{ n.wpid }}/live" title="live view" style="font-size:12px">live</a>
-      {% if n.name %}<span class="muted"><code>{{ n.short }}</code></span>{% endif %}</td>
-    <td>{% if n.running %}<span class="state running pulse">RUNNING</span>{% else %}<span class="state {{ n.state }}">{{ n.state }}</span>{% endif %}</td>
-    <td class="num">{{ n.step }}</td>
-    <td>{% if n.running %}step {{ n.running.step }} attempt {{ n.running.attempt }}{% else %}{{ n.next }}{% endif %}</td>
-    <td class="num">{{ n.cost_usd|money }}</td>
-    <td>{% if n.reason %}<span class="{{ 'err' if n.state == 'FAILED' }}">[{{ n.reason }}]</span> {% endif %}{{ n.summary }}</td>
-  </tr>
-  {% endfor %}
-</table></div>
-
-<h2>Recent steps</h2>
-{% if recent %}
-<div class="wrap"><table>
-  <tr><th>Started</th><th>Packet</th><th>Step</th><th>Outcome</th><th class="num">Time</th><th class="num">Cost</th><th>Summary</th></tr>
-  {% for n, s in recent %}
-  <tr>
-    <td style="white-space:nowrap">{{ s.start|when }}</td>
-    <td><a href="/p/{{ e.name|urlencode }}/{{ n.wpid }}">{{ n.name or n.short }}</a></td>
-    <td><a href="/p/{{ e.name|urlencode }}/{{ n.wpid }}/{{ s.dir }}">{{ s.n }}{% if s.outcome == "failed" %}.{{ s.attempt }}{% endif %}</a></td>
-    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span></td>
-    <td class="num">{{ s.duration_s|secs }}</td>
-    <td class="num">{{ s.cost_usd|money }}</td>
-    <td>{% if s.why %}<span class="err">{{ s.why }}</span>{% else %}{{ s.summary }}{% endif %}</td>
-  </tr>
-  {% endfor %}
-</table></div>
-{% else %}
-<p class="muted">None yet.</p>
-{% endif %}
-
-{% if settings %}
-<h2 id="settings">Settings</h2>
-{{ sm.panel(e, settings) }}
-{% endif %}
+{% if rp %}<div style="margin-top:12px">{{ rpm.panel(e, rp, "/p/" ~ e.name|urlencode ~ "/" ~ rp.wpid ~ "#steps") }}</div>{% endif %}
+<h2>Tasks</h2>
+{{ ptm.table(e, tasks) }}
 {% endblock %}

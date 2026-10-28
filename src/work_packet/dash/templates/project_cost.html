@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% import "_tabs.html" as tabs with context %}
+{% import "_tokens.html" as tkm %}
+{% block title %}{{ e.name }} · cost{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / cost{% endblock %}
+{% block main %}
+{{ tabs.top(e, card, "cost", work) }}
+<p>{{ card.spend_total|money or "$0" }} total, {{ card.spend_today|money or "$0" }} today.</p>
+<h2 id="tokens">Tokens</h2>
+{% if tk %}
+<div class="panel">
+  {{ tkm.quota(tk.quota) }}
+  {{ tkm.summary(tk.figures, tk.steps) }}
+  {{ tkm.chart(tk.days, "Context read per day") }}
+  {{ tkm.chart(tk.days_out, "Output per day") }}
+</div>
+<h3>By task</h3>
+{{ tkm.table(tk.packets, "Task", "/p/" ~ (e.name|urlencode)) }}
+{% if tk.by_item %}<h3>By plan item</h3>
+{{ tkm.table(tk.by_item, "Item") }}
+<p class="muted" style="font-size:12px">From the memento's <code>item</code>; a failed attempt counts toward its step's item.</p>{% endif %}
+{% if tk.tools %}<h3 id="context">Where the context went</h3>{{ tkm.tools(tk.tools) }}{% endif %}
+{% else %}
+<p class="muted">No token counts yet.</p>
+{% endif %}
+{% endblock %}

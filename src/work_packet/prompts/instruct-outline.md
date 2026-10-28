@@ -36,3 +36,5 @@ Every step:
   item only, with its refs and checks.
 - Continue with resume: now. Use resume: done when every item is done or
   deferred.
+  With it, write the completion report: what was decided and where
+  the results are.

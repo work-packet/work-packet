@@ -48,7 +48,7 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 {% if not side|sum(attribute="n") %}
 <div class="panel">
   <p>No projects are registered in <code>{{ home }}</code>.</p>
-  <p class="muted"><a href="/new"><strong>New task</strong></a> here, or <code>wpk setup</code> (a guided setup in a terminal), or <code>wpk new &lt;name&gt;</code> and then <code>wpk doctor &lt;name&gt;</code>.</p>
+  <p class="muted"><a href="/new"><strong>New packet</strong></a> here, or <code>wpk setup</code> (a guided setup in a terminal), or <code>wpk new &lt;name&gt;</code> and then <code>wpk doctor &lt;name&gt;</code>.</p>
 </div>
 {% else %}
 
@@ -56,7 +56,7 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
   <a class="tile{{ ' hot' if t.needs }}" href="#attention"><div class="k">Needs you</div><div class="v">{{ t.needs }}</div>
     <div class="s">{% if t.oldest %}oldest waiting {{ t.oldest }}{% endif %}</div></a>
   <a class="tile{{ ' run' if t.running }}" href="#running"><div class="k">Running</div><div class="v">{{ t.running }}</div>
-    <div class="s">{% if ov.coming %}next wake {{ ov.coming[0].root.next.split(", ")[-1] }}{% endif %}</div></a>
+    <div class="s">{% if ov.next_wake %}next wake {{ ov.next_wake }}{% endif %}</div></a>
   <a class="tile{{ ' bad' if t.failed }}" href="#attention"><div class="k">Failed</div><div class="v">{{ t.failed }}</div>
     <div class="s">{% if t.newest_fail %}newest {{ t.newest_fail }} ago{% endif %}</div></a>
   <a class="tile" href="#tokens"><div class="k">Spend today</div><div class="v">{{ t.spend_today|money or "$0" }}</div>
@@ -86,7 +86,7 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 <ul class="list">
 {% for a in ov.attention %}{% set c = a.card %}
   <li>
-    {% if a.kind == "needs" %}<span class="state NEEDS_INPUT">ASKS</span>
+    {% if a.kind == "needs" %}<a class="state NEEDS_INPUT" href="/p/{{ c.name|urlencode }}#answer" title="Answer its questions">ASKS</a>
     {% elif a.kind == "setup" %}<span class="state PAUSED">SETUP</span>
     {% else %}<span class="state FAILED">FAILED</span>{% endif %}
     <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
@@ -98,7 +98,7 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
     {% elif a.kind == "trouble" %}{{ c.trouble }} packet{{ "s" if c.trouble != 1 }} below the root failed
     {% else %}{% if c.setup.missing is none %}<span class="err">{{ c.setup.next }}</span>{% elif c.setup.missing %}{{ c.setup.missing }} missing · next <code>{{ c.setup.next }}</code>{% else %}ready to hand off{% endif %}
     {% endif %}</span>
-    {% if a.kind == "needs" and c.root %}<a class="mini" href="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}#answer">Answer</a>
+    {% if a.kind == "needs" %}<a class="mini" href="/p/{{ c.name|urlencode }}#answer">Answer</a>
     {% elif a.kind == "setup" %}<a class="mini" href="/p/{{ c.name|urlencode }}/compose">Set up</a>
     {% else %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>{% endif %}
   </li>
@@ -145,14 +145,14 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 {% if ov.coming %}
 <ul class="list">
 {% for c in ov.coming %}
-  <li><span class="state SLEEPING">WAKES</span>
+  <li>{% if c.column == "Ready" %}<span class="state RUNNABLE">READY</span>{% else %}<span class="state SLEEPING">WAKES</span>{% endif %}
     <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
-    <span class="what muted">{{ c.root.next }}</span>
+    <span class="what muted">{% if c.column == "Ready" %}due now{% if not runner %}: runner off, start the dash with --run or use <code>wpk tick</code>{% endif %}{% else %}{{ c.root.next if c.root }}{% endif %}</span>
     {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}</li>
 {% endfor %}
 {% if ov.more_coming %}<li class="muted">and {{ ov.more_coming }} more</li>{% endif %}
 </ul>
-{% else %}<p class="muted">Nothing is asleep.</p>{% endif %}
+{% else %}<p class="muted">Nothing is ready or asleep.</p>{% endif %}
 </div>
 </div>
 
@@ -164,7 +164,7 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 {% if burn.total.chart %}{{ tkm.chart(burn.total.chart, "Context read per day") }}{% endif %}
 {% set top = 10 %}
 {% macro prow(r) -%}
-  <tr><td><a href="/p/{{ r.name|urlencode }}#tokens">{{ r.name }}</a></td>{% if side|length > 1 %}<td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>{% endif %}
+  <tr><td><a href="/p/{{ r.name|urlencode }}/cost">{{ r.name }}</a></td>{% if side|length > 1 %}<td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>{% endif %}
     {% if burn.days > 1 %}<td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>{% endif %}
     <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.quota_week|pct }}</td>
     <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
