@@ -75,9 +75,11 @@ This is an inbox of finished work you have not looked at yet.
   - the Spend today and Weekly quota tiles, which now link to `/stats`;
   - the Boards table, with only state counts, Projects, Packets and Last
     step. Its Cost/Context/Per-day columns move to `/stats`, so the
-    Overview no longer needs `tokens.board()` and loads faster.
-  - The Spend tile then needs only its "today" figure, which comes from
-    the cards.
+    Overview no longer runs the full `tokens.board()`.
+  - The Spend tile needs only its "today" figure, which comes from the
+    cards.
+  - The quota tile still needs the newest quota seen across the steps.
+    `tokens.quota` reads only that, which is a lighter read.
 - **Side tab:** "Statistics" goes below Overview, alongside All packets.
 - Links that pointed at `/?days=` and `#tokens` now point to
   `/stats?days=` (the tiles, and any links in the docs).
