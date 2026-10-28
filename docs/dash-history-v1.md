@@ -110,8 +110,9 @@ invasive. Instead (the fallback named in the first version of this plan):
       the stats comparison and the page check; remove
       `~/.work-packet/runs/<id>` links; empty the trash after the waiting
       period (Q1).
-- [ ] D7. Docs: `docs/migration-v1.md` (M3), `docs/work-data-design.md`
-      (P3) once D6 is done.
+- [~] D7. Docs: status in `docs/migration-v1.md` (M1–M3),
+      `docs/work-data-design.md` (phase status) and `README.md` done
+      2026-10-28; the M3 record of what was deleted is written with D6.
 
 ## Then: the executor writes the card (P2)
 

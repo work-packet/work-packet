@@ -1006,6 +1006,14 @@ next one starts.
 | **P9 GitHub bridge** | `new gh:…`, `reply`, `watch` | a real fw-* issue worked, answered and followed up |
 | **P10 Slurm** | staging, upload landing, hub leases | a packet runs on a cluster node with no shared disk and survives a time-limit kill |
 
+Status, 2026-10-28: P1 done. P7 harvest done for all finished runs; the
+dashboard reads the history store when a run folder is gone, and deleting
+the old folders waits for the go (`docs/dash-history-v1.md` D6). P2: the
+executor keeps cards and history current (E1–E4); the packet layout,
+`wpk new --here` and `wpk convert` for projects without a repo are built
+(stage A, `docs/run-binding-v1.md`); the card taking over the settings,
+repo conversion and sibling worktrees are next.
+
 ## 19. Decisions and open questions
 
 **Decisions this design asks you to make** (each with a recommendation):

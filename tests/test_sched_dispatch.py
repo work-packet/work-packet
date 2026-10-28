@@ -219,12 +219,14 @@ def test_kill_after_term(home, fake, monkeypatch):
     d = Dispatcher()
     d.pass_once()
     assert wait(lambda: model_pid(root) is not None)
+    mpid = model_pid(root)
     rec = jobs.all(home)[0]
     pid = int(rec.ref.split(":")[0])
     os.kill(pid, signal.SIGSTOP)                          # cannot act on the TERM
     control.set_mode("stop", ME, "test")
     until_idle(d, timeout=20)
     assert not alive(pid)
+    assert wait(lambda: not alive(mpid))                  # the model went with it
 
 
 # --- pending jobs, sizes, run next ------------------------------------------------------

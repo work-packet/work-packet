@@ -173,7 +173,7 @@ def test_dash_pages_match_the_legacy_layout(home, tmp_path, monkeypatch):
                     for x, y in subst:
                         b = b.replace(x, y)
                     fp.write("".join(difflib.unified_diff(a.splitlines(1), b.splitlines(1), u, u, n=0)))
-    assert probs == []
+    assert probs == [], "\n".join(probs)
 
 
 def test_dash_file_browser_shows_the_packet_folder(home, source):

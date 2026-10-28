@@ -146,14 +146,19 @@ Risk 1.
       Your call (G5).
 - [x] M1 adopt, done 2026-10-28 with `wpk migrate` (see
   `docs/implementation-v1.md`): 16 cards, `runs/<id>` links, `index.db`.
-  The executor does not yet write card entries (P2), so re-running
-  `wpk migrate` is how the active card catches up
-- [ ] M2 pss-registers-up-planning to a task folder
+  Since then the executor keeps cards and history current itself
+  (`docs/dash-history-v1.md` E1–E4); `wpk migrate` by hand is no longer
+  needed
+- [~] M2: `wpk convert` built for projects without a repo
+  (`docs/run-binding-v1.md` A3); **solver-research converted** 2026-10-28
+  and verified (stats identical, pages equal). pss-registers-up-planning
+  needs the repo case: **parked** by Matt (R11)
 - [~] M3 harvest and verify: steps 1–4 done 2026-10-28 for all 14
   finished runs (archives, database, blobs), and every statistic checked
-  identical. Step 5 (removing the old directories) is not done: it waits
-  for the dashboard's packet pages to read the history store (P3), and
-  for your go
+  identical. The dashboard now reads the history store when a run folder
+  is gone (`docs/dash-history-v1.md` D0–D4, pages checked identical on
+  real data). Step 5 (removing the old directories, D6) waits for your
+  go and Q1/Q2 there
 - [ ] M4 tidy
 
 - 2026-10-28: plan written from the survey. Nothing changed on disk.

@@ -16,6 +16,8 @@ test suite, and short projects have run end to end against the real
 wpk setup                  # a guided setup, with a shell built in (pip install 'work-packet[tui]')
 wpk doctor my-project      # what the setup has, what it lacks, and the command for each
 wpk new count-demo --prompt "Increment state/count.md until it reaches 8, then spawn a child that writes Hello World"
+wpk new my-task --here     # in a clone (or any folder): it becomes the packet, steps work in it
+wpk convert old-project    # a v0.2 project into that layout (no-repo projects for now)
 wpk tick --until-idle      # or from cron: */5 * * * * wpk tick -j 2
 wpk ps                     # what is running, sleeping, paused or failed
 wpk log count-demo         # the root packet's journal; --step N for one step
@@ -32,6 +34,11 @@ wpk size <wpid> sim        # the job size a packet's steps get ([sched.sizes] in
 wpk serve --ensure         # wpkd in the background (cron on a login node); wpk url for ssh -L
 wpk sched doctor           # can the pool run steps on its farm (a probe job)?
 ```
+
+A packet made with `--here` keeps its card (`<name>.wp.md`) and
+`.work-packet/` (settings, runs) at the folder's top, both hidden from git;
+the card is kept current as steps run. Plain `wpk new` still makes the v0.2
+layout.
 
 Also: `wpk step`, `recover`, `show`, `pause`, `resume`, `adopt` and `rm`;
 for setup (docs/setup.md), `path`, `shell`, `add-input`,
@@ -65,6 +72,9 @@ for setup (docs/setup.md), `path`, `shell`, `add-input`,
 - `docs/context.md`: context size and session length: per-call measurement,
   the protocol in the system prompt, a context budget hook and session
   carry-over between steps, with live E7 measurements.
+- `docs/work-data-design.md`: cards, the history store and run binding (v1
+  data design); `docs/implementation-v1.md`, `docs/migration-v1.md`,
+  `docs/dash-history-v1.md` and `docs/run-binding-v1.md` track building it.
 - `docs/harness.md`: harness adapters (Claude Code now; Codex and OpenCode
   surveyed), model profiles, and `wpk stats` with advice.
 - `slides/work-packet.pptx`: overview deck (built from `slides/*.js`).

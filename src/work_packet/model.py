@@ -9,6 +9,35 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _parent_death_hook():
+    """A ``preexec_fn`` that makes the model die with the step (Linux).
+
+    The model runs in its own session so a timeout can kill its tool
+    processes too, which means a step killed with SIGKILL (the scheduler's
+    stop after KILL_AFTER_S, a batch system) would leave it running,
+    spending tokens. ``PR_SET_PDEATHSIG`` has the kernel send it SIGKILL
+    when the step goes. libc is resolved here, before the fork, so the
+    child makes one call and nothing else. None where it is not available.
+    """
+    import sys
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import ctypes
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+    except (OSError, AttributeError):
+        return None
+    PR_SET_PDEATHSIG = 1
+    sig = int(signal.SIGKILL)
+    parent = os.getpid()
+
+    def hook():
+        prctl(PR_SET_PDEATHSIG, sig, 0, 0, 0)
+        if os.getppid() != parent:          # the step died before the call
+            os._exit(1)
+    return hook
+
+
 @dataclass
 class StepResult:
     exit_code: Optional[int] = None
@@ -62,7 +91,8 @@ def run(argv, prompt, cwd, env, timeout_s, transcript_path, stderr_path, parse,
     with open(transcript_path, mode) as out, open(stderr_path, mode) as err:
         try:
             p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE,
-                                 stdout=out, stderr=err, start_new_session=True)
+                                 stdout=out, stderr=err, start_new_session=True,
+                                 preexec_fn=_parent_death_hook())
         except OSError as e:
             err.write(("wpk: cannot run %s: %s\n" % (argv[0], e)).encode())
             res.exit_code = 127
