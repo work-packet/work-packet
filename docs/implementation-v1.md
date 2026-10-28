@@ -94,3 +94,7 @@ run directories surviving.
 ## Status
 
 - 2026-10-28: plan written; steps 1–8 done.
+- 2026-10-28 (close): pss-registers-up-planning resynced (32 entries,
+  statistics identical); `wpk history verify` identical for every
+  project (`~/.work-packet/migration/final-verify.log`). This pass is
+  finished; next work is in "Not done yet" above.
