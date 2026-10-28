@@ -128,6 +128,32 @@ def cmd_new(args) -> int:
     return 0
 
 
+def cmd_convert(args) -> int:
+    from . import convert
+    try:
+        p = convert.convert(args.name, dry_run=args.dry_run)
+    except (convert.ConvertError, OSError) as e:
+        return _err(str(e))
+    verb = "Would move" if args.dry_run else "Moved"
+    if p["in_place"]:
+        print("%s %s into %s" % (verb, ", ".join(p["items"]), p["dot"]))
+    else:
+        print("%s %s to %s" % (verb, p["from"], p["dot"]))
+    print("  packets/ -> runs/ (%d runs)" % len(p["runs"]))
+    if p["card"]:
+        print("  card -> %s" % p["new_card"])
+    print("Packet folder: %s" % p["folder"])
+    if args.dry_run:
+        return 0
+    print("Backup: %s" % p["backup"])
+    if p["checks"]:
+        for x in p["checks"]:
+            print("  problem: %s" % x)
+        return 1
+    print("Checked: history verifies, stats agree, wpk check clean.")
+    return 0
+
+
 def cmd_adopt(args) -> int:
     from . import project
     try:
@@ -1241,6 +1267,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--paused", action="store_true", help="create the root PAUSED")
     p.add_argument("--dry-run", action="store_true", help="print what would be created")
     p.set_defaults(func=cmd_new)
+
+    p = sub.add_parser("convert", help="move a v0.2 project into the packet layout",
+                       description="Renames only: the project becomes <packet>/.work-packet/, "
+                       "packets/ becomes runs/, the card goes to the packet folder. A tarball "
+                       "is written first. Projects with repos are not converted yet.")
+    p.add_argument("name")
+    p.add_argument("--dry-run", action="store_true", help="print what would move")
+    p.set_defaults(func=cmd_convert)
 
     p = sub.add_parser("adopt", help="register an existing project directory")
     p.add_argument("dir")

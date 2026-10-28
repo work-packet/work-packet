@@ -180,3 +180,91 @@ def test_dash_file_browser_shows_the_packet_folder(home, source):
     assert c.get("/p/sr/doc?path=work/dv-solve/README.md").status_code == 200
     assert c.get("/p/sr/doc?path=work/dv-solve/.work-packet/project.toml").status_code == 404
     assert c.get("/p/sr/doc?path=work/other").status_code == 404
+
+
+def _finished_legacy(base, nested=True):
+    folder = base / "sr"
+    folder.mkdir()
+    plan = project.new("sr", "Count in state/count.md.",
+                       path=str(folder / "sr") if nested else str(folder))
+    root = Packet(layout.run_dir(plan.path, plan.root))
+    run_out(plan.path, root)
+    kid = Packet(layout.run_dir(plan.path, child_wpid(plan.root, 8, 0)))
+    assert executor.step(kid.path).code == 0
+    return folder, plan
+
+
+def _tokens(pages, subst):
+    out = {}
+    for u, (st, body) in pages.items():
+        for x, y in subst:
+            body = body.replace(x, y) if isinstance(body, str) else \
+                body.replace(x.encode(), y.encode())
+        out[u] = (st, body)
+    return out
+
+
+def test_convert_a_nested_project(home, tmp_path, monkeypatch):
+    import pytest
+    pytest.importorskip("starlette")
+    pytest.importorskip("httpx")
+    from starlette.testclient import TestClient
+    from work_packet import convert
+    from work_packet.dash import crawl
+    from work_packet.dash.app import create_app
+    folder, plan = _finished_legacy(tmp_path)
+    old = plan.path
+    before = crawl.crawl(TestClient(create_app()), "sr")
+    stats_before = stats.report(stats.groups(*stats.collect([("sr", old)])))
+    assert convert.convert("sr", dry_run=True)["folder"] == str(folder)
+    assert os.path.isdir(old)                                   # dry run: nothing moved
+    p = convert.convert("sr")
+    assert p["checks"] == []
+    assert os.path.isfile(p["backup"])
+    assert sorted(os.listdir(folder)) == [".work-packet", "sr.wp.md"]
+    dot = str(folder / ".work-packet")
+    assert registry.get("sr")["path"] == dot
+    assert sorted(os.listdir(os.path.join(dot, "runs"))) == sorted(
+        [plan.root, child_wpid(plan.root, 8, 0)])
+    assert stats.report(stats.groups(*stats.collect([("sr", dot)]))) == stats_before
+    after = crawl.crawl(TestClient(create_app()), "sr")
+    # Paths overlap (the folder is a prefix of the old project), so both
+    # sides get placeholders.
+    before = _tokens(before, [(layout.runs_dir(old), "@RUNS@"), (old, "@PROJ@")])
+    after = _tokens(after, [(layout.runs_dir(dot), "@RUNS@"), (dot, "@PROJ@"),
+                            (layout.runs_dir(old), "@RUNS@"), (old, "@PROJ@"),
+                            (str(folder), "@PROJ@")])     # transcripts keep old paths
+    subst = []
+    probs = [x for x in crawl.compare(before, after, subst)
+             if not x.startswith("/p/sr/compose")]
+    if probs and os.environ.get("WPK_DUMP"):
+        import difflib
+        with open(os.environ["WPK_DUMP"], "w") as fp:
+            fp.write("\n".join(probs) + "\n")
+            for u in [x.split(":")[0] for x in probs][:10]:
+                a, b = before.get(u, (0, ""))[1], after.get(u, (0, ""))[1]
+                if isinstance(a, str) and isinstance(b, str):
+                    for x, y in subst:
+                        b = b.replace(x, y)
+                    fp.write("".join(difflib.unified_diff(a.splitlines(1), b.splitlines(1),
+                                                          u, u, n=0)))
+    assert probs == []
+    # It goes on running in the new layout: a continue adds a step.
+    assert executor.admin(Packet(layout.run_dir(dot, plan.root)), "continue",
+                          instruction="Count to 9.").code == 0
+    assert executor.step(str(folder)).code == 0
+    assert os.path.realpath(os.path.join(layout.run_dir(dot, plan.root), "work", "sr")) == \
+        str(folder)
+    assert check(dot).issues == []
+
+
+def test_convert_in_place_and_refusals(home, tmp_path):
+    from work_packet import convert
+    folder, plan = _finished_legacy(tmp_path, nested=False)
+    (folder / "notes.txt").write_text("mine\n")
+    p = convert.convert("sr")
+    assert p["in_place"] and p["checks"] == []
+    assert sorted(os.listdir(folder)) == [".work-packet", "notes.txt", "sr.wp.md"]
+    import pytest
+    with pytest.raises(convert.ConvertError, match="already"):
+        convert.convert("sr")

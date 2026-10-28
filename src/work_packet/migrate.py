@@ -423,7 +423,9 @@ def link_runs(p, h=None):
         link = os.path.join(d, x["id"])
         if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(x["dir"]):
             continue
-        if os.path.lexists(link):
+        if os.path.islink(link):
+            os.unlink(link)                     # the run moved (wpk convert)
+        elif os.path.lexists(link):
             raise FileExistsError("%s exists and is not a link to %s" % (link, x["dir"]))
         os.symlink(x["dir"], link)
         made.append(link)
