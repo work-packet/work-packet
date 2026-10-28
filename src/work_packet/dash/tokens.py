@@ -10,7 +10,7 @@ import os
 import urllib.parse
 from datetime import timedelta
 
-from .. import clock, schema, stats, toolcost
+from .. import clock, layout, schema, stats, toolcost
 from ..packet import Packet
 
 CONTEXT = (("cache_read", "tk-read", "cache read"), ("cache_write", "tk-write", "cache write"),
@@ -175,7 +175,7 @@ def project(entry, now=None, days=14):
 
 def packet(entry, wpid):
     """The packet page's Tokens panel: totals, one bar per attempt, and the items."""
-    pkt = Packet(os.path.join(entry["path"], "packets", wpid))
+    pkt = Packet(layout.run_dir(entry["path"], wpid))
     steps = [s for s in stats.packet_steps(entry["name"], pkt) if s.context_tokens is not None]
     if not steps:
         return None

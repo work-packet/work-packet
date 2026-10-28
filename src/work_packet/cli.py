@@ -621,11 +621,11 @@ def cmd_answer(args) -> int:
 
 def cmd_next(args) -> int:
     """The next batch of work (docs/dash-tasks.md §6)."""
-    from . import actions, registry
+    from . import actions, layout, registry
     from .packet import Packet
     e = registry.get(args.target)
     try:
-        pkt = Packet(os.path.join(e["path"], "packets", e["root"])) if e else _packet(args.target)
+        pkt = Packet(layout.run_dir(e["path"], e["root"])) if e else _packet(args.target)
     except registry.LookupFailed as ex:
         return _err(str(ex))
     draft = actions.load_draft(pkt) if args.draft else None

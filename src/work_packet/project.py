@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from . import clock, profiles, registry, schema
+from . import clock, layout, profiles, registry, schema
 from .tomlio import load_toml
 
 LIMITS = ("step_timeout", "max_attempts", "step_budget_usd", "step_context_tokens",
@@ -47,11 +47,10 @@ class Settings:
 
 
 def project_of(packet_path):
-    """The project directory holding ``packets/<WPID>``, or None."""
-    pdir = os.path.dirname(os.path.abspath(packet_path))
-    proj = os.path.dirname(pdir)
-    if os.path.basename(pdir) == "packets" and \
-            os.path.isfile(os.path.join(proj, "project.toml")):
+    """The project directory holding run directory ``packet_path``
+    (``packets/<WPID>`` or ``.work-packet/runs/<WPID>``), or None."""
+    proj = layout.project_of_runs(os.path.dirname(os.path.abspath(packet_path)))
+    if proj and os.path.isfile(os.path.join(proj, "project.toml")):
         return proj
     return None
 
@@ -132,7 +131,7 @@ class Plan:
 
     @property
     def packet(self):
-        return os.path.join(self.path, "packets", self.root)
+        return layout.run_dir(self.path, self.root)
 
 
 def _check_new(name, path, tz, h):
@@ -196,7 +195,7 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     if os.path.lexists(tmp):
         import shutil
         shutil.rmtree(tmp)
-    os.makedirs(os.path.join(tmp, "packets"))
+    os.makedirs(layout.runs_dir(tmp))
     ptoml = {"name": name, "root": root, "created": now, "template": TEMPLATE}
     if tz is not None:
         ptoml["tz"] = tz
@@ -216,7 +215,7 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     else:
         text = ""                 # held for setup: you write prompt.md (or `wpk instruct`)
     fsutil.atomic_write(os.path.join(tmp, "prompt.md"), text)
-    pkt = Packet(os.path.join(tmp, "packets", root))
+    pkt = Packet(layout.run_dir(tmp, root))
     os.makedirs(pkt.state_dir)
     st = new_status(root, name, model, now)
     if not prompt:
@@ -242,7 +241,7 @@ def adopt(path, h=None):
     d = load_project(path)
     if registry.get(d["name"], h) is not None:
         raise ProjectError("a project named %r is already registered" % d["name"])
-    if not os.path.isfile(os.path.join(path, "packets", d["root"], "status.md")):
+    if not os.path.isfile(os.path.join(layout.run_dir(path, d["root"]), "status.md")):
         raise ProjectError("root packet %s is missing" % d["root"])
     e = {"name": d["name"], "path": path, "root": d["root"], "created": d["created"]}
     if "template" in d:
@@ -279,7 +278,7 @@ def change_settings(proj, change, by):
     from .packet import Packet
     from .tomlio import save_toml
     d = load_project(proj)
-    pkt = Packet(os.path.join(proj, "packets", d["root"]))
+    pkt = Packet(layout.run_dir(proj, d["root"]))
     try:
         meta, _ = pkt.load_status()
         lease = Lease(pkt.lease_path, meta["step"] + 1, 0, 60).acquire()
@@ -370,7 +369,7 @@ def follow_model(proj, old, new, by):
     from .lease import Lease, LeaseHeld
     from .packet import Packet
     root = load_project(proj)["root"]
-    pdir = os.path.join(proj, "packets")
+    pdir = layout.runs_dir(proj)
     out = []
     for w in sorted(os.listdir(pdir)) if os.path.isdir(pdir) else ():
         pkt = Packet(os.path.join(pdir, w))

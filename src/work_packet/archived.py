@@ -15,7 +15,7 @@ import json
 import os
 import shutil
 
-from . import history, registry
+from . import history, layout, registry
 
 MARK = ".restored.json"
 
@@ -29,7 +29,7 @@ def is_archived(entry):
 
 
 def _wanted(con, entry):
-    if os.path.isdir(os.path.join(entry["path"], "packets")):
+    if os.path.isdir(layout.runs_dir(entry["path"])):
         return []
     return history.harvested(con, entry["name"])
 
@@ -81,7 +81,7 @@ def materialize(con, entry, ids, h=None):
 def view(entry, h=None, con=None):
     """``entry``, or a copy pointed at the restored records when its runs are
     gone (``archived`` set, ``origin`` the real path)."""
-    if os.path.isdir(os.path.join(entry["path"], "packets")):
+    if os.path.isdir(layout.runs_dir(entry["path"])):
         return entry
     if not os.path.isfile(history.db_path(h)):
         return entry
@@ -102,7 +102,7 @@ def view(entry, h=None, con=None):
 def entries(h=None):
     """``registry.entries``, with archived projects pointed at their records."""
     es = registry.entries(h)
-    if not any(not os.path.isdir(os.path.join(e["path"], "packets")) for e in es):
+    if not any(not os.path.isdir(layout.runs_dir(e["path"])) for e in es):
         return es
     if not os.path.isfile(history.db_path(h)):
         return es

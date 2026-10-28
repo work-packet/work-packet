@@ -13,7 +13,7 @@ from urllib.parse import quote as urlquote
 
 from .. import (clock, frontmatter, lease as lease_mod, notes as notes_mod, procs as procs_mod,
                questions, registry, report as report_mod, schema)
-from .. import archived
+from .. import archived, layout
 from ..packet import Packet
 from ..project import ProjectError, load_project
 from ..views import packets, relative
@@ -286,7 +286,7 @@ def card(entry, now=None, nodes=None):
                "for": relative(-(now - since).total_seconds()).replace(" ago", "")
                if since else ""}
         try:
-            step_dir = os.path.join(entry["path"], "packets", n["wpid"], "steps",
+            step_dir = os.path.join(layout.run_dir(entry["path"], n["wpid"]), "steps",
                                     schema.step_dir_name(int(run["step"])))
             evs = activity(os.path.join(step_dir, "transcript.jsonl"))["events"]
             ev = evs[-1] if evs else None
@@ -496,7 +496,7 @@ def packet(entry, wpid, now=None):
     now = now or clock.now()
     if not schema.is_wpid(wpid):
         return None
-    pkt = Packet(os.path.join(entry["path"], "packets", wpid))
+    pkt = Packet(layout.run_dir(entry["path"], wpid))
     if not os.path.isdir(pkt.path):
         return None
     tz = _zone(entry["path"])
@@ -524,7 +524,7 @@ def packet(entry, wpid, now=None):
     names = spawn_names(pkt)
     for c in meta.get("children") or ():
         try:
-            m, b = Packet(os.path.join(entry["path"], "packets", c)).load_status()
+            m, b = Packet(layout.run_dir(entry["path"], c)).load_status()
             kids.append({"wpid": c, "short": c[:8], "name": names.get(c),
                          "state": m.get("state"), "step": m.get("step"),
                          "summary": _first_line(b)})
@@ -685,7 +685,7 @@ def deliverable(entry, wpid, rel, step=None):
     With ``step``, the copy that step took when it wrote its report (report.snapshot)."""
     if not schema.is_wpid(wpid) or not isinstance(rel, str):
         return None
-    pkt = Packet(os.path.join(entry["path"], "packets", wpid))
+    pkt = Packet(layout.run_dir(entry["path"], wpid))
     want = os.path.normpath(rel)
     if os.path.isabs(want) or ".." in want.split(os.sep):
         return None
@@ -739,7 +739,7 @@ def task(entry, tasks, n):
             on = r["n"] == n
         elif on:
             rows.append(r)
-    pkt = Packet(os.path.join(entry["path"], "packets", t["wpid"]))
+    pkt = Packet(layout.run_dir(entry["path"], t["wpid"]))
     rep = None
     if t["report"]:
         rep = report(entry, pkt, path=None if t["report"] == "report.md" else t["report"],
@@ -758,7 +758,7 @@ def state_file(entry, wpid, rel):
     want = os.path.normpath(rel)
     if os.path.isabs(want) or ".." in want.split(os.sep) or want.split(os.sep)[0] != "state":
         return None
-    pkt = Packet(os.path.join(entry["path"], "packets", wpid))
+    pkt = Packet(layout.run_dir(entry["path"], wpid))
     p = os.path.realpath(os.path.join(pkt.path, want))
     top = os.path.realpath(pkt.state_dir)
     if not (p == top or p.startswith(top + os.sep)) or not os.path.exists(p):
@@ -853,7 +853,7 @@ def step(entry, wpid, dirname, view="blocks"):
     "log") as a log. None if there is no such step folder."""
     if not schema.is_wpid(wpid) or schema.parse_step_dir(dirname) is None:
         return None
-    pkt = Packet(os.path.join(entry["path"], "packets", wpid))
+    pkt = Packet(layout.run_dir(entry["path"], wpid))
     sd = os.path.join(pkt.steps_dir, dirname)
     if not os.path.isdir(sd):
         return None
@@ -1106,7 +1106,7 @@ def live(entry, wpid, now=None, view="feed"):
     now = now or clock.now()
     if not schema.is_wpid(wpid):
         return None
-    pkt = Packet(os.path.join(entry["path"], "packets", wpid))
+    pkt = Packet(layout.run_dir(entry["path"], wpid))
     if not os.path.isdir(pkt.path):
         return None
     try:

@@ -6,7 +6,7 @@ with ``authz.check``, writes an event naming it, and returns an
 
 import os
 
-from .. import clock, registry, schema
+from .. import clock, layout, registry, schema
 from ..executor import OK, NOT_RUNNABLE, USAGE, Outcome
 from ..tomlio import load_toml, save_toml
 from . import authz, classes, events, jobs
@@ -127,7 +127,7 @@ def _target(target, h):
         raise LookupError(str(ex)) from None
     pdir = os.path.dirname(path)
     for e in registry.entries(h):
-        if os.path.abspath(os.path.join(e["path"], "packets")) == os.path.abspath(pdir):
+        if os.path.abspath(layout.runs_dir(e["path"])) == os.path.abspath(pdir):
             return e, os.path.basename(path)
     raise LookupError("%s is not in a registered project" % target)
 

@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from . import clock, frontmatter, lease, schema
+from . import clock, frontmatter, layout, lease, schema
 from .packet import Packet
 
 log = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ def due(entries, now=None):
     now = now or clock.now()
     out = []
     for e in entries:
-        pdir = os.path.join(e["path"], "packets")
+        pdir = layout.runs_dir(e["path"])
         try:
             names = sorted(os.listdir(pdir))
         except OSError:
@@ -78,7 +78,7 @@ def next_wake(entries):
     """The earliest ``wake_at`` of a ``SLEEPING`` packet, or None."""
     best = None
     for e in entries:
-        pdir = os.path.join(e["path"], "packets")
+        pdir = layout.runs_dir(e["path"])
         try:
             names = os.listdir(pdir)
         except OSError:

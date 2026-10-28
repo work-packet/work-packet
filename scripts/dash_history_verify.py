@@ -24,7 +24,7 @@ REAL = os.path.expanduser(os.environ.get("WPK_HOME") or "~/.work-packet")
 
 
 def main(out):
-    from work_packet import history, registry
+    from work_packet import history, layout, registry
     real_entries = {e["name"]: e for e in registry.entries(REAL)}
     con = history.connect(REAL)
     names = [n for n in history.projects(con) if history.harvested(con, n)
@@ -62,7 +62,7 @@ def main(out):
 
     before = {n: crawl.crawl(TestClient(create_app()), n) for n in names}
     for n in names:
-        os.unlink(os.path.join(dirs[n], "packets"))
+        os.unlink(layout.runs_dir(dirs[n]))
     after = {n: crawl.crawl(TestClient(create_app()), n) for n in names}
 
     os.makedirs(out, exist_ok=True)

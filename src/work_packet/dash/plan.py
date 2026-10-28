@@ -10,7 +10,7 @@ hand-offs moved to ``state/history/``.
 import os
 import re
 
-from .. import frontmatter, schema
+from .. import frontmatter, layout, schema
 from ..packet import Packet
 
 OUTLINE = "state/outline.md"
@@ -364,7 +364,7 @@ def page(entry, wpid, steps, v=None, changes=False, opened=None):
     it; ``opened``: "all" or "none" to open or close every node."""
     if not schema.is_wpid(wpid):
         return None
-    pkt = Packet(os.path.join(entry["path"], "packets", wpid))
+    pkt = Packet(layout.run_dir(entry["path"], wpid))
     if not os.path.isdir(pkt.path):
         return None
     vs = versions(pkt, steps)
@@ -428,7 +428,7 @@ def _children(entry, pkt):
     for c in meta.get("children") or ():
         if not schema.is_wpid(c):
             continue
-        kid = Packet(os.path.join(entry["path"], "packets", c))
+        kid = Packet(layout.run_dir(entry["path"], c))
         text = _read(os.path.join(kid.state_dir, "outline.md"))
         tree = parse(text) if text else None
         if tree:

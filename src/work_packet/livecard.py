@@ -40,12 +40,12 @@ def mark(journal_path):
 
 def _entry_of(run_dir, h=None):
     """The registry entry of the project holding run directory ``run_dir``
-    (``<project>/packets/<wpid>``), or None."""
-    from . import registry
-    pdir = os.path.dirname(run_dir)
-    if os.path.basename(pdir) != "packets":
+    (``<project>/packets/<wpid>`` or ``.work-packet/runs/<wpid>``), or None."""
+    from . import layout, registry
+    proj = layout.project_of_runs(os.path.dirname(run_dir))
+    if proj is None:
         return None
-    proj = os.path.realpath(os.path.dirname(pdir))
+    proj = os.path.realpath(proj)
     for e in registry.entries(h):
         if os.path.realpath(e["path"]) == proj:
             return e

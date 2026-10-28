@@ -19,7 +19,7 @@ from starlette.middleware import Middleware
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from .. import __about__, archived, clock, livecard, registry
+from .. import __about__, archived, clock, layout, livecard, registry
 from . import data, markup, plan, tokens
 from . import sched as dsched
 from ..sched.classes import CLASSES
@@ -386,7 +386,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             if op == "size":
                 return control.set_size(wpid, value, by, home)
             if op in ("pause", "resume"):
-                pkt = Packet(os.path.join(e["path"], "packets", wpid))
+                pkt = Packet(layout.run_dir(e["path"], wpid))
                 got = executor.admin(pkt, op, by=by)
                 if op == "pause" and got.code == 0:
                     control.cancel_pending(wpid, by, home)
@@ -521,7 +521,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         if s is None:
             return not_found(request, "step %s" % request.path_params["step"])
         # A committed or failed step never changes, so only a running one refreshes.
-        sd = os.path.join(e["path"], "packets", request.path_params["wpid"], "steps",
+        sd = os.path.join(layout.run_dir(e["path"], request.path_params["wpid"]), "steps",
                           request.path_params["step"])
         return render(request, "step.html", e=e, s=s, view=view, tk=tokens.step(sd, s["meta"]),
                       live=s["info"]["outcome"] == "running")
@@ -556,7 +556,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             return not_found(request, "packet %s" % wpid)
         f = await form(request)
         one = lambda k: (f.get(k) or [""])[0]
-        pkt = Packet(os.path.join(e["path"], "packets", wpid))
+        pkt = Packet(layout.run_dir(e["path"], wpid))
         by, op, note = who(request), one("action"), one("note")
         if op in ("answer", "recommend"):
             answers = {k[2:]: v[0] for k, v in f.items() if k.startswith("a.") and v[0].strip()}
@@ -592,7 +592,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         wpid, repo = one("wpid"), one("repo") or None
         go = one("go") or "desktop"                  # desktop | web, -packet: the worktree
         how, packet = go.split("-")[0], go.endswith("-packet") or one("packet") == "1"
-        t = os.path.join(e["path"], "packets", wpid) if wpid else e["path"]
+        t = layout.run_dir(e["path"], wpid) if wpid else e["path"]
         paused = None
         if one("pause") == "1" and wpid:
             from .. import executor
@@ -956,7 +956,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         wpid, d = request.path_params["wpid"], request.path_params["step"]
         if e is None or not data.schema.is_wpid(wpid) or data.schema.parse_step_dir(d) is None:
             return not_found(request, "step %s" % d)
-        p = os.path.join(e["path"], "packets", wpid, "steps", d, "transcript.jsonl")
+        p = os.path.join(layout.run_dir(e["path"], wpid), "steps", d, "transcript.jsonl")
         text = data._read(p)
         if text is None:
             return not_found(request, "transcript of step %s" % d)
@@ -1016,7 +1016,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         q = request.query_params
         pl = None
         if e is not None and data.schema.is_wpid(wpid):
-            pkt = data.Packet(os.path.join(e["path"], "packets", wpid))
+            pkt = data.Packet(layout.run_dir(e["path"], wpid))
             if os.path.isdir(pkt.path):
                 pl = await run_in_threadpool(
                     plan.page, e, wpid, data.steps(pkt), q.get("v"), q.get("changes") == "1",
@@ -1065,7 +1065,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         if op == "ask":
             if not wpid:
                 return JSONResponse({"error": "ask is for a packet's file"}, status_code=400)
-            pkt = Packet(os.path.join(e["path"], "packets", wpid))
+            pkt = Packet(layout.run_dir(e["path"], wpid))
             out = await run_in_threadpool(actions.note, pkt, ask_text(rel), who(request))
             if out.code == 0:
                 poke()
@@ -1096,7 +1096,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         wpid, d = request.path_params["wpid"], request.path_params["step"]
         if e is None or not data.schema.is_wpid(wpid) or data.schema.parse_step_dir(d) is None:
             return not_found(request, "step %s" % d)
-        p = os.path.join(e["path"], "packets", wpid, "steps", d, "transcript.jsonl")
+        p = os.path.join(layout.run_dir(e["path"], wpid), "steps", d, "transcript.jsonl")
         if not os.path.isfile(p):
             return not_found(request, "transcript of step %s" % d)
         return PlainTextResponse(data.log_text(data.log(p, limit=None)),

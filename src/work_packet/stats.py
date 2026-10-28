@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from . import frontmatter, schema
+from . import frontmatter, layout, schema
 from .packet import Packet
 
 MIN_STEPS = 30          # no advice below this many steps in a group
@@ -199,7 +199,7 @@ def collect(projects, since=None):
     """
     steps, finished = [], []
     for name, proj in projects:
-        pdir = os.path.join(proj, "packets")
+        pdir = layout.runs_dir(proj)
         try:
             wpids = sorted(w for w in os.listdir(pdir) if schema.is_wpid(w))
         except OSError:

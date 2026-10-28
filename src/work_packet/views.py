@@ -3,7 +3,7 @@
 import json
 import os
 
-from . import clock, frontmatter, report, schema
+from . import clock, frontmatter, layout, report, schema
 from .packet import Packet
 from .project import ProjectError, load_project
 
@@ -29,7 +29,7 @@ def relative(seconds):
 
 def packets(proj, root):
     """[(depth, Packet, meta, body)] in tree order: root, then each child's subtree."""
-    pdir = os.path.join(proj, "packets")
+    pdir = layout.runs_dir(proj)
     out, seen = [], set()
 
     def walk(w, depth):

@@ -13,7 +13,7 @@ requester's ``request`` record is not), ``delivered``.
 import json
 import os
 
-from . import clock, executor, frontmatter, fsutil, journal, notes, registry, schema
+from . import clock, executor, frontmatter, fsutil, journal, layout, notes, registry, schema
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, load_project, project_of
@@ -187,7 +187,7 @@ def send(pkt, rid, to=None, path=None, external=None, by=None, h=None):
         text = instruction(meta, body, pname, pkt.wpid)
         ent = registry.get(to, h)
         if ent is not None:
-            root = Packet(os.path.join(ent["path"], "packets", ent["root"]))
+            root = Packet(layout.run_dir(ent["path"], ent["root"]))
             try:
                 st, _ = root.load_status()
             except (OSError, frontmatter.FrontMatterError) as ex:
@@ -208,7 +208,7 @@ def send(pkt, rid, to=None, path=None, external=None, by=None, h=None):
                 plan = project.new(to, text, path=dest, paused=True, h=h, extra=extra)
             except (ProjectError, OSError) as ex:
                 raise RequestError("new project %s: %s" % (to, ex)) from None
-            root = Packet(os.path.join(plan.path, "packets", plan.root))
+            root = Packet(layout.run_dir(plan.path, plan.root))
             st, sbody = root.load_status()
             st["reason"] = "a request from %s: check the brief and the setup, then hand it " \
                 "off" % pname

@@ -24,7 +24,7 @@ import re
 import subprocess
 
 from . import card as cardmod
-from . import clock, frontmatter, history, index, registry, schema, stats
+from . import clock, frontmatter, history, index, layout, registry, schema, stats
 from .card import Card, Entry
 from .packet import Packet
 
@@ -350,10 +350,10 @@ def merge_into(path, fresh):
 
 def plan(entry, h=None):
     """What migrating ``entry`` involves: a dict, nothing written."""
-    root_dir = os.path.join(entry["path"], "packets", entry["root"])
+    root_dir = layout.run_dir(entry["path"], entry["root"])
     p = {"name": entry["name"], "path": entry["path"], "root": entry["root"],
-         "exists": os.path.isdir(root_dir), "card": os.path.join(
-             entry["path"], entry["name"] + cardmod.SUFFIX), "packets": [], "state": None}
+         "exists": os.path.isdir(root_dir), "card": layout.card_path(
+             entry["path"], entry["name"]), "packets": [], "state": None}
     if not p["exists"]:
         return p
     try:
@@ -361,7 +361,7 @@ def plan(entry, h=None):
         p["state"] = st.get("state")
     except Exception:
         pass
-    pdir = os.path.join(entry["path"], "packets")
+    pdir = layout.runs_dir(entry["path"])
     for w in sorted(os.listdir(pdir)):
         if schema.is_wpid(w):
             try:
@@ -388,13 +388,13 @@ def _children(root_dir):
 
 def cards_for(entry, p, h=None):
     """[(path, Card)] for a project: the root's card, then each child's."""
-    root_dir = os.path.join(entry["path"], "packets", entry["root"])
+    root_dir = layout.run_dir(entry["path"], entry["root"])
     prompt = _read(os.path.join(entry["path"], "prompt.md")) or _read(
         Packet(root_dir).memento_path) or ""
     kids = {}
     for x in p["packets"]:
         if x["parent"]:
-            kids.update(_children(os.path.join(entry["path"], "packets", x["parent"])))
+            kids.update(_children(layout.run_dir(entry["path"], x["parent"])))
     names = {w: (v[0] or "child-%d" % k) for k, (w, v) in enumerate(sorted(kids.items()), 1)}
     out = [(p["card"], build_card(entry, root_dir, prompt, entry["name"],
                                   title_of(prompt, entry["name"]), child_names=names))]

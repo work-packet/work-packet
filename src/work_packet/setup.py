@@ -24,7 +24,7 @@ from dataclasses import asdict, dataclass, field
 from string import Template
 from typing import List
 
-from . import clock, frontmatter, fsutil, lease as lease_mod, registry, schema, workspace
+from . import clock, frontmatter, fsutil, layout, lease as lease_mod, registry, schema, workspace
 from .packet import Packet
 from .project import ProjectError, change_settings, held_for_setup, load_project, \
     project_of, settings
@@ -156,7 +156,7 @@ def target(t):
         d = load_project(proj)
     except ProjectError as ex:
         raise SetupError(str(ex)) from None
-    return Target(d["name"], proj, d, Packet(os.path.join(proj, "packets", d["root"])))
+    return Target(d["name"], proj, d, Packet(layout.run_dir(proj, d["root"])))
 
 
 # --- quoting: commands people can paste ---------------------------------------------

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from .. import fsutil, schema
+from .. import fsutil, layout, schema
 from .config import sched_dir
 from .gates import Reason
 
@@ -83,7 +83,7 @@ def ledger(entries):
     Parsed files are cached by mtime, so a pass rereads only new steps."""
     out = []
     for e in entries:
-        pdir = os.path.join(e["path"], "packets")
+        pdir = layout.runs_dir(e["path"])
         try:
             wpids = [w for w in os.listdir(pdir) if schema.is_wpid(w)]
         except OSError:

@@ -27,7 +27,7 @@ import sqlite3
 import urllib.parse
 import zipfile
 
-from . import blobs, clock, fsutil, schema, stats
+from . import blobs, clock, fsutil, layout, schema, stats
 from .packet import Packet
 
 SCHEMA_VERSION = 1
@@ -558,7 +558,7 @@ def restore_project(con, project, dest, h=None):
     ``dest/packets/<id>/``. Returns the ids restored."""
     ids = harvested(con, project)
     for pid in ids:
-        restore_packet(con, pid, os.path.join(dest, "packets", pid), h)
+        restore_packet(con, pid, layout.run_dir(dest, pid), h)
     return ids
 
 

@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from . import frontmatter, journal, schema
+from . import frontmatter, journal, layout, schema
 from . import lease as lease_mod
 from .packet import Packet
 
@@ -282,7 +282,7 @@ def check_project(path, rep=None):
     if proj is not None:
         rep.extend(ptoml, schema.validate_project(proj))
         name = proj.get("name")
-    pdir = os.path.join(path, "packets")
+    pdir = layout.runs_dir(path)
     if not os.path.isdir(pdir):
         rep.add(pdir, None, "missing")
         return rep

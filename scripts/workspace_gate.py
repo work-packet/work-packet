@@ -108,7 +108,7 @@ def check_repo(d, pid, name):
 
 
 def main(out):
-    from work_packet import history, registry
+    from work_packet import history, layout, registry
     paths = {e["name"]: e["path"] for e in registry.entries(REAL)}
     con = history.connect(REAL)
     rows = []
@@ -116,7 +116,7 @@ def main(out):
         for pid in history.harvested(con, proj):
             if proj not in paths:
                 continue
-            run = os.path.join(paths[proj], "packets", pid)
+            run = layout.run_dir(paths[proj], pid)
             if not os.path.isdir(run):
                 continue
             work = os.path.join(run, "work")

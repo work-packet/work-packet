@@ -2,7 +2,7 @@
 
 import os
 
-from . import clock, fsutil, schema
+from . import clock, fsutil, layout, schema
 from .tomlio import load_toml, save_toml
 
 
@@ -165,7 +165,7 @@ def find_packets(prefix, h=None):
     """[(entry, packet path)] for packets whose WPID starts with ``prefix``."""
     out = []
     for e in entries(h):
-        pdir = os.path.join(e["path"], "packets")
+        pdir = layout.runs_dir(e["path"])
         try:
             names = os.listdir(pdir)
         except OSError:
@@ -181,17 +181,21 @@ def resolve(target, h=None):
     p = os.path.abspath(target)
     if os.path.isfile(os.path.join(p, "status.md")):
         return p
+    if p.endswith(".wp.md") and os.path.isfile(p):
+        p = os.path.dirname(p)                  # a card: its packet folder
+    if os.path.isfile(os.path.join(p, layout.DOT, "project.toml")):
+        p = os.path.join(p, layout.DOT)         # a packet folder
     if os.path.isfile(os.path.join(p, "project.toml")):
         try:
             root = load_toml(os.path.join(p, "project.toml"))["root"]
         except (OSError, ValueError, KeyError) as e:
             raise LookupFailed("%s/project.toml: %s" % (target, e)) from None
-        return os.path.join(p, "packets", root)
+        return layout.run_dir(p, root)
     if os.sep in target or target in (".", ".."):
         raise LookupFailed("%s is not a packet or project directory" % target)
     e = get(target, h)
     if e is not None:
-        return os.path.join(e["path"], "packets", e["root"])
+        return layout.run_dir(e["path"], e["root"])
     t = target.lower()
     if len(t) >= 4 and all(c in "0123456789abcdef-" for c in t):
         hits = find_packets(t, h)
