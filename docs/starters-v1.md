@@ -31,6 +31,7 @@ A plain dict (JSON-able, so scripts can write one):
 | `origin` | `{kind, url, title, ...}`: where it came from, kept in `project.toml [origin]` and shown on the dashboard |
 | `model`, `harness`, `extra` | as `wpk new` |
 | `hold` | true: held for setup even with an objective (look first, then hand off) |
+| `board` | the board it goes on (default `main`); New packet from a board's page fills it in |
 
 ### Maker: one way to carry a recipe out
 
@@ -219,3 +220,9 @@ task from the review) is the next step of this loop.
   requests; the push goes to a local repo). Suite 796 passed. Not tried
   live: needs the home Forgejo's `[[forge]]` entry and a token with write
   access.
+- 2026-10-28: `board` in recipes: New packet on a board's page opens with that
+  board chosen (a Board select in the form; `wpk start … board=<b>`);
+  watchers use it too. Default model now `claude-opus-5-5`
+  (`schema.CONFIG_DEFAULTS`); the four projects that followed the old
+  default (e7-1, e7-2, e7-3, fw-proto-axi) were pinned to Haiku first with
+  `wpk set`, so they did not change.

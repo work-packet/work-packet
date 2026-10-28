@@ -4,7 +4,7 @@
 {% block main %}
 <h1>New packet</h1>
 <nav class="tabs" style="margin-bottom:10px">
-  {% for s in starters %}<a class="{{ 'on' if s.name == starter.name }}" href="/new?starter={{ s.name }}">{{ s.title }}</a>{% endfor %}
+  {% for s in starters %}<a class="{{ 'on' if s.name == starter.name }}" href="/new?starter={{ s.name }}{% if values.board %}&amp;board={{ values.board|urlencode }}{% endif %}">{{ s.title }}</a>{% endfor %}
 </nav>
 <p class="muted" style="max-width:640px">{{ starter.help }}</p>
 {% if error %}<p class="flash bad" style="max-width:640px">{{ error }}</p>{% endif %}
@@ -21,7 +21,7 @@
   <textarea id="objective" name="objective" rows="10" style="width:100%;font:inherit">{{ values.objective or '' }}</textarea>
   <label style="display:block;margin:8px 0"><input type="checkbox" name="go" value="1"> Hand it to the runner at once (else held: you look it over in Compose)</label>
   <div class="row"><button class="go primary" name="action" value="create">Create</button>
-    <a href="/new?starter={{ starter.name }}">Start over</a></div>
+    <a href="/new?starter={{ starter.name }}{% if values.board %}&amp;board={{ values.board|urlencode }}{% endif %}">Start over</a></div>
 </form>
 {% else %}
 <form class="act panel" method="post" action="/new" style="max-width:640px" id="new-form" data-starter="{{ starter.name }}">
@@ -56,6 +56,12 @@
   <datalist id="models-{{ h }}">{% for m in ms %}<option value="{{ m.id }}">{{ m.label }}</option>{% endfor %}</datalist>
   {% endfor %}
   <p class="muted" style="font-size:12px;margin:2px 0 10px">Pick one, or type any model the harness takes. Empty: the default. An alias (<code>opus</code>, <code>sonnet</code>…) follows the newest model; a full name stays fixed.</p>
+  {% if boards|length > 1 %}
+  <label for="board">Board</label>
+  <select id="board" name="board" style="font:inherit;padding:4px;display:block;margin-bottom:10px">
+    {% for b in boards %}<option value="{{ b }}" {{ "selected" if b == (values.board or "main") }}>{{ b }}</option>{% endfor %}
+  </select>
+  {% endif %}
   <div class="row"><button class="go primary" name="action" value="preview">Preview</button>
     <span class="muted" style="font-size:12px">Shows what it will make; nothing is made yet.</span></div>
 </form>

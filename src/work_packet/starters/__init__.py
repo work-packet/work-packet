@@ -15,7 +15,7 @@ import subprocess
 from .. import layout
 
 RECIPE_KEYS = ("name", "dir", "folder", "clone", "objective", "inputs", "origin", "model",
-               "harness", "extra", "hold", "from")
+               "harness", "extra", "hold", "from", "board")
 CLONE_KEYS = ("url", "ref", "branch", "share")
 
 
@@ -69,8 +69,8 @@ class Starter:
 
     def base(self, values):
         """The recipe keys every starter fills the same way."""
-        r = {k: values[k] for k in ("name", "dir", "objective", "from", "model", "harness")
-             if values.get(k)}
+        r = {k: values[k] for k in ("name", "dir", "objective", "from", "model", "harness",
+                                    "board") if values.get(k)}
         if "hold" in values:
             r["hold"] = values["hold"] not in (False, "", "0", "no", "false")
         return r
@@ -209,7 +209,11 @@ def preview(recipe, h=None):
         project.new(r["name"], None, path=folder, packet=True, dry_run=True, h=h)
     except project.ProjectError as e:
         raise StartError(str(e)) from None
-    out = ["packet %s in %s" % (r["name"], folder)]
+    from .. import registry
+    if r.get("board") and r["board"] not in [b["name"] for b in registry.boards(h)]:
+        raise StartError("board: there is no board named %s" % r["board"])
+    out = ["packet %s in %s%s" % (r["name"], folder, ", on board %s" % r["board"]
+                                  if r.get("board") else "")]
     if clone:
         if os.path.lexists(folder) and os.listdir(folder):
             raise StartError("%s exists and is not empty: it cannot be cloned into" % folder)
@@ -254,7 +258,7 @@ def _branch(folder, ref, branch):
 def make(recipe, h=None):
     """Make the packet. Returns the project Plan. Nothing is left on a failure:
     a clone made here is removed."""
-    from .. import fsutil, project, setup
+    from .. import fsutil, project, registry, setup
     from ..packet import Packet
     preview(recipe, h)                # every refusal before anything is made
     r = check(recipe)
@@ -283,7 +287,9 @@ def make(recipe, h=None):
         root = Packet(layout.run_dir(plan.path, plan.root))
         for i in r.get("inputs") or []:
             fsutil.atomic_write(os.path.join(root.state_dir, i["name"]), i["text"])
-    except (project.ProjectError, OSError) as e:
+        if r.get("board"):
+            registry.move(plan.name, r["board"], h)
+    except (project.ProjectError, registry.BoardError, OSError) as e:
         _undo(folder, made)
         raise StartError(str(e)) from None
     except BaseException:

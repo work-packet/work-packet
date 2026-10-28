@@ -130,7 +130,7 @@ instruction
       $ wpk instruct dvs-enh --template outline
 
 limits
-  · step_timeout 20m (default), step_budget_usd 1.00 (default), step_context_tokens 80000 (default), model claude-haiku-4-5-20251001 (default)
+  · step_timeout 20m (default), step_budget_usd 1.00 (default), step_context_tokens 80000 (default), model claude-opus-5-5 (default)
   ! smoke commands not run yet
       $ wpk doctor dvs-enh --run
   · Bash is unrestricted

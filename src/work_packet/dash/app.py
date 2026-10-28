@@ -710,6 +710,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         vals.setdefault("dir", base)
         st = starters.get(starter)
         return render(request, "new.html", status=status, projects=es, model=cfg["model"],
+                      boards=[b["name"] for b in registry.boards(home)],
                       harness=cfg["harness"], choices=data.model_choices(home),
                       starters=[starters.get(n) for n in starters.names()], starter=st,
                       fields=st.all_fields(), values=vals, preview=preview,

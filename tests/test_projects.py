@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from conftest import NOW
-from work_packet import executor, project, registry, views
+from work_packet import executor, project, registry, schema, views
 from work_packet.check import check
 from work_packet.cli import main
 from work_packet.packet import Packet
@@ -37,7 +37,7 @@ def test_new_creates_valid_registered_project(home, tmp_path):
     pkt = root_of(plan)
     meta, body = pkt.load_status()
     assert (meta["state"], meta["step"], meta["model"]) == \
-        ("RUNNABLE", 0, "claude-haiku-4-5-20251001")
+        ("RUNNABLE", 0, schema.CONFIG_DEFAULTS["model"])
     assert open(pkt.memento_path).read() == "Read state/count.md (0 if missing), add one.\n"
     assert open(os.path.join(plan.path, "prompt.md")).read() == open(pkt.memento_path).read()
     assert check(plan.path).issues == []

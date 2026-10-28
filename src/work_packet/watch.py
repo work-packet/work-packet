@@ -172,8 +172,7 @@ def poll(w, h=None, dry_run=False, now=None):
                 continue
             try:
                 plan = starters.make(recipe(w, k, h), h)
-                registry.move(plan.name, w["board"], h)
-            except (starters.StartError, registry.BoardError, OSError) as e:
+            except (starters.StartError, OSError) as e:
                 s["failed"][k] = str(e)
                 out["failed"][k] = str(e)
                 continue
@@ -222,6 +221,7 @@ def recipe(w, key, h=None):
                            "rather than working around it here.\n" % (w["board"],
                                                                       ", ".join(others)))
     r["origin"]["watch"] = "%s/%s" % (w["board"], w["name"])
+    r["board"] = w["board"]
     return r
 
 

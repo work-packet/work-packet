@@ -380,3 +380,23 @@ def test_pr_by_a_watcher_and_the_page(forge, tmp_path):
                                      "pr": "yes"}])[0].field == "watch[0].pr"
     page = _client().get("/p/%s" % name).text
     assert "pull request #100" in page and "Push to PR #100" in page
+
+
+def test_new_packet_on_a_board(forge, tmp_path):
+    from test_dash_tasks import _client
+    registry.new_board("solver")
+    with pytest.raises(starters.StartError, match="no board named nope"):
+        starters.preview(starters.from_values("folder", {
+            "name": "x", "dir": str(tmp_path), "board": "nope"}))
+    r = starters.from_values("folder", {"name": "a1", "dir": str(tmp_path), "board": "solver"})
+    assert "on board solver" in starters.preview(r)[0]
+    starters.make(r)
+    assert registry.get("a1")["board"] == "solver"
+    c = _client()
+    assert 'href="/new?board=solver"' in c.get("/b/solver").text      # the board's context
+    page = c.get("/new?board=solver").text
+    assert '<option value="solver" selected>' in page
+    assert "board=solver" in page.split('class="tabs"')[1].split("</nav>")[0]
+    got = c.post("/new", data={"starter": "folder", "name": "a2", "dir": str(tmp_path),
+                               "board": "solver", "action": "create"}, follow_redirects=False)
+    assert got.status_code == 303 and registry.get("a2")["board"] == "solver"

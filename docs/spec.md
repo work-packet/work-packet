@@ -50,7 +50,7 @@ All keys are optional. Unknown keys are errors.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `model` | string | `claude-haiku-4-5-20251001` | model for new projects |
+| `model` | string | `claude-opus-5-5` | model for new projects (and for projects that set none) |
 | `harness` | string | `claude` | the agent CLI that runs steps (harness.md §3) |
 | `max_concurrent` | int ≥ 1 | 1 | steps `wpk tick` runs at once |
 | `step_timeout` | duration | `120m` | wall-clock limit for one model run |

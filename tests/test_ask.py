@@ -201,6 +201,7 @@ def test_set_model_reaches_packets(proj):
     from work_packet.packet import Packet
     proj, root = proj
     old = status(root)["model"]
+    assert main(["set", proj, "model=%s" % old]) == 0     # the fixture's, not the default
     kids = []
     for i, m in enumerate((None, "chosen-model")):
         e = {"wpid": spawn.child_wpid(root.wpid, 1, i), "spawn_key": "1:%d" % i,

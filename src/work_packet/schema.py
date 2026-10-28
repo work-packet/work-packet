@@ -33,7 +33,7 @@ PERMISSION_MODES = ("acceptEdits", "auto", "bypassPermissions", "dontAsk",
                     "manual", "plan")
 
 CONFIG_DEFAULTS = {
-    "model": "claude-haiku-4-5-20251001",
+    "model": "claude-opus-5-5",
     "harness": "claude",              # harness.md §3
     "max_concurrent": 1,
     "step_timeout": "120m",
