@@ -694,6 +694,131 @@ def cmd_config(args) -> int:
     return 0
 
 
+def cmd_migrate(args) -> int:
+    import json
+    from . import card, migrate
+    try:
+        res = migrate.migrate(args.targets or None, dry_run=args.dry_run)
+    except KeyError as e:
+        return _err("not registered: %s" % e.args[0])
+    if args.print_card:
+        for r in res:
+            for path, c in r.get("preview") or []:
+                if c.name == args.print_card or r["name"] == args.print_card and \
+                        path.endswith(r["name"] + card.SUFFIX):
+                    print("# " + path)
+                    print(card.render(c))
+        return 0
+    if args.json:
+        for r in res:
+            r.pop("preview", None)
+        print(json.dumps(res, indent=2))
+    else:
+        for r in res:
+            if r["skipped"]:
+                print("%-28s skipped: %s" % (r["name"], r["skipped"]))
+                continue
+            what = "would write" if args.dry_run else "wrote"
+            cs = ", ".join("%s (%d entries, %s)" % (c["name"], c["entries"], c["state"])
+                           for c in r["cards"])
+            print("%-28s %-10s %s %s" % (r["name"], r["state"], what, cs))
+            if not args.dry_run:
+                print("%-28s %-10s harvested %d, provisional %d, %s" % (
+                    "", "", len(r["harvested"]), len(r["provisional"]),
+                    "statistics identical" if not r["problems"] else
+                    "%d DIFFERENCES" % len(r["problems"])))
+                for p in r["problems"][:10]:
+                    print("    " + p)
+    return 1 if any(r["problems"] for r in res) else 0
+
+
+def cmd_card(args) -> int:
+    import json
+    from . import card, index
+    if args.card_cmd == "list":
+        rows = index.rows()
+        if args.json:
+            print(json.dumps(rows, indent=2))
+        for r in [] if args.json else rows:
+            print("%-36s %-12s %-20s %s" % (r["name"][:36], r["state"], (r["updated"] or "")[:16],
+                                           (r["title"] or "")[:70]))
+        return 0
+    if args.card_cmd == "show":
+        try:
+            path = index.find(args.target)
+        except LookupError as e:
+            return _err(str(e))
+        c = card.load(path)
+        if args.json:
+            d = c.to_json()
+            d["path"] = path
+            print(json.dumps(d, indent=2, ensure_ascii=False))
+        else:
+            sys.stdout.write(card.render(c))
+        return 0
+    bad = 0
+    for p in args.paths:
+        try:
+            text = open(p, encoding="utf-8").read()
+        except OSError as e:
+            bad += 1
+            print("%s: %s" % (p, e))
+            continue
+        c = card.parse(text)
+        if args.card_cmd == "fmt":
+            card.save(p, c)
+            continue
+        probs = card.check(c, text)
+        for level, msg in probs:
+            print("%s: %s: %s" % (p, level, msg))
+        bad += any(level == "error" for level, _ in probs)
+    return 1 if bad else 0
+
+
+def cmd_history(args) -> int:
+    import json
+    from . import history, migrate, registry
+    if args.history_cmd == "rebuild":
+        n = history.rebuild()
+        print("rebuilt %s from %d archives" % (history.db_path(), n))
+        return 0
+    con = history.connect()
+    try:
+        if args.history_cmd == "list":
+            rows = []
+            for pid, name, proj, rs, cs, prov in con.execute(
+                    "SELECT id, name, project, run_state, card_state, provisional FROM packet "
+                    "ORDER BY project, id"):
+                f = history.figures(history.steps(con, packet=pid))
+                rows.append(dict(f, id=pid, name=name, project=proj, run_state=rs,
+                                 card_state=cs, provisional=bool(prov)))
+            if args.json:
+                print(json.dumps(rows, indent=2))
+            for r in [] if args.json else rows:
+                print("%-28s %-10s %-11s %4d steps %9.2f USD%s" % (
+                    (r["name"] or r["id"])[:28], r["card_state"], r["run_state"], r["steps"],
+                    r["cost_usd"], "  provisional" if r["provisional"] else ""))
+            return 0
+        es = [e for e in registry.entries() if not args.targets or e["name"] in args.targets]
+        bad = 0
+        for e in es:
+            p = migrate.plan(e)
+            if not p["exists"]:
+                continue
+            if args.history_cmd == "sync":
+                for x in p["packets"]:
+                    history.sync(e["name"], x["dir"], con=con)
+            probs = history.verify_project(con, e["name"], e["path"])
+            print("%-28s %s" % (e["name"], "identical" if not probs else
+                                "%d differences" % len(probs)))
+            for x in probs[:10]:
+                print("    " + x)
+            bad += bool(probs)
+        return 1 if bad else 0
+    finally:
+        con.close()
+
+
 def cmd_stats(args) -> int:
     import json
     from datetime import timedelta
@@ -704,6 +829,8 @@ def cmd_stats(args) -> int:
         hit = [e for e in es if e["name"] == t]
         if hit:
             projects.append((t, hit[0]["path"]))
+        elif args.history:
+            projects.append((t, None))
         elif os.path.isfile(os.path.join(t, "project.toml")):
             projects.append((os.path.basename(os.path.abspath(t)), os.path.abspath(t)))
         else:
@@ -715,12 +842,21 @@ def cmd_stats(args) -> int:
             return _err("--since: expected a duration like 12h or 7d, got %r" % args.since)
         secs = int(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
         since = schema.format_timestamp(clock.now() - timedelta(seconds=secs))
-    steps, finished = stats.collect(projects, since)
+    if args.history:
+        from . import history
+        con = history.connect()
+        try:
+            names = [n for n, _ in projects] if args.targets else history.projects(con)
+            steps, finished = history.collect(names, since, con=con)
+        finally:
+            con.close()
+    else:
+        steps, finished = stats.collect(projects, since)
     if args.tools:
         from . import toolcost
         attrs = []
         for s in steps:
-            a = toolcost.of_step(s.dir) if s.dir and s.harness == "claude" else None
+            a = stats.tool_attrs(s)
             if a:
                 a["label"] = stats.ROLLUPS["step"](s)
                 attrs.append(a)
@@ -1130,7 +1266,50 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tools", nargs="?", const="tool", choices=("tool", "kind", "target"),
                    help="instead, what used up context inside steps: by tool (default), "
                         "by kind (a shell command's program) or by target (file or command)")
+    p.add_argument("--history", action="store_true",
+                   help="read the history store instead of the runs")
     p.set_defaults(func=cmd_stats)
+
+    p = sub.add_parser("migrate", help="write cards for registered v0.2 projects, link their "
+                       "runs and copy their records and metrics into the history store "
+                       "(docs/migration-v1.md); nothing is moved or deleted")
+    p.add_argument("targets", nargs="*", help="project names (default: all)")
+    p.add_argument("--dry-run", action="store_true", help="print what it would do")
+    p.add_argument("--print", dest="print_card", metavar="NAME",
+                   help="with --dry-run: print the card it would write for NAME")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p.set_defaults(func=cmd_migrate)
+
+    p = sub.add_parser("card", help="packet cards (<name>.wp.md): list, show, check, fmt")
+    csub = p.add_subparsers(dest="card_cmd", required=True)
+    q = csub.add_parser("list", help="the cards in the index, newest first")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(func=cmd_card)
+    q = csub.add_parser("show", help="print a card, or its JSON form")
+    q.add_argument("target", nargs="?", default=".", help="name, id, path or directory")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(func=cmd_card)
+    q = csub.add_parser("check", help="check cards strictly")
+    q.add_argument("paths", nargs="+")
+    q.set_defaults(func=cmd_card)
+    q = csub.add_parser("fmt", help="rewrite cards in canonical form")
+    q.add_argument("paths", nargs="+")
+    q.set_defaults(func=cmd_card)
+
+    p = sub.add_parser("history", help="the history store: list, verify, sync, rebuild")
+    hsub = p.add_subparsers(dest="history_cmd", required=True)
+    q = hsub.add_parser("list", help="packets in the history store, with totals")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(func=cmd_history)
+    q = hsub.add_parser("verify", help="compare every statistic of registered projects "
+                        "between their runs and the history store")
+    q.add_argument("targets", nargs="*")
+    q.set_defaults(func=cmd_history)
+    q = hsub.add_parser("sync", help="load active runs' metrics (provisional)")
+    q.add_argument("targets", nargs="*")
+    q.set_defaults(func=cmd_history)
+    q = hsub.add_parser("rebuild", help="make the database again from the archives")
+    q.set_defaults(func=cmd_history)
 
     p = sub.add_parser("show", help="print a packet's status, memento and children")
     p.add_argument("target", help="WPID (or unique prefix), project name or directory")

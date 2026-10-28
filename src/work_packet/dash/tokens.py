@@ -115,7 +115,7 @@ def tools(entry, steps, kinds=12, n=10):
     biggest single results, each linked to its step. None without transcripts."""
     attrs, many = [], len({s.wpid for s in steps}) > 1
     for s in steps:
-        a = toolcost.of_step(s.dir) if s.dir and s.harness == "claude" else None
+        a = stats.tool_attrs(s)
         if a:
             a["label"] = "%s%d%s" % (s.wpid[:8] + " · " if many else "", s.step,
                                      " (failed)" if s.failed else "")

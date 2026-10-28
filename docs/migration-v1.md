@@ -144,9 +144,16 @@ Risk 1.
       `migration/patches/pss-registers-up--main--ivpm.yaml.patch` and
       **not committed**, because it changes what lab attendees fetch.
       Your call (G5).
-- [ ] M1 adopt (after P1, P2)
+- [x] M1 adopt, done 2026-10-28 with `wpk migrate` (see
+  `docs/implementation-v1.md`): 16 cards, `runs/<id>` links, `index.db`.
+  The executor does not yet write card entries (P2), so re-running
+  `wpk migrate` is how the active card catches up
 - [ ] M2 pss-registers-up-planning to a task folder
-- [ ] M3 harvest and verify (after P7)
+- [~] M3 harvest and verify: steps 1–4 done 2026-10-28 for all 14
+  finished runs (archives, database, blobs), and every statistic checked
+  identical. Step 5 (removing the old directories) is not done: it waits
+  for the dashboard's packet pages to read the history store (P3), and
+  for your go
 - [ ] M4 tidy
 
 - 2026-10-28: plan written from the survey. Nothing changed on disk.

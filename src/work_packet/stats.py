@@ -50,6 +50,7 @@ class Step:
     end: Optional[str] = None
     dir: Optional[str] = None    # the step folder
     quota: Optional[dict] = None  # {window: {first, last, resets_at}}, subscriptions only
+    tools: Optional[dict] = None  # tool-cost attribution, when read from the history store
 
     @property
     def key(self):
@@ -71,6 +72,17 @@ class Step:
         """Every input token the step's calls read: new, cache writes and reads."""
         n = [self.input_tokens, self.cache_write, self.cache_read]
         return None if all(v is None for v in n) else sum(v or 0 for v in n)
+
+
+def tool_attrs(s):
+    """The step's tool-cost attribution (``toolcost.attribute``): kept in the
+    history store, else read from the step's transcript."""
+    if s.tools is not None:
+        return s.tools
+    if s.dir and s.harness == "claude":
+        from . import toolcost
+        return toolcost.of_step(s.dir)
+    return None
 
 
 def is_short(s):
@@ -191,6 +203,10 @@ def collect(projects, since=None):
         try:
             wpids = sorted(w for w in os.listdir(pdir) if schema.is_wpid(w))
         except OSError:
+            # The runs are gone (harvested and removed): read the history store.
+            ss, ff = _from_history(name, since)
+            steps += ss
+            finished += ff
             continue
         for w in wpids:
             pkt = Packet(os.path.join(pdir, w))
@@ -204,6 +220,16 @@ def collect(projects, since=None):
             if st.get("state") == "COMPLETED" and done:
                 finished.append((done[-1].key, len(done), sum(s.cost or 0 for s in done)))
     return steps, finished
+
+
+def _from_history(name, since):
+    from . import history
+    if not os.path.exists(history.db_path()):
+        return [], []
+    try:
+        return history.collect([name], since)
+    except Exception:
+        return [], []
 
 
 # --- figures -----------------------------------------------------------------------

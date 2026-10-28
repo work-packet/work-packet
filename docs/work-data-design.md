@@ -1053,6 +1053,9 @@ next one starts.
 
 ## Status
 
+- 2026-10-28: P1 (card), the directory blob store and P7's history store
+  built, and today's packets migrated with every statistic checked
+  identical: `docs/implementation-v1.md`.
 - 2026-10-28: task folders (§5.1), IVPM as the way workspaces are
   cloned (§5.2), the current-workspace rule (§8.2), harvest at hand-off
   (§14.1).
