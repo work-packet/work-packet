@@ -134,7 +134,11 @@ def _crawl_one(tmp_path, monkeypatch, packet):
     run_out(plan.path, root)
     kid = Packet(layout.run_dir(plan.path, child_wpid(plan.root, 8, 0)))
     assert executor.step(kid.path).code == 0
-    return plan.path, crawl.crawl(TestClient(create_app()), "sr")
+    # Two separate runs: measured wall-clock times differ in the last digit.
+    import re
+    pages = crawl.crawl(TestClient(create_app()), "sr")
+    return plan.path, {u: (st, re.sub(r'"duration_s": [0-9.]+', '"duration_s": 0', b)
+                           if isinstance(b, str) else b) for u, (st, b) in pages.items()}
 
 
 def test_dash_pages_match_the_legacy_layout(home, tmp_path, monkeypatch):
