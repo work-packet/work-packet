@@ -154,6 +154,8 @@ waits for the go), the executor keeps the card current itself.
 
 ## Not in this plan
 
+- Making the card the packet (task folders, runs inside them): `docs/run-binding-v1.md`.
+
 - Moving pss-registers-up-planning into a task folder (M2), M4.
 
 ## Status
