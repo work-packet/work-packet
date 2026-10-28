@@ -34,10 +34,15 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 .split i { display: block; width: auto; height: 100%; border-radius: 0; margin: 0; }
 .h2bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 22px 0 8px; }
 .h2bar h2 { margin: 0; }
+.seenbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 6px; font-size: 13px; }
+ul.list li input[type=checkbox] { margin: 0; align-self: center; }
+ul.list button.x { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 2px; cursor: pointer; }
+ul.list button.x:hover { color: var(--FAILED); }
 </style>
 {% endblock %}
 {% block main %}
 {% set t = ov.tiles %}
+{% set fin_max = 20 %}
 {% set span = "today" if burn.days == 1 else "last %d days" % burn.days %}
 <div class="withside">
 {{ sidem.tab(side, None) }}
@@ -55,14 +60,16 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 <div class="tiles">
   <a class="tile{{ ' hot' if t.needs }}" href="#attention"><div class="k">Needs you</div><div class="v">{{ t.needs }}</div>
     <div class="s">{% if t.oldest %}oldest waiting {{ t.oldest }}{% endif %}</div></a>
+  <a class="tile" href="#attention" title="Projects that stopped since anyone looked"><div class="k">Done</div><div class="v">{{ t.done }}</div>
+    <div class="s">{% if t.done %}not looked at yet{% endif %}</div></a>
   <a class="tile{{ ' run' if t.running }}" href="#running"><div class="k">Running</div><div class="v">{{ t.running }}</div>
     <div class="s">{% if ov.next_wake %}next wake {{ ov.next_wake }}{% endif %}</div></a>
   <a class="tile{{ ' bad' if t.failed }}" href="#attention"><div class="k">Failed</div><div class="v">{{ t.failed }}</div>
     <div class="s">{% if t.newest_fail %}newest {{ t.newest_fail }} ago{% endif %}</div></a>
-  <a class="tile" href="#tokens"><div class="k">Spend today</div><div class="v">{{ t.spend_today|money or "$0" }}</div>
+  <a class="tile" href="/stats?days={{ burn.days }}"><div class="k">Spend today</div><div class="v">{{ t.spend_today|money or "$0" }}</div>
     <div class="s">{% if burn.days > 1 %}{{ t.spend|money or "$0" }} {{ span }}{% endif %}</div></a>
   {% if t.quota %}
-  <a class="tile{{ ' bad' if t.quota.used >= 0.8 and not t.quota.reset }}" href="#tokens"><div class="k">Weekly quota</div>
+  <a class="tile{{ ' bad' if t.quota.used >= 0.8 and not t.quota.reset }}" href="/stats?days={{ burn.days }}"><div class="k">Weekly quota</div>
     <div class="v">{{ t.quota.used|pct }}</div>
     <div class="s">{% if t.quota.reset %}reset {{ t.quota.resets }}{% elif t.quota.left %}resets in {{ t.quota.left }}{% endif %}</div></a>
   {% endif %}
@@ -83,11 +90,34 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 
 <h2 id="attention">Needs attention</h2>
 {% if ov.attention %}
+{% set fin = ov.attention|selectattr("kind", "in", ["done", "stopped"])|list %}
+{% if fin %}
+<form id="seen-one" method="post" action="/seen"><input type="hidden" name="csrf" value="{{ csrf or '' }}"></form>
+{% endif %}
+<form class="act" method="post" action="/seen" id="seen-form">
+<input type="hidden" name="csrf" value="{{ csrf or '' }}">
+{% if fin %}
+<div class="seenbar">
+  <label><input type="checkbox" data-pick-all="form"> select all finished</label>
+  <button class="mini" title="Take the ticked rows off the list without opening them">Mark seen</button>
+  <button class="mini" name="all" value="1" title="Take every finished row off the list">Clear all finished ({{ fin|length }})</button>
+  <span class="muted" style="font-size:12px">Opening a project also takes it off.</span>
+</div>
+{% endif %}
 <ul class="list">
+{% set ns = namespace(fin=0) %}
 {% for a in ov.attention %}{% set c = a.card %}
+  {% if a.kind in ("done", "stopped") %}{% set ns.fin = ns.fin + 1 %}{% endif %}
+  {% if a.kind in ("done", "stopped") and ns.fin == fin_max + 1 %}
+</ul>
+<details id="more-done"><summary class="muted">{{ fin|length - fin_max }} more finished</summary>
+<ul class="list">
+  {% endif %}
   <li>
     {% if a.kind == "needs" %}<a class="state NEEDS_INPUT" href="/p/{{ c.name|urlencode }}#answer" title="Answer its questions">ASKS</a>
     {% elif a.kind == "setup" %}<span class="state PAUSED">SETUP</span>
+    {% elif a.kind == "done" %}<input type="checkbox" name="project" value="{{ c.name }}" aria-label="tick {{ c.name }}"><span class="state COMPLETED">DONE</span>
+    {% elif a.kind == "stopped" %}<input type="checkbox" name="project" value="{{ c.name }}" aria-label="tick {{ c.name }}"><span class="state PAUSED">STOPPED</span>
     {% else %}<span class="state FAILED">FAILED</span>{% endif %}
     <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
     {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
@@ -96,20 +126,29 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
       <span class="muted">· <code>wpk answer {{ c.name }}</code></span>
     {% elif a.kind == "failed" %}<span class="ell err" title="{{ c.root.reason or '' }}">{{ (c.root.reason if c.root else "") or "failed" }}</span>
     {% elif a.kind == "trouble" %}{{ c.trouble }} packet{{ "s" if c.trouble != 1 }} below the root failed
+    {% elif a.kind in ("done", "stopped") %}{% set u = c.unread %}<span class="ell" title="{{ u.outcome }}">{{ u.outcome or ("finished" if a.kind == "done" else "stopped") }}</span>
+      <span class="muted">· {{ u.ago }}{% if u.task > 1 %} · task {{ u.task }}{% endif %}{% if u.cost_usd %} · {{ u.cost_usd|money }}{% endif %}</span>
+      {% if u.pr %}<a href="{{ u.pr.url }}">PR #{{ u.pr.number }}</a>{% endif %}
     {% else %}{% if c.setup.missing is none %}<span class="err">{{ c.setup.next }}</span>{% elif c.setup.missing %}{{ c.setup.missing }} missing · next <code>{{ c.setup.next }}</code>{% else %}ready to hand off{% endif %}
     {% endif %}</span>
     {% if a.kind == "needs" %}<a class="mini" href="/p/{{ c.name|urlencode }}#answer">Answer</a>
     {% elif a.kind == "setup" %}<a class="mini" href="/p/{{ c.name|urlencode }}/compose">Set up</a>
+    {% elif a.kind in ("done", "stopped") %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>
+      <button class="x" form="seen-one" name="project" value="{{ c.name }}" title="Take it off the list without opening it" aria-label="dismiss {{ c.name }}">×</button>
     {% else %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>{% endif %}
   </li>
 {% endfor %}
 </ul>
+{% if fin|length > fin_max %}</details>{% endif %}
+</form>
 {% else %}
 <p class="muted">Nothing needs you.</p>
 {% endif %}
 
-<h2>Boards</h2>
-<div class="wrap"><table class="bt">
+<div class="h2bar"><h2>Boards</h2>
+  <span class="tabs">{% for d in windows %}<a class="{{ 'on' if d == burn.days }}" href="/?days={{ d }}#boards">{{ "1 day" if d == 1 else "%d days" % d }}</a>{% endfor %}</span>
+  <a class="muted" href="/stats?days={{ burn.days }}">token use →</a></div>
+<div class="wrap" id="boards"><table class="bt">
   <tr><th>Board</th>{% for k in columns %}<th class="c c{{ loop.index }}">{{ k }}</th>{% endfor %}
     <th class="num">Projects</th><th class="num">Packets</th><th class="num">Cost, {{ span }}</th><th class="num">Context</th>{% if burn.days > 1 %}<th>Per day</th>{% endif %}<th>Last step</th></tr>
   {% for b in ov.boards %}
@@ -156,39 +195,6 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 </div>
 </div>
 
-<div class="h2bar" id="tokens"><h2>Tokens, {{ span }}</h2>
-  <span class="tabs">{% for d in windows %}<a class="{{ 'on' if d == burn.days }}" href="/?days={{ d }}#tokens">{{ "1 day" if d == 1 else "%d days" % d }}</a>{% endfor %}</span></div>
-{{ tkm.quota(burn.quota) }}
-{% if burn.total %}
-{{ tkm.summary(burn.total, burn.total.steps) }}
-{% if burn.total.chart %}{{ tkm.chart(burn.total.chart, "Context read per day") }}{% endif %}
-{% set top = 10 %}
-{% macro prow(r) -%}
-  <tr><td><a href="/p/{{ r.name|urlencode }}/cost">{{ r.name }}</a></td>{% if side|length > 1 %}<td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>{% endif %}
-    {% if burn.days > 1 %}<td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>{% endif %}
-    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.quota_week|pct }}</td>
-    <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
-    <td class="num">{{ r.output_tokens|tok }}</td><td class="num">{{ r.thinking_share|pct }}</td>
-    <td class="num {{ 'err' if r.failed_share and r.failed_share > 0.1 }}">{{ r.failed_share|pct }}</td></tr>
-{%- endmacro %}
-{% macro phead() -%}
-  <tr><th>Project</th>{% if side|length > 1 %}<th>Board</th>{% endif %}{% if burn.days > 1 %}<th>Per day</th>{% endif %}<th class="num">Steps</th><th class="num">Cost</th><th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
-{%- endmacro %}
-<div class="wrap"><table>
-  {{ phead() }}
-  {% for r in burn.rows[:top] %}{{ prow(r) }}{% endfor %}
-</table></div>
-{% if burn.rows|length > top %}
-<details id="tk-more"><summary class="muted">{{ burn.rows|length - top }} more project{{ "s" if burn.rows|length - top != 1 }}</summary>
-<div class="wrap"><table>
-  {{ phead() }}
-  {% for r in burn.rows[top:] %}{{ prow(r) }}{% endfor %}
-</table></div>
-</details>
-{% endif %}
-{% else %}
-<p class="muted">No steps with token counts {{ span }}.</p>
-{% endif %}
 {% endif %}
 
 {% if broken %}
@@ -197,4 +203,5 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 {% endif %}
 </div>
 </div>
+<script src="/static/sched.js?v={{ asset_v }}"></script>
 {% endblock %}

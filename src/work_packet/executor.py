@@ -183,6 +183,10 @@ def _apply(pkt, st, rec):
         meta.update(state=d["state"], step=n, attempts=0, children=kids,
                     resume_expr=d["resume_expr"], wake_at=d["wake_at"], model=d["model"],
                     reason=d["reason"], updated=_ts())
+        if d["state"] == "COMPLETED":   # the run stopped; unread until seen (mark_seen)
+            meta["stopped"] = rec["t"]
+        else:
+            meta.pop("stopped", None)
         if d.get("size"):           # for the next step only (docs/scheduler.md §5.2)
             meta["next_size"] = d["size"]
         else:
@@ -865,7 +869,8 @@ def _archive_report(pkt, batch):
 
 
 def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
-          archive_outline=None, carry_session=False, force=False, reason=None):
+          archive_outline=None, carry_session=False, force=False, reason=None,
+          stopped=False):
     """``pause``: RUNNABLE or SLEEPING to PAUSED. ``wake``: SLEEPING to RUNNABLE
     (a note that should not wait, docs/interaction.md §6a). ``resume``: NEEDS_INPUT, PAUSED or
     FAILED to RUNNABLE. ``handoff``: the same as ``resume``, with an optional note
@@ -880,6 +885,8 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
     uncommitted changes refuse it unless ``force``. ``carry_session``: the
     next step resumes the last step's session (§6.5). ``reason``: the pause's
     reason in ``status.md`` (default "by hand"; the scheduler's caps name theirs).
+    ``stopped``: the pause ended the run without anyone (a budget or a limit),
+    so it is recorded as ``stopped`` and listed until seen (``mark_seen``).
 
     Takes the lease, so it never races a running step.
     """
@@ -898,6 +905,8 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
             if old not in ("RUNNABLE", "SLEEPING"):
                 return Outcome(NOT_RUNNABLE, "%s is %s; nothing to pause" % (pkt.wpid[:8], old))
             meta.update(state="PAUSED", reason=reason or "by hand", wake_at=None)
+            if stopped:
+                meta["stopped"] = _ts()
         elif op == "wake":
             if old != "SLEEPING":
                 return Outcome(NOT_RUNNABLE, "%s is %s; nothing to wake" % (pkt.wpid[:8], old))
@@ -936,6 +945,7 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
             if rmoved:
                 extra["report"] = rmoved
             meta.update(state="RUNNABLE", reason=None, wake_at=None, attempts=0)
+            meta.pop("stopped", None)
         else:
             raise ValueError(op)
         meta["updated"] = _ts()
@@ -967,6 +977,46 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
         lease.release()
         _ide_owner(pkt)
         livecard.flush()
+
+
+def mark_seen(pkt, by=None):
+    """Someone looked at a packet whose run stopped (docs/overview-recent.md §2):
+    ``seen`` in ``status.md`` and a ``seen`` record. Nothing to do when it is not
+    stopped. Callers decide whether there is anything new to see (the board
+    compares ``seen`` with the tree's last step too). Takes the lease, so never
+    races a step."""
+    try:
+        meta, body = pkt.load_status()
+    except (OSError, frontmatter.FrontMatterError) as e:
+        return Outcome(USAGE, str(e))
+    if not stopped(meta):
+        return Outcome(OK, "%s: not stopped" % pkt.wpid[:8])
+    try:
+        lease = Lease(pkt.lease_path, meta["step"] + 1, 0, 60).acquire()
+    except LeaseHeld as e:
+        return Outcome(LEASED, str(e))
+    try:
+        meta, body = pkt.load_status()
+        if not stopped(meta):
+            return Outcome(OK, "%s: not stopped" % pkt.wpid[:8])
+        t = _ts()
+        meta["seen"] = t
+        pkt.save_status(meta, body)
+        journal.append(pkt.journal_path, {"type": "seen", "t": t, "by": by or _who()})
+        return Outcome(OK, "%s: seen" % pkt.wpid[:8])
+    finally:
+        lease.release()
+        livecard.flush()
+
+
+def stopped(meta):
+    """``status.md`` says the packet's run stopped (COMPLETED, or PAUSED by a limit)."""
+    return bool(meta.get("stopped")) and meta.get("state") in ("COMPLETED", "PAUSED")
+
+
+def unread(meta):
+    """Stopped, and no one has looked since."""
+    return stopped(meta) and not (meta.get("seen") and meta["seen"] >= meta["stopped"])
 
 
 def _ide_owner(pkt):

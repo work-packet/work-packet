@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% import "_side.html" as sidem with context %}
+{% import "_tokens.html" as tkm %}
+{#- Token use over 1, 7 or 30 days: what the Overview showed at its foot (docs/overview-recent.md §3). -#}
+{% block title %}Statistics{% endblock %}
+{% block head %}
+<style>
+.h2bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; }
+.h2bar h2 { margin: 0; }
+</style>
+{% endblock %}
+{% block main %}
+{% set span = "today" if burn.days == 1 else "last %d days" % burn.days %}
+<div class="withside">
+{{ sidem.tab(side, None, "stats") }}
+<div>
+<div class="titlebar"><h1>Statistics</h1><span class="muted">token use and cost</span></div>
+<div class="h2bar" id="tokens"><h2>Tokens, {{ span }}</h2>
+  <span class="tabs">{% for d in windows %}<a class="{{ 'on' if d == burn.days }}" href="/stats?days={{ d }}">{{ "1 day" if d == 1 else "%d days" % d }}</a>{% endfor %}</span></div>
+{{ tkm.quota(burn.quota) }}
+{% if burn.total %}
+{{ tkm.summary(burn.total, burn.total.steps) }}
+{% if burn.total.chart %}{{ tkm.chart(burn.total.chart, "Context read per day") }}{% endif %}
+{% set top = 10 %}
+{% macro prow(r) -%}
+  <tr><td><a href="/p/{{ r.name|urlencode }}/cost">{{ r.name }}</a></td>{% if side|length > 1 %}<td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>{% endif %}
+    {% if burn.days > 1 %}<td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>{% endif %}
+    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.quota_week|pct }}</td>
+    <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
+    <td class="num">{{ r.output_tokens|tok }}</td><td class="num">{{ r.thinking_share|pct }}</td>
+    <td class="num {{ 'err' if r.failed_share and r.failed_share > 0.1 }}">{{ r.failed_share|pct }}</td></tr>
+{%- endmacro %}
+{% macro phead() -%}
+  <tr><th>Project</th>{% if side|length > 1 %}<th>Board</th>{% endif %}{% if burn.days > 1 %}<th>Per day</th>{% endif %}<th class="num">Steps</th><th class="num">Cost</th><th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
+{%- endmacro %}
+<div class="wrap"><table>
+  {{ phead() }}
+  {% for r in burn.rows[:top] %}{{ prow(r) }}{% endfor %}
+</table></div>
+{% if burn.rows|length > top %}
+<details id="tk-more"><summary class="muted">{{ burn.rows|length - top }} more project{{ "s" if burn.rows|length - top != 1 }}</summary>
+<div class="wrap"><table>
+  {{ phead() }}
+  {% for r in burn.rows[top:] %}{{ prow(r) }}{% endfor %}
+</table></div>
+</details>
+{% endif %}
+{% else %}
+<p class="muted">No steps with token counts {{ span }}.</p>
+{% endif %}
+
+{% if burn.boards and side|length > 1 %}
+<h2>By board</h2>
+<div class="wrap"><table>
+  <tr><th>Board</th>{% if burn.days > 1 %}<th>Per day</th>{% endif %}<th class="num">Steps</th><th class="num">Cost</th><th class="num">Context</th><th class="num">Output</th></tr>
+  {% for b in side %}{% set r = burn.boards.get(b.name) %}{% if r %}
+  <tr><td><a href="/b/{{ b.name|urlencode }}">{{ b.name }}</a></td>
+    {% if burn.days > 1 %}<td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>{% endif %}
+    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td>
+    <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.output_tokens|tok }}</td></tr>
+  {% endif %}{% endfor %}
+</table></div>
+{% endif %}
+</div>
+</div>
+{% endblock %}

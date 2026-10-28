@@ -313,7 +313,8 @@ class Dispatcher:
             if why is None:
                 out.append(it)
                 continue
-            got = executor.admin(Packet(it.path), "pause", by=events.SYSTEM, reason=why)
+            got = executor.admin(Packet(it.path), "pause", by=events.SYSTEM, reason=why,
+                                 stopped=True)
             if got.code == 0:
                 events.append("cap", h=self.h, project=it.project, wpid=it.wpid, why=why)
         return out

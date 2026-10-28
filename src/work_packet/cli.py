@@ -274,6 +274,37 @@ def cmd_pr(args) -> int:
     return 0
 
 
+def cmd_seen(args) -> int:
+    """Finished projects no one has looked at (docs/overview-recent.md): list them,
+    or mark them seen, as opening them on the board does."""
+    from . import executor, layout, registry
+    from .dash import data
+    from .packet import Packet
+    cols, _ = data.board()
+    unread = sorted((c for v in cols.values() for c in v if c["unread"]),
+                    key=lambda c: c["unread"]["at"], reverse=True)
+    if not args.projects and not args.all:
+        for c in unread:
+            u = c["unread"]
+            print("%-8s %-24s %s  %s" % (u["kind"].upper(), c["name"], u["local"],
+                                         (u["outcome"] or "").splitlines()[0][:80]
+                                         if u["outcome"] else ""))
+        if not unread:
+            print("nothing finished that you have not seen")
+        return 0
+    names = [c["name"] for c in unread] if args.all else args.projects
+    worst = 0
+    for name in names:
+        e = registry.get(name)
+        if e is None:
+            worst = _err("no project %s" % name)
+            continue
+        out = executor.mark_seen(Packet(layout.run_dir(e["path"], e["root"])))
+        print("%s: %s" % (name, out.msg))
+        worst = worst or out.code
+    return worst
+
+
 def cmd_watch(args) -> int:
     """Watchers on boards (docs/starters-v1.md): list them, or poll them now."""
     import datetime
@@ -1444,6 +1475,15 @@ def build_parser() -> argparse.ArgumentParser:
     wp.add_argument("which", nargs="?", help="board or board/name")
     wp.add_argument("--dry-run", action="store_true", help="say what it would make")
     p.set_defaults(func=cmd_watch)
+
+    p = sub.add_parser("seen", help="finished projects not looked at yet; mark them seen",
+                       description="With no project: list the projects whose run stopped "
+                       "(DONE, or STOPPED by a limit) since anyone looked. With projects, or "
+                       "--all: mark them seen, as opening them on the board does "
+                       "(docs/overview-recent.md).")
+    p.add_argument("projects", nargs="*")
+    p.add_argument("--all", action="store_true", help="mark every one listed seen")
+    p.set_defaults(func=cmd_seen)
 
     p = sub.add_parser("pr", help="hand a packet back to its forge: push, open a pull request",
                        description="Push the packet's branch and open a pull request into "

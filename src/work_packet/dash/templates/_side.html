@@ -4,6 +4,7 @@
 <nav class="side" aria-label="Boards" data-csrf="{{ csrf or '' }}">
   <a class="item{{ ' on' if not here and not page }}" href="/">Overview<span class="n">{{ side|sum(attribute="n") }}</span></a>
   <a class="item{{ ' on' if page == 'packets' }}" href="/packets" title="Every packet on every board, to sort and search">All packets</a>
+  <a class="item{{ ' on' if page == 'stats' }}" href="/stats" title="Token use and cost over 1, 7 or 30 days">Statistics</a>
   <a class="item{{ ' on' if page == 'sched' }}" href="/sched" title="The pool: what runs, what waits and why, the budget, and Halt">Scheduler</a>
   <span class="item later" title="Not built yet: what others send you">Inbox</span>
   <span class="item later" title="Not built yet: what you send others">Outbox</span>

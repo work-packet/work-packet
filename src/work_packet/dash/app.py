@@ -178,13 +178,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             return None
 
     async def overview(request):
-        """The Overview (``/``): how every board is doing, what needs you, token use
-        over ``?days=`` 1, 7 or 30 (docs/overview.md)."""
-        try:
-            days = int(request.query_params.get("days", 7))
-        except ValueError:
-            days = 7
-        days = days if days in tokens.WINDOWS else 7
+        """The Overview (``/``): how every board is doing, what needs you (and what
+        finished), the boards' cost over ``?days=`` 1, 7 or 30 (docs/overview.md)."""
+        days = days_of(request)
         cols, broken = data.board(home)
         side = data.side(home, cols, broken)
         burn = tokens.board(archived.entries(home), days=days, on=[b["name"] for b in side])
@@ -194,6 +190,23 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                       sch=dsched.tiles(snap),
                       home=home or registry.home(), side=side, here=None,
                       windows=tokens.WINDOWS, main_board=registry.DEFAULT_BOARD)
+
+    def days_of(request):
+        try:
+            days = int(request.query_params.get("days", 7))
+        except ValueError:
+            days = 7
+        return days if days in tokens.WINDOWS else 7
+
+    async def stats_page(request):
+        """Statistics (``/stats``): token use over ``?days=`` 1, 7 or 30, which the
+        Overview showed at its foot (docs/overview-recent.md §3)."""
+        cols, broken = data.board(home)
+        side = data.side(home, cols, broken)
+        burn = tokens.board(archived.entries(home), days=days_of(request),
+                            on=[b["name"] for b in side])
+        return render(request, "stats.html", burn=burn, side=side, here=None,
+                      windows=tokens.WINDOWS)
 
     async def board(request):
         """One board (``/b/{board}``; docs/boards.md): its cards."""
@@ -463,6 +476,48 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         card.update(tasks=len(ts), counts=sorted(counts.items(), key=lambda kv: str(kv[0])))
         return card, ts
 
+    def mark_seen(request, e, nodes=None):
+        """Opening a stopped project marks it seen (docs/overview-recent.md §1).
+        A held lease (someone started it again) is no failure: it is not stopped."""
+        from .. import executor
+        from ..packet import Packet
+        if archived.is_archived(e):
+            return None                 # read-only: from the history store
+        if nodes is None:
+            try:
+                meta, _ = Packet(layout.run_dir(e["path"], e["root"])).load_status()
+            except (OSError, ValueError):
+                return None
+            if not executor.stopped(meta):
+                return None             # the cheap check: most pages stop here
+            nodes = data.tree(e)
+        if not nodes or not data.card(e, nodes=nodes)["unread"]:
+            return None
+        return executor.mark_seen(Packet(nodes[0]["path"]), by=who(request))
+
+    async def seen(request):
+        """Recently finished rows on the Overview: mark the picked projects (or
+        ``all``) seen without opening them."""
+        from .. import executor
+        f = await form(request)
+        names = [n for n in f.get("project") or () if n]
+        if (f.get("all") or [""])[0]:
+            cols, _ = data.board(home)
+            names = [c["name"] for v in cols.values() for c in v if c["unread"]]
+        if not names:
+            return back("/#attention", executor.Outcome(executor.USAGE, "tick some first"),
+                        poke_runner=False)
+        n, bad = 0, []
+        for name in names:
+            e = archived.get(name, home)
+            out = await run_in_threadpool(mark_seen, request, e) if e else None
+            if out is not None and out.code:
+                bad.append("%s: %s" % (name, out.msg))
+            else:
+                n += 1
+        msg = "marked %d seen" % n + ("; " + "; ".join(bad) if bad else "")
+        return back("/#attention", executor.Outcome(1 if bad else 0, msg), poke_runner=False)
+
     def project_page(tab):
         async def handle(request):
             e = entry(request)
@@ -471,6 +526,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             now = clock.now()
             nodes = data.tree(e, now)
             card, ts = packet_top(e, now, nodes)
+            if card["unread"]:
+                await run_in_threadpool(mark_seen, request, e, nodes)
             kw = dict(e=e, card=card, nodes=nodes, tasks=ts, work=work_rows(e))
             return await tab(request, e, now, kw)
         return handle
@@ -544,6 +601,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         p = data.packet(e, request.path_params["wpid"]) if e else None
         if p is None:
             return not_found(request, "packet %s" % request.path_params["wpid"])
+        await run_in_threadpool(mark_seen, request, e)
         snap = await run_in_threadpool(dsched.snapshot, home)
         return render(request, "packet.html", e=e, p=p, live=True, classes=CLASSES,
                       sch=dsched.packet_info(snap, e, request.path_params["wpid"]),
@@ -556,6 +614,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             if e else None
         if s is None:
             return not_found(request, "step %s" % request.path_params["step"])
+        await run_in_threadpool(mark_seen, request, e)
         # A committed or failed step never changes, so only a running one refreshes.
         sd = os.path.join(layout.run_dir(e["path"], request.path_params["wpid"]), "steps",
                           request.path_params["step"])
@@ -1024,6 +1083,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         lv = data.live(e, request.path_params["wpid"], view=view) if e else None
         if lv is None:
             return not_found(request, "packet %s" % request.path_params["wpid"])
+        await run_in_threadpool(mark_seen, request, e)
         return render(request, "live.html", e=e, l=lv, view=view, live=True,
                       refresh_ms=LIVE_MS, procs_max=PROCS_MAX)
 
@@ -1219,10 +1279,12 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
               methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         WebSocketRoute("/ide/{rest:path}", ide_ws),
         Route("/", overview),
+        Route("/stats", stats_page),
         Route("/sched", sched_page),
         Route("/sched.json", sched_json),
         Route("/sched/mode", sched_mode, methods=["POST"]),
         Route("/packets/bulk", bulk, methods=["POST"]),
+        Route("/seen", seen, methods=["POST"]),
         *[Route("/p/{project}/%s" % w, setter(w), methods=["POST"])
           for w in ("prio", "size", "hold")],
         *[Route("/p/{project}/{wpid}/%s" % w, setter(w), methods=["POST"])

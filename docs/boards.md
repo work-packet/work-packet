@@ -24,8 +24,10 @@ Inbox, Outbox and Connections show in the tab as "later" and do nothing yet.
 ## Dash
 
 - `/` is the **Overview** (overview.md): no cards, but headline tiles, what
-  needs you, a row per board with its project count in each column, what runs
-  and wakes next, and token use over 1, 7 or 30 days.
+  needs you (finished work you have not looked at too), a row per board
+  with its project count in each column and its cost over 1, 7 or 30 days,
+  and what runs and wakes next. Token use in full is on **Statistics**
+  (`/stats`).
 - `/b/<board>`: one board's cards; its columns just grow.
 - `/packets`, **All packets**: one row per packet on every board (board,
   project, packet, state, step, last step, cost, reason or summary). Click a

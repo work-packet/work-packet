@@ -1,7 +1,7 @@
 # Overview: finished work in Needs attention, and token use on its own page (plan and status)
 
 Started 2026-10-28. Changes the Overview (`docs/overview.md`). Status:
-**agreed** (Q1–Q5 below); not built yet.
+**built** 2026-10-28 (O1–O6); see Status.
 
 ## Why
 
@@ -52,9 +52,9 @@ looked at since is one more kind of row in the **Needs attention** list.
 - **Tile:** a **Done** tile, with the count of unread rows, next to
   "Needs you"; it links to `#attention` and is not coloured.
 - **Many at once:** up to 20 of these rows, then "and N more" (expands).
-- **Live refresh:** ticked boxes survive it. The bar's form is
-  `data-filter`, and the ticks are kept in session storage, as on All
-  packets.
+- **Live refresh:** ticking a box pauses it, as a form being filled in
+  always does (`live.js`), so the ticks are never swapped away; it resumes
+  after "Mark seen" reloads the page.
 
 ### 2. "Stopped" and "seen" are kept with the packet (Q5)
 
@@ -105,19 +105,19 @@ travel with the packet, reach the history store, and mean the same to
 
 ## Steps
 
-- [ ] O1. Packet metadata:
+- [x] O1. Packet metadata:
   - `stopped`, `seen` in `schema.STATUS_FIELDS`, `STATUS_OPTIONAL` and the
-    validator; spec (`docs/spec.md`) and `docs/packet-format.md`;
+    validator; spec (`docs/spec.md` §4.1 and the journal table);
   - the executor sets `stopped` on a commit to COMPLETED and on a system
     pause, and clears it on RUNNABLE;
   - `executor.mark_seen` with the `seen` journal record;
   - the history store keeps both fields and the record (check `history.py`
     harvest);
   - tests.
-- [ ] O2. `data.overview`: rows of kind `done` and `stopped` (the tree
+- [x] O2. `data.overview`: rows of kind `done` and `stopped` (the tree
   check, outcome from `report.of_packet`, the run's cost, `[pr]`); the Done
   tile.
-- [ ] O3. Routes and CLI:
+- [x] O3. Routes and CLI:
   - `POST /seen` (projects, or all, with CSRF);
   - the project pages mark seen on GET when the project is unread
     (`project_page`, `packet`, `step`, `live_view`; a lease that is held
@@ -126,15 +126,15 @@ travel with the packet, reach the history store, and mean the same to
   - tests: open → gone; dismiss, select, all; next task → gone; stops
     again → back; a child still running → not yet listed; an old packet
     without `stopped` → not listed.
-- [ ] O4. `overview.html`: the rows, the selection bar (only when there
+- [x] O4. `overview.html`: the rows, the selection bar (only when there
   are such rows), the tile; select-all and ticks that survive refresh
   (`overview.js`, or shared with `packets.js`).
-- [ ] O5. `/stats`:
+- [x] O5. `/stats`:
   - `stats.html` holds the token section moved from `overview.html`;
   - the Boards table and its window switch stay on the Overview;
   - side-tab entry, tile links;
   - update tests `test_dash.py::test_pages` and `test_token_panels`.
-- [ ] O6. Docs (`docs/overview.md` §2 and §6, `docs/boards.md` Dash);
+- [x] O6. Docs (`docs/overview.md` §2 and §6, `docs/boards.md` Dash);
   check the page in a browser at 1400 and 1100 wide.
 
 ## Decisions (2026-10-28)
@@ -154,3 +154,33 @@ travel with the packet, reach the history store, and mean the same to
 - 2026-10-28: finished work goes in Needs attention, not a new section.
 - 2026-10-28: decisions Q1–Q5 taken; the seen and stopped marks moved to
   packet metadata; the Boards table kept as it is.
+- 2026-10-28: built, O1–O6.
+  - Packet: `stopped`, `seen` in `status.md` (`schema.STATUS_FIELDS`,
+    optional, timestamps; `stopped` only while COMPLETED or PAUSED), a
+    `seen` journal record; the executor sets `stopped` in `_apply` (commit
+    to COMPLETED, at the commit's time) and in `admin(pause, stopped=True)`
+    (the scheduler's caps, `sched/dispatcher.py`), removes it on RUNNABLE;
+    `executor.mark_seen`, `stopped`, `unread`. spec §4.1 and the journal
+    table updated. The history store keeps the whole status, so both
+    travel.
+  - Board: `data.tree` nodes carry `stopped`, `seen`; `data.card` has
+    `unread` (`data.finished`: kind, at, ago, outcome or reason, the last
+    task's cost with its children, PR) when the root stopped, nothing in
+    the tree is running, RUNNABLE or SLEEPING, the project is not archived,
+    and `seen` is older than the later of `stopped` and the tree's last
+    step end. `data.overview` adds the rows (newest first) and the Done
+    tile.
+  - Routes: `POST /seen` (`project=`…, or `all=1`); the project pages, the
+    packet, step and live pages mark seen on GET (a cheap `status.md`
+    check first; archived projects never). `/stats` (`stats.html`: the
+    token section, plus a by-board table); "Statistics" in the side tab;
+    the Boards table keeps its columns and gets the window switch.
+  - `wpk seen [projects… | --all]`.
+  - Tests: `tests/test_seen.py` (8); `test_token_panels` reads `/stats`;
+    `test_pages_are_the_same_from_history` marks the project seen before
+    harvesting. Suite 805 passed, 4 skipped. Rendered at 1400 and 1100
+    wide in headless Chrome (a demo home with two DONE and one STOPPED).
+  - Differences from the plan: the ticks survive refresh because a ticked
+    form pauses it (no session storage); the side tab shows no Done count.
+  - Needs a restart of the dashboard (its runner is the executor that
+    writes `stopped`). Projects that finished before then are not listed.

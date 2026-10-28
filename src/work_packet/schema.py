@@ -20,9 +20,10 @@ RESERVED_STATES = {"WAITING": "Stage 3"}
 STATUS_FIELDS = (
     "wpk", "wpid", "project", "state", "step", "attempts", "parent",
     "spawn_key", "children", "resume_expr", "wake_at", "model", "reason",
-    "updated", "next_size",
+    "updated", "next_size", "stopped", "seen",
 )
-STATUS_OPTIONAL = ("next_size",)      # docs/scheduler-plan.md decision 4
+# next_size: docs/scheduler-plan.md decision 4; stopped, seen: docs/overview-recent.md §2
+STATUS_OPTIONAL = ("next_size", "stopped", "seen")
 
 MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item", "size")
 ITEM_MAX = 80
@@ -136,6 +137,7 @@ JOURNAL_TYPES = {
     "config": ("by", "changes"),
     "seed": ("files",),               # docs/setup.md §10: the root filled from the project root
     "request": ("op", "id", "by"),    # docs/delegation.md: sent, received, done
+    "seen": ("by",),                  # docs/overview-recent.md §2: someone looked at it
 }
 DECISION_FIELDS = ("state", "resume_expr", "wake_at", "reason", "model",
                    "summary", "spawn")
@@ -305,6 +307,11 @@ def validate_status(meta, body=""):
         out.append(_err("reason", "required when %s" % st))
     if "updated" in meta and not is_timestamp(meta["updated"]):
         out.append(_err("updated", "must be a UTC timestamp like 2026-10-21T18:02:11Z"))
+    for k in ("stopped", "seen"):
+        if k in meta and not is_timestamp(meta[k]):
+            out.append(_err(k, "must be a UTC timestamp like 2026-10-21T18:02:11Z"))
+    if meta.get("stopped") and st not in ("COMPLETED", "PAUSED"):
+        out.append(_err("stopped", "only when COMPLETED or PAUSED"))
     if list(k for k in meta if k in STATUS_FIELDS) != [k for k in STATUS_FIELDS if k in meta]:
         out.append(_warn(None, "keys are not in the spec order"))
     return out

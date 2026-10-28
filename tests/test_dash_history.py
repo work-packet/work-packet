@@ -58,6 +58,11 @@ def test_restore_gives_back_the_record(tmp_path, fake):
 def test_pages_are_the_same_from_history(tmp_path, fake, client_for):
     from work_packet.dash import crawl
     proj, root, kid = finished(tmp_path)
+    # Looked at first: opening a finished project records "seen" in its journal,
+    # which the copy in the history store would not have otherwise.
+    from work_packet import executor
+    from work_packet.packet import Packet
+    assert executor.mark_seen(Packet(root.path)).msg.endswith("seen")
     migrate.migrate()
     before = crawl.crawl(client_for(), "demo")
     assert len(before) > 10 and before["/p/demo/" + root.wpid][0] == 200

@@ -194,11 +194,12 @@ def test_token_panels(tree, client):
     bar = tk["chart"]["bars"][0]
     assert bar["link"].endswith("/0001") and [g["cls"] for g in bar["segs"]] == ["tk-new"]  # the fake: uncached only
     assert tokens.chart([], tokens.CONTEXT) is None
-    r = client.get("/")
+    r = client.get("/stats")             # moved off the Overview (docs/overview-recent.md §3)
     assert "Tokens, last 7 days" in r.text and 'href="/p/done/cost"' in r.text
     assert "Context read per day" in r.text
+    assert "Tokens, last" not in client.get("/").text
     for d, head in ((1, "Tokens, today"), (30, "Tokens, last 30 days"), (5, "Tokens, last 7 days")):
-        assert head in client.get("/?days=%d" % d).text
+        assert head in client.get("/stats?days=%d" % d).text
     r = client.get("/p/done/cost")
     assert 'id="tokens"' in r.text and "Context read per day" in r.text and "By task" in r.text
     r = client.get("/p/done/" + root.wpid)

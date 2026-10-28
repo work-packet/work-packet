@@ -169,6 +169,7 @@ def tree(entry, now=None):
     """Every packet of a project, in tree order, with what a board row needs."""
     now = now or clock.now()
     tz = _zone(entry["path"])
+    from ..executor import stopped
     names = {}
     out = []
     for depth, pkt, meta, body in packets(entry["path"], entry["root"]):
@@ -187,6 +188,8 @@ def tree(entry, now=None):
             "attempts": meta.get("attempts"), "reason": meta.get("reason"),
             "next": _next(meta, now, tz), "summary": _first_line(body),
             "updated": _ts(meta.get("updated")), "wake_at": _ts(meta.get("wake_at")),
+            "stopped": _ts(meta.get("stopped")) if stopped(meta) else None,
+            "seen": _ts(meta.get("seen")),
             "running": running(pkt, now),
             "steps": st, "cost_usd": sum(s["cost_usd"] or 0 for s in st), "path": pkt.path,
         })
@@ -298,6 +301,13 @@ def card(entry, now=None, nodes=None):
     held = None
     if root and root["state"] == "PAUSED" and root.get("reason") == "setup" and not live:
         held = setup_summary(entry)
+    unread = None
+    # An archived project (its run gone, read from the history store) is never new.
+    if root and root.get("stopped") and not live and not archived.is_archived(entry) and not any(
+            n["state"] in ("RUNNABLE", "SLEEPING") for n in nodes):
+        at = max(t for t in (root["stopped"], last) if t)
+        if not root.get("seen") or root["seen"] < at:
+            unread = finished(entry, nodes, at, tz, now)
     return {
         "name": entry["name"], "column": column, "root": root, "running": run,
         "setup": held,
@@ -307,7 +317,28 @@ def card(entry, now=None, nodes=None):
         "last_step": relative(-(now - last).total_seconds()) if last else "never",
         "last_end": last,
         "finished": _local(root["updated"], tz) if root and root.get("updated") else "",
+        "unread": unread,
     }
+
+
+def finished(entry, nodes, at, tz, now):
+    """A stopped project no one has looked at since (docs/overview-recent.md §1):
+    ``kind`` done or stopped, ``at`` (the root's stop, or the tree's last step
+    end if later), ``outcome`` (the report's, else the reason), the last task's
+    ``cost_usd`` (its children's too) and the pull request, if one was opened."""
+    from .. import pr
+    root = nodes[0]
+    rows = tasks(entry, nodes)
+    n = max((r["n"] for r in rows if r["kind"] == "task"), default=1)
+    cost, on = 0.0, False
+    for r in rows:                  # the last task and the children it spawned
+        on = r["n"] == n if r["kind"] == "task" else on
+        cost += r["cost_usd"] if on else 0.0
+    done = root["state"] == "COMPLETED"
+    return {"kind": "done" if done else "stopped", "at": at, "local": _local(at, tz),
+            "ago": relative(-(now - at).total_seconds()),
+            "outcome": root["summary"] if done else root.get("reason") or "",
+            "cost_usd": cost, "task": n, "pr": pr.recorded(entry)}
 
 
 def setup_summary(entry):
@@ -399,6 +430,9 @@ def overview(cols, broken, side, burn, now=None, coming=8):
     attention += [{"kind": "trouble", "card": c} for c in cards
                   if c["trouble"] and c["column"] != "Failed"]
     attention += [{"kind": "setup", "card": c} for c in cards if c["setup"]]
+    unread = sorted((c for c in cards if c["unread"]), key=lambda c: c["unread"]["at"],
+                    reverse=True)
+    attention += [{"kind": c["unread"]["kind"], "card": c} for c in unread]
     waits = [c["root"]["updated"] for c in needs if c["root"] and c["root"].get("updated")]
     fails = [c["root"]["updated"] for c in cols["Failed"]
              if c["root"] and c["root"].get("updated")]
@@ -426,7 +460,7 @@ def overview(cols, broken, side, burn, now=None, coming=8):
     return {
         "tiles": {
             "needs": len(needs), "oldest": ago(min(waits)) if waits else "",
-            "running": len(cols["Running"]),
+            "running": len(cols["Running"]), "done": len(unread),
             "failed": len(cols["Failed"]) + sum(c["trouble"] for c in cards
                                                  if c["column"] != "Failed"),
             "newest_fail": ago(max(fails)) if fails else "",

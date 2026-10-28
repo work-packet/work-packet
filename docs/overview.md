@@ -32,9 +32,10 @@ One row of stat tiles:
 | Tile | Figure | Sub-line |
 |---|---|---|
 | Needs you | projects in *Needs you* | oldest waiting for |
+| Done | projects that stopped and no one has looked at since (§2) | |
 | Running | projects with a live step | next wake-up |
 | Failed | projects in *Failed* + failed child packets | newest failure, when |
-| Spend | today | the token window (7 or 30 days) |
+| Spend | today (links to Statistics) | the token window (7 or 30 days) |
 | Quota | weekly quota used | resets in |
 | Pool | the scheduler's mode (red unless running) | packets waiting, starting |
 | Cores in use | cores the pool's jobs hold / its limit | jobs / limit |
@@ -52,6 +53,17 @@ One list, across all boards, of what waits on you: *Needs you* items first
 (the question, project, board, "Answer" link to `/p/<project>/<wpid>#answer`),
 then failures (root failed, or `trouble` children; the reason), then projects
 held for setup (`setup.next`). Empty: one muted line "Nothing needs you."
+
+### 2a. Finished work (2026-10-28, docs/overview-recent.md)
+
+After asks, failures and setup, the attention list has a row per project
+whose run *stopped* (root COMPLETED: `DONE`; root PAUSED by a budget or
+limit: `STOPPED`), once the whole tree is at rest, until someone looks: the
+outcome or the reason, when, the last task's cost, the PR link. Opening the
+project (any page of it) marks it seen; so do the row's `×`, ticking rows
+and "Mark seen", and "Clear all finished" (`POST /seen`), and `wpk seen`.
+Both marks are kept in the root's `status.md` (`stopped`, `seen`; spec
+§status), so packets from before the change are never listed.
 
 ### 3. Boards
 
@@ -81,12 +93,16 @@ note when the runner is off), then the wake-ups, soonest first: project,
 packet, wakes at, board. (Sleepers are already sorted by `wake_at` in
 `data.board()`.)
 
-### 6. Tokens, last N days
+### 6. Tokens, last N days: on Statistics (`/stats`)
+
+Moved off the Overview on 2026-10-28 (docs/overview-recent.md §3) to its
+own page, Statistics, in the side tab; the Boards table (§3) keeps its
+cost columns and the 1 / 7 / 30 day switch (`/?days=…#boards`).
 
 - The quota line (`tkm.quota`), as now.
 - The totals over the window (`tkm.summary`) and a full context-per-day chart.
   The per-board figures sit in the Boards table (§3).
-- A 1 / 7 / 30 day switch (`/?days=`, default 7); "Per day" columns hide
+- A 1 / 7 / 30 day switch (`/stats?days=`, default 7); "Per day" columns hide
   for one day.
 - The per-project table as now, cut to the top 10 by context with "show all"
   (a `<details>`), since the board summary carries the totals.
