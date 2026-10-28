@@ -118,20 +118,29 @@ invasive. Instead (the fallback named in the first version of this plan):
 Matt does not want to re-run `wpk migrate` by hand. After D0–D5 (D6
 waits for the go), the executor keeps the card current itself.
 
-- [ ] E1. Hook points: where the executor records handoffs, step starts,
-      decisions (COMPLETED/FAILED/NEEDS_INPUT), questions, answers,
-      config changes and spawns; each appends the same entry
-      `migrate.rebuild_thread` would build from the journal (one code
-      path for both, so a live card equals a migrated one).
-- [ ] E2. Append through `card.append` (locked, idempotent by key), so
-      a re-run of `wpk migrate` adds nothing; failures to write the card
-      are logged and never fail a step.
-- [ ] E3. Metrics: provisional `history.sync` after each committed step;
-      `history.harvest` when a root packet completes (archive, verify,
-      pin the card).
-- [ ] E4. Tests: run a fixture project with the executor; the live card
-      and history rows equal what `wpk migrate` produces from the same
-      journal. Then pss-registers-up-planning picks it up with no manual step.
+- [x] E1. Hooks: `journal.append` marks the packet (every writer: executor,
+      config, requests, seeding, dispatcher); `livecard.flush` runs at the
+      end of `executor.step` and `executor.admin`, after each dashboard
+      POST (background thread), and at process exit. One code path with
+      `wpk migrate`: `migrate.keep_project` rebuilds the thread from the
+      journal and merges it, so a live card is what a migration would write.
+- [x] E2. Per-project lock (`locks/keep-*`); failures are logged and never
+      fail a step; the next flush catches up (it rebuilds from the whole
+      journal). `WPK_NO_LIVECARD=1` turns it off.
+- [x] E3. Metrics synced provisionally after each change; when every
+      packet of a project is COMPLETED each is harvested (archive, load,
+      verify) unless its harvest is current. A resumed finished project
+      becomes provisional again (`history.sync(replace=True)`) until it
+      completes again.
+- [x] E4. `tests/test_livecard.py` (5): the card is written step by step;
+      the live thread equals a fresh `wpk migrate`; completion harvests and
+      `verify_project` is clean; `continue` after COMPLETED makes it
+      provisional with a `request` entry; a failing update never fails a
+      step and is caught up; unregistered/disabled projects are untouched.
+      Real data: `livecard.update_project` on pss-registers-up-planning,
+      task2, e7-1 in 0.2 s; `history verify` identical.
+      Also: `sub/` (sub-packet cards) added to the packet format's known
+      entries (`check.py`), as the validator warned about it.
 
 ## Open questions
 
@@ -152,3 +161,6 @@ waits for the go), the executor keeps the card current itself.
 - 2026-10-28: plan written.
 - 2026-10-28: D0–D5 done; full suite 768 passed, 4 skipped. D6 waits for
   the go and Q1/Q2. Next: E1–E4.
+- 2026-10-28: E1–E4 done; full suite 773 passed, 4 skipped. Cards and
+  history now stay current without `wpk migrate`. Left: D6 (go, Q1, Q2),
+  D7, Q3.

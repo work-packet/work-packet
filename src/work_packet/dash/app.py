@@ -6,6 +6,7 @@ each one a call into ``work_packet.actions`` or ``project`` and nothing more.
 
 import logging
 import os
+import threading
 import urllib.parse
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -18,7 +19,7 @@ from starlette.middleware import Middleware
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from .. import __about__, archived, clock, registry
+from .. import __about__, archived, clock, livecard, registry
 from . import data, markup, plan, tokens
 from . import sched as dsched
 from ..sched.classes import CLASSES
@@ -1189,7 +1190,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
 class ArchivedReadOnly:
     """Refuse changes to a project whose runs have been removed and that is
     shown from the history store (``archived``); moving it between boards
-    is still allowed."""
+    is still allowed. After any other POST, bring the cards of the packets
+    it changed up to date (livecard), in the background."""
 
     def __init__(self, app, home=None):
         self.app = app
@@ -1209,4 +1211,8 @@ class ArchivedReadOnly:
                         "%s is archived: its runs were removed and it is shown from"
                         " the history store, read-only\n" % name, status_code=409)
                     return await resp(scope, receive, send)
+            try:
+                return await self.app(scope, receive, send)
+            finally:
+                threading.Thread(target=livecard.flush, daemon=True).start()
         return await self.app(scope, receive, send)

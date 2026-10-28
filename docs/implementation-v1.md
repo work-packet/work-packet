@@ -80,10 +80,8 @@ run directories surviving.
 
 ## Not done yet
 
-- **The executor does not write card entries** (P2). Until it does,
-  re-run `wpk migrate pss-registers-up-planning`: it merges the new
-  entries into the card and reloads the provisional metrics. Edits you
-  make to the card's front matter or thread are kept.
+- ~~The executor does not write card entries (P2).~~ Done 2026-10-28
+  (`livecard.py`, see `docs/dash-history-v1.md` E1–E4).
 - **No run directory has been deleted** (M3 step 5). Everything needed
   to delete the 14 harvested ones is in place, and `wpk stats` would
   still show the same figures. The dashboard's per-packet and per-step

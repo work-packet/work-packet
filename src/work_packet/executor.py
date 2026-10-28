@@ -12,8 +12,8 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from . import (clock, faults, frontmatter, fsutil, harness, journal, model, notes, procs,
-               profiles, prompt, questions, registry, report, schema, spawn, workspace)
+from . import (clock, faults, frontmatter, fsutil, harness, journal, livecard, model, notes,
+               procs, profiles, prompt, questions, registry, report, schema, spawn, workspace)
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, project_of, settings
@@ -558,6 +558,7 @@ def step(target, force=False, lost=None):
     finally:
         lease.release()
         _ide_owner(pkt)
+        livecard.flush()
 
 
 NUDGE = ("wpk: your turn ended, but the step is not finished: %s. Nothing you "
@@ -965,6 +966,7 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
     finally:
         lease.release()
         _ide_owner(pkt)
+        livecard.flush()
 
 
 def _ide_owner(pkt):

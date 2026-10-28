@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, field
 from typing import List
 
-from . import fsutil
+from . import fsutil, livecard
 
 
 @dataclass
@@ -16,6 +16,7 @@ class Journal:
 
 def append(path, rec):
     fsutil.append_line(path, json.dumps(rec, sort_keys=False, separators=(",", ":")))
+    livecard.mark(path)
 
 
 def read(path):

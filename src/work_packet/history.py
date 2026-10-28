@@ -455,14 +455,16 @@ def harvest(project, run_dir, card_text=None, h=None, con=None):
     return path
 
 
-def sync(project, run_dir, card_text=None, h=None, con=None):
-    """Load an active run's metrics provisionally (no archive, no blobs)."""
+def sync(project, run_dir, card_text=None, h=None, con=None, replace=False):
+    """Load an active run's metrics provisionally (no archive, no blobs).
+    A harvested run is left alone unless ``replace`` (it was resumed: its
+    rows become provisional again until it is harvested anew)."""
     rec = read_run(project, run_dir, with_files=False, h=h)
     own = con is None
     con = con or connect(h)
     try:
         row = con.execute("SELECT provisional FROM packet WHERE id = ?", (rec["id"],)).fetchone()
-        if row is not None and row[0] == 0:
+        if row is not None and row[0] == 0 and not replace:
             return False        # harvested: the archive wins
         load(con, rec, card_text, provisional=True)
     finally:

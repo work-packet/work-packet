@@ -369,7 +369,7 @@ def plan(entry, h=None):
             except Exception:
                 s = {}
             p["packets"].append({"id": w, "state": s.get("state"), "parent": s.get("parent"),
-                                 "dir": os.path.join(pdir, w)})
+                                 "updated": s.get("updated"), "dir": os.path.join(pdir, w)})
     p["finished"] = all(x["state"] == "COMPLETED" for x in p["packets"]) and bool(p["packets"])
     return p
 
@@ -430,6 +430,54 @@ def link_runs(p, h=None):
     return made
 
 
+def _write_cards(cards, h=None):
+    """Merge each card into the one on disk and save it; {id: card text}."""
+    texts = {}
+    for path, c in cards:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        c = merge_into(path, c)
+        if not os.path.isfile(path) or cardmod.render(c) != _read(path):
+            cardmod.save(path, c)
+        texts[c.id] = cardmod.render(c)
+        index.upsert(c, path, h=h)
+    return texts
+
+
+def keep_project(entry, h=None, con=None):
+    """Bring ``entry``'s cards and history rows up to date while it runs
+    (livecard): cards rebuilt from the journals and merged; metrics synced
+    provisionally, replacing a harvest if a finished packet was resumed;
+    once every packet is COMPLETED, each is harvested (archive, load,
+    verify) unless its harvest is already current. Returns a summary dict,
+    or None when there is nothing to do."""
+    p = plan(entry, h)
+    if not p["exists"] or not p["packets"]:
+        return None
+    cards = cards_for(entry, p, h)
+    link_runs(p, h)
+    texts = _write_cards(cards, h)
+    res = {"name": entry["name"], "cards": len(cards), "harvested": [], "synced": []}
+    own = con is None
+    con = con or history.connect(h)
+    try:
+        for x in p["packets"]:
+            row = con.execute("SELECT provisional, updated FROM packet WHERE id = ?",
+                              (x["id"],)).fetchone()
+            if p["finished"]:
+                if row is not None and row[0] == 0 and row[1] == x["updated"]:
+                    continue
+                history.harvest(entry["name"], x["dir"], texts.get(x["id"]), h=h, con=con)
+                res["harvested"].append(x["id"])
+            else:
+                history.sync(entry["name"], x["dir"], texts.get(x["id"]), h=h, con=con,
+                             replace=True)
+                res["synced"].append(x["id"])
+    finally:
+        if own:
+            con.close()
+    return res
+
+
 def migrate_project(entry, dry_run=False, h=None, con=None, log=print):
     """Migrate one registered project. Returns a summary dict."""
     p = plan(entry, h)
@@ -449,13 +497,7 @@ def migrate_project(entry, dry_run=False, h=None, con=None, log=print):
         res["preview"] = cards
         return res
     link_runs(p, h)
-    texts = {}
-    for path, c in cards:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        c = merge_into(path, c)
-        cardmod.save(path, c)
-        texts[c.id] = cardmod.render(c)
-        index.upsert(c, path, h=h)
+    texts = _write_cards(cards, h)
     for x in p["packets"]:
         if p["finished"]:
             history.harvest(entry["name"], x["dir"], texts.get(x["id"]), h=h, con=con)
