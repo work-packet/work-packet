@@ -1,5 +1,20 @@
 # Work data: master design (draft 1, 2026-10-27)
 
+> **Revised 2026-10-28 (run binding, `docs/run-binding-v1.md`).** Three
+> decisions change this draft: (1) **the clone is the packet**: the card
+> and `.work-packet/` sit at the top of the clone, excluded from git through
+> `.git/info/exclude`; a packet with no repo, or with several, is a plain
+> folder; (2) **runs and the packet's blobs live in
+> `<packet>/.work-packet/`**, not under `~/.work-packet/` (home space is
+> often limited); `~/.work-packet/` keeps only small shared things
+> (registry, index, config, locks, the statistics database), and `wpk done`
+> copies the archive to a configurable archive directory; (3) **the runner
+> works in the clone**, and parallel children get sibling worktrees
+> `../<name>@<child>/` that are packets themselves. §5, §5.1, §13.1,
+> §13.3, the P2 row and the glossary are updated; other sections still
+> say `~/packets/<name>/` and `~/.work-packet/runs/<id>/`, and should be
+> read through these rules.
+
 Status: **for review.** Nothing here is built. This is the master design
 for how work-packet captures, moves, keeps and shows the data of a
 piece of work. It covers the durable record people and agents exchange
@@ -158,66 +173,67 @@ lives, whether it travels, and how long it is kept.
 
 | Store | Where | Holds | Owner | Rebuilt from |
 |---|---|---|---|---|
-| **Cards** | `~/packets/<name>/<name>.wp.md` in a task folder, or `~/packets/<name>.wp.md` for a packet with no workspace (people's area), `~/.work-packet/runs/<id>/sub/*.wp.md` (agent-made sub-packets), or anywhere else | packets | whoever holds the copy | n/a: the truth |
-| **Workspaces** | the task folder `~/packets/<name>/` (repos cloned by IVPM, scratch files, collected files); an attached clone of yours; none | the work | the owner of the moment | sources in the card |
-| **Run records** | `~/.work-packet/runs/<id>/` | active runs | the executor on this host | n/a: the truth while active |
-| **Blob store** | local cache `~/.work-packet/blobs/`; plus remote stores per host config | attachments; harvested narrative, diffs, transcripts | the server; shared stores by the team | n/a: the truth for blobs |
+| **Cards** | `<packet>/<name>.wp.md` at the top of the packet folder (a clone, or a plain folder); agent-made sub-packets listed under the root run's `sub/` | packets | whoever holds the copy | n/a: the truth |
+| **Workspaces** | the packet folder itself: the clone (IVPM dependencies in its `packages/`), or a plain folder of files or clones | the work | the owner of the moment | sources in the card |
+| **Run records** | `<packet>/.work-packet/runs/<id>/` | active runs | the executor on this host | n/a: the truth while active |
+| **Blob store** | per packet, `<packet>/.work-packet/blobs/`; plus remote stores per host config; archives copied at `wpk done` to the archive directory | attachments; harvested narrative, diffs, transcripts | the server; shared stores by the team | n/a: the truth for blobs |
 | **Index** | `~/.work-packet/index.db` | cards' JSON form, run summaries, "last seen by you" | tools | a scan of cards and runs |
-| **History store** | `~/.work-packet/history/`: `.wph` archives plus a database | harvested runs | the server (wpkd; `wpk` alone when no server runs) | the archives |
+| **History store** | the statistics database in `~/.work-packet/history/` (metrics only, small); `.wph` archives in `<packet>/.work-packet/` while the packet exists, then in the archive directory (default `~/.work-packet/history/`, configurable) | harvested runs | the server (wpkd; `wpk` alone when no server runs) | the archives |
 
 People's view of all of it:
 
 ```
-~/packets/
-  uart-overrun/                 a task folder: cd here, open this in the IDE
-    uart-overrun.wp.md          the card, at the top
-    fw-uart16550/               an IVPM workspace on branch uart-overrun
-      ivpm.yaml
-      packages/                 its dependencies, as IVPM made them
-  axi-uvm-port/
+~/work/
+  uart-overrun/                 a clone, and the packet: cd here, open it in the IDE
+    .git/
+    uart-overrun.wp.md          the card, at the top (excluded from git)
+    .work-packet/               runs, blobs, archive (excluded from git)
+    ivpm.yaml
+    packages/                   its dependencies, as IVPM made them
+    rundir/…                    what steps produce, in plain view
+  uart-overrun@fix-tx/          a parallel child: a worktree, and a packet
+  axi-uvm-port/                 a plain folder: a packet with two repos
     axi-uvm-port.wp.md
+    .work-packet/
     fw-axi/
-    uvm-ref/                    a second repo, when the task needs one
-  uvm-versions.wp.md            no workspace (a question): just the card
-  archive/2026-10/              closed cards
+    uvm-ref/
+  uvm-versions/                 no repo (a question): a folder, filled or empty
+    uvm-versions.wp.md
+    .work-packet/
 ```
 
-The rest is under `~/.work-packet/`, and people never need to go there.
+Shared things are under `~/.work-packet/` (small), and people never need
+to go there.
 
-### 5.1 The task folder
+### 5.1 The packet folder (revised 2026-10-28)
 
-**One task, one folder, one workspace.** Most work is easiest with a
-workspace per task, so that is the default shape: the task folder holds
-the card and the task's repos side by side.
+**The clone is the packet.** Most work is one repo, so the default shape
+is a clone with the card and `.work-packet/` at its top.
 
-- `wpk new <repo> "<title>"` makes the folder, clones the repo into it
-  on a new branch named after the packet (§5.2), and writes the card at
-  its top. `<repo>` is a URL, or an existing clone, whose remote and
-  current commit are then used.
-- **The card sits beside the repo, not inside it.** `git status` stays
-  clean, `git clean -fdx` in the repo can't touch the card, and a task
-  that needs two repos has room for both. The extra directory level is
-  the price.
-- **Parallel work is a second task folder,** not a second copy inside
-  one. So the runner works in place in the task folder, and split mode
-  (`packet-shapes.md` §5.2) is the exception. When it is used, its
-  scratch worktree is `~/.work-packet/runs/<id>/wt/<repo>`, with
-  relative worktree links.
-- **Discovery** walks up from the current directory. The first
-  directory holding `<its own name>.wp.md` is the task folder, so
-  anything inside it resolves to the packet (§6.6).
-- **A workspace-less packet** (a question, a review of linked files)
-  is just a card in `~/packets/`, with no folder. It gains a folder the
-  first time it needs one, and the card moves into it. This is the one
-  other time a card moves (§3 rule 6).
-- **Attaching your own long-lived clone** stays possible:
-  `wpk new --here` in a clone writes the card to `~/packets/<name>.wp.md`
-  and the pointer to `$GIT_DIR/packet`. It's the exception, for "this
-  clone already is the task".
-- **When the task is done** and its branches are pushed, `wpk done`
-  freezes the card (§10.2), moves it to the archive and deletes the
-  task folder. The pins make the folder rebuildable, so finished tasks
-  leave no stale clones behind.
+- `wpk new --here` in a clone writes `<name>.wp.md` and `.work-packet/`
+  there and adds both to `.git/info/exclude` (local, never pushed), so
+  `git status` stays clean and the card is never committed. This is the
+  main way to make a packet.
+- `wpk new <repo> "<title>"` clones with IVPM (§5.2) into `<name>/` on
+  branch `wpk/<name>`, then does the same.
+- `wpk new "<title>"` with no repo makes a folder holding the card and
+  `.work-packet/`; files may be added before it runs. A task with several
+  repos is a plain folder with the clones in it (most "other repos" are
+  IVPM dependencies in the clone's `packages/` anyway).
+- **`git clean -x`/`-X` is denied** to agents: it deletes ignored files,
+  the card and the run among them (`git clean -fd` is safe).
+- **The runner works in the clone.** Outputs (build trees, logs,
+  waveforms) appear where the person looks. Opening the IDE pauses the
+  packet first, since a failed step resets tracked files.
+- **Parallel children** get sibling worktrees `../<name>@<child>/`, each a
+  packet with its own card and `.work-packet/`; `wpk ide` opens them as
+  extra roots.
+- **Discovery** walks up from the current directory to the first folder
+  holding `.work-packet/` (as git finds `.git`), so anything inside
+  resolves to the packet (§6.6).
+- **When the task is done** and its branches are pushed, `wpk done` lists
+  ignored outputs and asks what to keep, harvests, copies the archive to
+  the archive directory, freezes the card (§10.2) and deletes the folder.
 
 ### 5.2 Workspaces are materialized with IVPM
 
@@ -229,7 +245,7 @@ and checks out or creates the branch.
 
 | Operation | Command wpk runs |
 |---|---|
-| New task from a repo | `ivpm clone <url> ~/packets/<name>/<repo> -b <name> [-d <dep-set>]` |
+| New task from a repo | `ivpm clone <url> <name> -b wpk/<name> [-d <dep-set>]` |
 | Hydrate a frozen packet, exactly | `ivpm clone <url> <dir> -r <commit>`, then `ivpm update --lock-file <pinned package-lock.json>` |
 | Refresh after the card's `setup` changes | `ivpm update` in the workspace |
 | Environment for steps and sessions | `direnv exec <repo> …` (the binding's `env = "direnv"`, `packet-shapes.md` §5) |
@@ -711,7 +727,8 @@ a multi-node simulation is a `job:` that the step waits on.
 
 ### 13.1 Contents
 
-`~/.work-packet/runs/<id>/`, today's packet directory (`docs/spec.md`
+`<packet>/.work-packet/runs/<id>/` (revised 2026-10-28; was
+`~/.work-packet/runs/<id>/`), today's packet directory (`docs/spec.md`
 v0.2) re-homed and keyed by id:
 
 | Path | Holds |
@@ -734,6 +751,10 @@ database, marked provisional. Then `wpk stats` and the token dashboard
 read one source for active and harvested work alike.
 
 ### 13.3 The run never travels
+
+Now that the run lives inside the packet folder (revised 2026-10-28),
+anything that copies, bundles or hands off a packet folder excludes
+`.work-packet/`; the card carries the pins.
 
 - **To a colleague,** what they need comes as the turnover note and
   the plan and notes as blobs.
@@ -975,7 +996,7 @@ next one starts.
 | Phase | Builds | Done when |
 |---|---|---|
 | **P1 Card** | `card.py` (parse, append, merge, state); JSON Schema and test vectors; `wpk check` for cards; `~/packets/` and `index.db`; `wpk`, `new`, `ask`, `show`, name resolution | a question and a hand-written CI card round-trip through parse and render and show on the home screen |
-| **P2 Run binding** | task folders and `wpk new <repo>` through `ivpm clone` (§5.1–§5.2); the run under `runs/<id>/`; the executor writes `accepted`/`question`/`progress`/`result` entries; ownership as `handoff`; `wpk migrate` | an existing project, migrated, runs a follow-up task with the card updating live |
+| **P2 Run binding** | the clone is the packet; `wpk new --here` / `<repo>` through `ivpm clone` (§5.1–§5.2); the run under `<packet>/.work-packet/runs/<id>/`; `wpk convert`; plan in `docs/run-binding-v1.md`; the executor writes `accepted`/`question`/`progress`/`result` entries; ownership as `handoff`; `wpk migrate` | an existing project, migrated, runs a follow-up task with the card updating live |
 | **P3 View model** | `dash/data.py` → `view/`; `@rev`; the private repo commit per step; CLI `log`, `step`, `report`, `diff`, `--json` | the dashboard is unchanged on top of `view/`; `wpk step x@s4` shows the plan as it was |
 | **P4 Requests** | `.pending/out/`, policy, delivery on append, `wait`, waking, sub-packets | the pss-registers → pssc request runs end to end with a wake |
 | **P5 Blobs** | the store interface; directory and S3 backends (R2 and on-prem documented); `attach`, lazy fetch, retention | a CI card with waves attached is fetched on demand on another host |
@@ -1039,8 +1060,8 @@ next one starts.
 | **requester**, **worker** | the two roles in a task |
 | **sub-packet** | a packet with a `parent` |
 | **workspace** | the files the work is done in: usually one or more IVPM workspaces in a task folder |
-| **task folder** | `~/packets/<name>/`: the card at the top, the workspace beside it |
-| **run**, **run record** | the server's record of executing a packet: `runs/<id>/` |
+| **packet folder** (was *task folder*) | the clone, or a plain folder, with the card and `.work-packet/` at its top |
+| **run**, **run record** | the server's record of executing a packet: `<packet>/.work-packet/runs/<id>/` |
 | **blob** | a file in a blob store, named by its sha256 |
 | **turnover note** | a `handoff` entry written for a receiver who doesn't have the run |
 | **run** (of a command) | a command in a packet's terminal long enough to record, kept as a job (§13.4). Not to be confused with *the run*, the run record |

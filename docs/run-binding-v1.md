@@ -100,27 +100,70 @@ Home directories are often severely limited, so nothing large goes to
   **sibling** folder, `../<name>@<child>/`, and that worktree is a packet
   like any other (its own card and `.work-packet/`). `wpk ide` opens the
   packet with them as extra roots.
-- **A failed step** resets the clone to the last committed step's head, as
-  today. Only tracked files are touched; ignored outputs (`rundir/`) survive.
+- **A failed step does not touch the clone** (as today: R0 found no git
+  reset anywhere; the retry prompt tells the model to check what the
+  failed attempt left). Earlier wording here, and the setup check's text
+  "a failed step resets the repo", were wrong.
 - **You and the runner share the clone:** opening the IDE (`wpk ide`, the
-  dashboard button) pauses the packet first.
+  dashboard button) pauses the packet first, so your edits and a step's
+  never interleave.
 - **`wpk done` lists ignored outputs** (`rundir/`, `build/`…) with sizes and
   asks what to keep: listed deliverables are archived (≤ 10 MB, as now);
   larger ones become attachments (P5).
 
 ## Steps
 
-- [ ] R0. **Survey and design update.**
-  - Survey (agent): every place that builds a run path from a project
-    (`os.path.join(entry["path"], "packets", wpid)`, `Packet(...)`,
-    `registry.find_packets`, `views.packets`, scheduler, stats, setup/
-    workspace `tg.work`/`tg.packet_work`); what a "project" supplies
-    (`project.toml` keys, `prompt.md`, project-level `state/`, `identity/`,
-    `work/`); how a failed step resets the repo today, and whether anything
-    runs `git clean -x`.
-  - Update `docs/work-data-design.md` (§5.1 clone is the packet, §7.3 blobs
-    per packet, §13 runs in `.work-packet/`, §13.3, §14 archive directory,
-    the P2 row) and `docs/migration-v1.md` M2.
+- [x] R0. **Survey and design update.**
+  - Design docs updated: `docs/work-data-design.md` (revision note at the
+    top; §5 stores and picture, §5.1 rewritten as "the packet folder",
+    §5.2 clone command, §13.1, §13.3, P2 row, glossary) and
+    `docs/migration-v1.md` M2.
+  - Survey (agent), findings:
+    - **~75 sites in 27 modules** build a run path from a project
+      (`entry["path"] + "/packets/" + wpid`), list `packets/` filtered by
+      `is_wpid` (scheduler `due`/`next_wake`, `budget.ledger`,
+      `stats.collect`, `views.packets`, `registry.find_packets`,
+      `migrate.plan`, `check_project`, `archived`), or work back from a
+      run to its project (`project.project_of`, `livecard._entry_of`,
+      `sched/control._target`). A missed listing silently drops packets.
+    - **Children are found as siblings**, `dirname(pkt.path)/<wpid>`
+      (executor, views, report, ide, dash), and created there by
+      `spawn.create_child`.
+    - **The model's cwd is the run directory**; the repo is
+      `work/<repo>` (a `git worktree` of the user's clone in the
+      project's `work/`, on `wpk/<project>`, root packet only). Protocol,
+      instruct templates (`work/$repo`), `pathhook` (walks up to
+      `journal.jsonl` + `.pending`) and `_snapshot` all assume this.
+    - **No git reset on failure**, and nothing runs `git clean` at all.
+    - **Children get no workspace** today (only the root's `work/`).
+    - A project supplies: `project.toml` (model, harness, limits,
+      permissions, tz, profile, setup, sizes, weight, max_cores; plus
+      `[packets.<wpid>]` scheduler settings in the registry entry),
+      `prompt.md` and `state/` (seeded once into the root run), `agent.md`,
+      `identity/` (links mirrored into the root run, passed as
+      `--add-dir`), `.setup/` (drafts, smoke trees).
+    - `Packet.wpid` is the folder's basename (~100 uses); runs stay named
+      by WPID, so that holds.
+
+  **Approach revised after R0: stage it.** Rewriting 75 sites, the model's
+  cwd, the protocol and the hook at once is the risk. So:
+
+  - **Stage A: re-home, same engine.** A new-layout packet's *project
+    directory* is `<packet>/.work-packet/`. It holds `project.toml`
+    (kept for now), `runs/<id>/` (today's `packets/<id>/`), `state/`,
+    `identity/`, `.setup/`. The registry entry's `path` points there.
+    One helper, `project.runs_dir(entry_or_path)` (`packets/` for legacy,
+    `runs/` for new), replaces the hard-coded `"packets"` at every site,
+    and the inverse lookups accept either. The model's cwd stays the run
+    directory; its `work/<name>` becomes a **link to the packet folder**
+    (the clone) instead of a worktree, so the protocol, templates and
+    hook are unchanged, and the runner works in the clone. The card sits
+    at `<packet>/<name>.wp.md` as livecard already writes it.
+  - **Stage B: the card takes over.** Configuration into the card (R2),
+    the executor writing entries (R4), sibling worktrees for parallel
+    children with per-child branches (R7, new capability: children have
+    no workspace today), and cwd in the clone if still wanted.
+
 - [ ] R1. **Locator** (`runs.py`): one function from a target (packet
       folder or anything inside it, card path, name, id, or legacy
       project) to a *binding*: `{card, id, packet_dir, run_dir, legacy}`.
@@ -242,6 +285,9 @@ tracked in `docs/dash-history-v1.md`.
 - 2026-10-28: plan written; runs-in-task-folder decided; nothing started.
 - 2026-10-28: added: the run is the record, outputs stay in the visible
   checkouts (fw-picorv32 waveforms as the example); Q6–Q8 decided.
+- 2026-10-28: R0 done (survey, design docs). Approach staged (A re-home,
+  B card takes over); two earlier claims corrected (no reset on failure;
+  children have no workspace). Next: R1 for stage A, after Matt's OK.
 - 2026-10-28: Q1–Q5 decided: the clone is the packet; `.work-packet/` holds
   runs, blobs and the archive; `--here` is the main form; packets without
   a repo are folders; children get sibling worktrees; `git clean -x`
