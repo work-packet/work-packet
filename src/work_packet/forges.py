@@ -53,8 +53,9 @@ class Forge:
         """[{full_name, description, clone_url, html_url}], the user's own first."""
         raise NotImplementedError
 
-    def issues(self, repo, query="", limit=30):
-        """Open issues of ``repo`` ("owner/name"): [{number, title, url, state}]."""
+    def issues(self, repo, query="", limit=30, labels=()):
+        """Open issues of ``repo`` ("owner/name") with all of ``labels``:
+        [{number, title, url, state, labels}]."""
         raise NotImplementedError
 
     def issue(self, repo, number):
@@ -63,6 +64,10 @@ class Forge:
 
     def repo(self, repo):
         """{full_name, description, clone_url, html_url, default_branch}."""
+        raise NotImplementedError
+
+    def owner_repos(self, owner):
+        """Every repo of a user or org (not archived): ["owner/name"]."""
         raise NotImplementedError
 
     # -- helpers --------------------------------------------------------------------
@@ -137,14 +142,20 @@ class GitHub(Forge):
     def repo(self, repo):
         return self._repo_out(self._json("/repos/%s" % repo))
 
-    def issues(self, repo, query="", limit=30):
+    def owner_repos(self, owner):
+        return self._cached("owner:" + owner, lambda: [
+            r["full_name"] for r in self._json("/users/%s/repos" % owner, per_page=100)
+            if not r.get("archived")])
+
+    def issues(self, repo, query="", limit=30, labels=()):
         if query:
-            got = self._json("/search/issues", q="repo:%s is:issue is:open %s" % (repo, query),
-                             per_page=limit).get("items", [])
+            q = "repo:%s is:issue is:open %s" % (repo, query)
+            q += "".join(' label:"%s"' % x for x in labels)
+            got = self._json("/search/issues", q=q, per_page=limit).get("items", [])
         else:
-            got = self._json("/repos/%s/issues" % repo, state="open", per_page=limit)
-        return [{"number": i["number"], "title": i["title"], "url": i["html_url"],
-                 "state": i["state"]} for i in got if "pull_request" not in i]
+            got = self._json("/repos/%s/issues" % repo, state="open", per_page=limit,
+                             labels=",".join(labels))
+        return [_brief(i) for i in got if "pull_request" not in i]
 
     def issue(self, repo, number):
         i = self._json("/repos/%s/issues/%d" % (repo, number))
@@ -173,17 +184,30 @@ class Forgejo(Forge):
     def repo(self, repo):
         return self._repo_out(self._json("/repos/%s" % repo))
 
-    def issues(self, repo, query="", limit=30):
+    def owner_repos(self, owner):
+        def fetch():
+            try:
+                got = self._json("/orgs/%s/repos" % owner, limit=50)
+            except ForgeError:
+                got = self._json("/users/%s/repos" % owner, limit=50)
+            return [r["full_name"] for r in got if not r.get("archived")]
+        return self._cached("owner:" + owner, fetch)
+
+    def issues(self, repo, query="", limit=30, labels=()):
         got = self._json("/repos/%s/issues" % repo, state="open", type="issues", q=query,
-                         limit=limit)
-        return [{"number": i["number"], "title": i["title"], "url": i["html_url"],
-                 "state": i["state"]} for i in got]
+                         limit=limit, labels=",".join(labels))
+        return [_brief(i) for i in got]
 
     def issue(self, repo, number):
         i = self._json("/repos/%s/issues/%d" % (repo, number))
         cs = self._json("/repos/%s/issues/%d/comments" % (repo, number)) \
             if i.get("comments") else []
         return _issue_out(i, cs)
+
+
+def _brief(i):
+    return {"number": i["number"], "title": i["title"], "url": i["html_url"],
+            "state": i["state"], "labels": [x["name"] for x in i.get("labels") or []]}
 
 
 def _issue_out(i, comments):

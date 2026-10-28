@@ -45,6 +45,13 @@ Inbox, Outbox and Connections show in the tab as "later" and do nothing yet.
   (move). The CSRF token rides in the form, or in `X-CSRF-Token` for a drop.
 - Deleting asks first (`data-confirm`), saying how many projects go to `main`.
 
+## Watchers
+
+A board can poll issue trackers and start a packet per new issue, on that
+board: `[[watch]]` tables in `boards/<board>.toml` (docs/starters-v1.md,
+Watchers). The board page lists them, with "Poll now"; `wpk watch` lists
+and polls them from the shell.
+
 ## CLI
 
 `wpk board [list]`, `wpk board new <name>`, `wpk board rm <name>`,

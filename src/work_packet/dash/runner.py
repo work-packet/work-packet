@@ -14,6 +14,7 @@ from .. import registry
 log = logging.getLogger("wpk.runner")
 
 MAX_WAIT_S = 60     # look again at least this often (a packet made by the CLI)
+WATCH_TICK_S = 60   # look for due watchers this often (docs/starters-v1.md)
 
 
 class RunnerBusy(Exception):
@@ -21,7 +22,8 @@ class RunnerBusy(Exception):
 
 
 class Runner:
-    def __init__(self, home=None, jobs=None, max_wait=MAX_WAIT_S, backend=None):
+    def __init__(self, home=None, jobs=None, max_wait=MAX_WAIT_S, backend=None,
+                 watch_tick=WATCH_TICK_S):
         self.home = home or registry.home()
         self.jobs = jobs
         self.max_wait = max_wait
@@ -29,6 +31,8 @@ class Runner:
         self._poke = threading.Event()
         self._stopping = threading.Event()
         self._thread = None
+        self._watcher = None
+        self.watch_tick = watch_tick
         self._lease = None
         self.dispatcher = None
 
@@ -55,6 +59,10 @@ class Runner:
                                      report=self._report)
         self._thread = threading.Thread(target=self._loop, name="wpk-runner", daemon=True)
         self._thread.start()
+        if self.watch_tick:
+            self._watcher = threading.Thread(target=self._watch_loop, name="wpk-watch",
+                                             daemon=True)
+            self._watcher.start()
 
     def poke(self):
         """Look for due packets now."""
@@ -66,6 +74,8 @@ class Runner:
         self._poke.set()
         if self._thread is not None:
             self._thread.join(timeout)
+        if self._watcher is not None:
+            self._watcher.join(timeout)
         if self._lease is not None:
             self._lease.release()
             self._lease = None
@@ -93,3 +103,23 @@ class Runner:
             self.dispatcher.run(self._stopping, self._poke, max_wait=self.max_wait)
         except Exception:                      # say why the pool stopped
             log.exception("runner stopped")
+
+    def _watch_loop(self):
+        """Poll the boards' watchers that are due; poke the dispatcher when one
+        made a packet. Only here, so one runner per home polls."""
+        from .. import watch
+
+        def report(w, r):
+            for k, name in r["made"]:
+                log.warning("watch %s/%s: %s made from %s", w["board"], w["name"], name, k)
+            for k, e in r["failed"].items():
+                log.warning("watch %s/%s: %s: %s", w["board"], w["name"], k, e)
+            for e in r["errors"]:
+                log.warning("watch %s/%s: %s", w["board"], w["name"], e)
+        while not self._stopping.is_set():
+            try:
+                if watch.poll_due(self.home, report=report):
+                    self.poke()
+            except Exception:                  # keep polling; say why
+                log.exception("watch pass failed")
+            self._stopping.wait(self.watch_tick)

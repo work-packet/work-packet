@@ -1338,3 +1338,32 @@ def origin(entry):
         out = {"label": label.strip(), "url": o.get("url") or ""}
     _ORIGIN[path] = (mt, out)
     return out
+
+
+def watchers(h, board):
+    """A board's watchers (docs/starters-v1.md) with what they have done:
+    [{name, repos, labels, every, enabled, polled, made, failed, errors, problems}]."""
+    from .. import watch
+    out = []
+    for w in watch.watchers(h):
+        if w["board"] != board:
+            continue
+        if w.get("problems"):
+            out.append({"name": "?", "problems": w["problems"]})
+            continue
+        s = watch.load_state(w, h)
+        out.append({"name": w["name"], "repos": w["repos"], "labels": w.get("labels") or [],
+                    "every": w.get("every", "15m"), "enabled": w.get("enabled", True),
+                    "hold": w.get("hold", True), "dir": w["dir"],
+                    "polled": _ago(s.get("polled")), "made": sorted(s["seen"].items()),
+                    "failed": sorted(s["failed"].items()), "errors": s.get("errors") or []})
+    return out
+
+
+def _ago(t):
+    if not t:
+        return "never"
+    import time as _t
+    d = int(_t.time() - t)
+    return "%ds ago" % d if d < 90 else "%dm ago" % (d // 60) if d < 5400 else \
+        "%dh ago" % (d // 3600) if d < 172800 else "%dd ago" % (d // 86400)

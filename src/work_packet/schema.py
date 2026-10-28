@@ -898,7 +898,7 @@ def validate_registry_entry(d, stem=None):
 
 def validate_board(d, stem=None):
     """``boards/<name>.toml`` (docs/boards.md)."""
-    out = _unknown(d, ("name", "created", "title"))
+    out = _unknown(d, ("name", "created", "title", "watch"))    # watch: validate_watches
     if not is_name(d.get("name")):
         out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
     elif stem is not None and d["name"] != stem:
@@ -907,6 +907,53 @@ def validate_board(d, stem=None):
         out.append(_err("created", "required; must be a UTC timestamp"))
     if "title" in d and not isinstance(d["title"], str):
         out.append(_err("title", "must be a string"))
+    return out
+
+
+WATCH_KEYS = ("name", "repos", "dir", "labels", "query", "every", "hold", "from", "model",
+              "harness", "max_new", "enabled")      # docs/starters-v1.md, watchers
+WATCH_REPO_RX = re.compile(r"^[a-z0-9][a-z0-9_-]*:[\w.-]+/(\*|[\w.-]+)$")   # owner/*: all
+
+
+def validate_watches(lst):
+    """``[[watch]]`` tables of a board."""
+    if lst is None:
+        return []
+    if not (isinstance(lst, list) and all(isinstance(e, dict) for e in lst)):
+        return [_err("watch", "must be a list of [[watch]] tables")]
+    out, seen = [], set()
+    for i, w in enumerate(lst):
+        k = "watch[%d]" % i
+        out += _unknown(w, WATCH_KEYS, k)
+        if not is_name(w.get("name")):
+            out.append(_err(k + ".name", "required; must match [a-z0-9][a-z0-9_-]*"))
+        elif w["name"] in seen:
+            out.append(_err(k + ".name", "%s is named twice" % w["name"]))
+        seen.add(w.get("name"))
+        r = w.get("repos")
+        if not (isinstance(r, list) and r and all(isinstance(x, str) and WATCH_REPO_RX.match(x)
+                                                   for x in r)):
+            out.append(_err(k + ".repos", "required; a list of forge:owner/repo or "
+                            "forge:owner/* (all the owner's repos)"))
+        if not isinstance(w.get("dir"), str) or not w["dir"]:
+            out.append(_err(k + ".dir", "required; where the packet folders go"))
+        if "labels" in w and not (isinstance(w["labels"], list) and
+                                  all(isinstance(x, str) for x in w["labels"])):
+            out.append(_err(k + ".labels", "must be a list of strings"))
+        for x in ("query", "from", "model", "harness"):
+            if x in w and not isinstance(w[x], str):
+                out.append(_err(k + "." + x, "must be a string"))
+        for x in ("hold", "enabled"):
+            if x in w and not isinstance(w[x], bool):
+                out.append(_err(k + "." + x, "must be true or false"))
+        if "every" in w:
+            try:
+                if parse_duration(w["every"]) < 60:
+                    out.append(_err(k + ".every", "at least 1m"))
+            except ValueError as e:
+                out.append(_err(k + ".every", str(e)))
+        if "max_new" in w and not (is_int(w["max_new"]) and w["max_new"] >= 1):
+            out.append(_err(k + ".max_new", "must be an integer >= 1"))
     return out
 
 

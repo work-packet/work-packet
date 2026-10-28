@@ -95,6 +95,26 @@
   </section>
 {% endfor %}
 </div>
+{% if watchers %}
+<h2 id="watchers">Watchers</h2>
+<table class="watchers">
+{% for w in watchers %}
+  {% if w.problems %}
+  <tr><td>?</td><td class="err" colspan="3">bad [[watch]] in boards/{{ here.name }}.toml: {{ w.problems|join("; ") }}</td></tr>
+  {% else %}
+  <tr><td><strong>{{ w.name }}</strong>{% if not w.enabled %} <span class="muted">(off)</span>{% endif %}</td>
+    <td>{% for r in w.repos %}<code>{{ r }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+      {% if w.labels %}<span class="muted">· labels {{ w.labels|join(", ") }}</span>{% endif %}
+      <div class="muted">every {{ w.every }} · polled {{ w.polled }} · {{ w.made|length }} made · {{ "held for setup" if w.hold else "handed to the runner" }} · into <code>{{ w.dir }}</code></div>
+      {% for k, e in w.failed %}<div class="err">{{ k }}: {{ e }}</div>{% endfor %}
+      {% for e in w.errors %}<div class="err">{{ e }}</div>{% endfor %}</td>
+    <td>{% for k, n in w.made[-5:] %}<a href="/p/{{ n|urlencode }}">{{ n }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td>
+    <td><form class="act" method="post" action="/b/{{ here.name|urlencode }}/watch/{{ w.name|urlencode }}/poll">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini">Poll now</button></form></td></tr>
+  {% endif %}
+{% endfor %}
+</table>
+{% endif %}
 {% if broken %}
 <h2>Projects that could not be read</h2>
 <table>{% for b in broken %}<tr><td>{{ b.name }}</td><td class="err">{{ b.why }}</td></tr>{% endfor %}</table>

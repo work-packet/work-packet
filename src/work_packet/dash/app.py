@@ -205,8 +205,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             return not_found(request, "board %s" % name)
         cols, broken = data.only(cols, broken, name)
         snap = await run_in_threadpool(dsched.snapshot, home)
+        watchers = await run_in_threadpool(data.watchers, home, name)
         return render(request, "board.html", cols=cols, broken=broken, live=True,
-                      waiting=dsched.waiting(snap),
+                      waiting=dsched.waiting(snap), watchers=watchers,
                       side=side, here=here, main_board=registry.DEFAULT_BOARD)
 
     async def all_packets(request):
@@ -255,6 +256,23 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         if moved:
             msg += "; %s moved to %s" % (", ".join(moved), registry.DEFAULT_BOARD)
         return back("/", executor.Outcome(executor.OK, msg), poke_runner=False)
+
+    async def watch_poll(request):
+        """Poll a board's watcher now (docs/starters-v1.md)."""
+        from .. import executor, watch
+        board, name = request.path_params["board"], request.path_params["name"]
+        url = "/b/%s#watchers" % urllib.parse.quote(board)
+        try:
+            [w] = await run_in_threadpool(watch.find, "%s/%s" % (board, name), home)
+            r = await run_in_threadpool(watch.poll, w, home)
+        except (watch.WatchError, ValueError, OSError) as ex:
+            return back(url, executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+        said = ["made %s" % ", ".join(n for _, n in r["made"])] if r["made"] else []
+        said += ["%s: %s" % kv for kv in r["failed"].items()] + r["errors"]
+        ok = not (r["failed"] or r["errors"])
+        return back(url, executor.Outcome(executor.OK if ok else executor.USAGE,
+                                          "; ".join(said) or "nothing new"),
+                    poke_runner=bool(r["made"]))
 
     async def board_move(request):
         """Put a project on another board: a drop on the side tab, or the project page's select."""
@@ -1195,6 +1213,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         Route("/packets", all_packets),
         Route("/b/{board}", board),
         Route("/b/{board}/delete", board_delete, methods=["POST"]),
+        Route("/b/{board}/watch/{name}/poll", watch_poll, methods=["POST"]),
         Route("/p/{project}/board", board_move, methods=["POST"]),
         Route("/healthz", health),
         Route("/static/live.js", live_js),

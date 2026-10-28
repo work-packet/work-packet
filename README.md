@@ -18,6 +18,7 @@ wpk doctor my-project      # what the setup has, what it lacks, and the command 
 wpk new count-demo --prompt "Increment state/count.md until it reaches 8, then spawn a child that writes Hello World"
 wpk new my-task --here     # in a clone (or any folder): it becomes the packet, steps work in it
 wpk start issue issue=github:owner/repo#12   # a packet from an issue: clone, branch, objective (docs/starters-v1.md)
+wpk watch                         # boards' watchers: a packet per new labelled issue ([[watch]] in boards/<board>.toml)
 # The dashboard's New task does the same: a folder, a repo (searched on your forges), an issue.
 wpk convert old-project    # a v0.2 project into that layout (no-repo projects for now)
 wpk tick --until-idle      # or from cron: */5 * * * * wpk tick -j 2
@@ -52,7 +53,8 @@ for setup (docs/setup.md), `path`, `shell`, `add-input`,
 - `docs/roadmap.md`: the idea, lessons from the prototype, and phases 0–5.
 - `docs/spec.md`: the packet format, v0.2. `wpk check` enforces it.
 - `docs/runner.md`: design of the runner, the dashboard and `wpk new`.
-- `docs/starters-v1.md`: starters, the ways to make a new packet (folder, repo, issue), and forges.
+- `docs/starters-v1.md`: starters, the ways to make a new packet (folder, repo, issue), forges, and boards' watchers.
+- `docs/writing-a-starter.md`: adding a way to make a packet, as a plugin.
 - `docs/dash-tasks.md`: the board as a workbench: new tasks, Compose, a shell in
   the browser, the next batch of work, and the runner in the server.
 - `docs/stage1-plan.md`: the detailed build plan for the first stage, with status.

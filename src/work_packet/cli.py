@@ -255,6 +255,53 @@ def cmd_board(args) -> int:
     return 0
 
 
+def cmd_watch(args) -> int:
+    """Watchers on boards (docs/starters-v1.md): list them, or poll them now."""
+    import datetime
+    from . import watch
+    if args.op != "poll":
+        ws = watch.watchers()
+        for w in ws:
+            if w.get("problems"):
+                print("%s: bad [[watch]]: %s" % (w["board"], "; ".join(w["problems"])))
+                continue
+            s = watch.load_state(w)
+            when = datetime.datetime.fromtimestamp(s["polled"]).strftime("%Y-%m-%d %H:%M") \
+                if s.get("polled") else "never"
+            print("%s/%s%s  every %s  polled %s  made %d%s" % (
+                w["board"], w["name"], "" if w.get("enabled", True) else " (off)",
+                w.get("every", "15m"), when, len(s["seen"]),
+                ", %d failing" % len(s["failed"]) if s["failed"] else ""))
+            print("    %s%s -> %s" % (", ".join(w["repos"]), "  labels: " + ", ".join(
+                w["labels"]) if w.get("labels") else "", w["dir"]))
+            for e in s.get("errors") or []:
+                print("    error: %s" % e)
+        if not ws:
+            print("No watchers. Add [[watch]] to boards/<board>.toml (docs/starters-v1.md).",
+                  file=sys.stderr)
+        return 0
+    try:
+        ws = watch.find(args.which)
+    except watch.WatchError as e:
+        return _err(str(e))
+    rc = 0
+    for w in ws:
+        r = watch.poll(w, dry_run=args.dry_run)
+        for k in r["would"]:
+            print("%s/%s: would make a packet for %s" % (w["board"], w["name"], k))
+        for k, name in r["made"]:
+            print("%s/%s: made %s for %s" % (w["board"], w["name"], name, k))
+        for k, e in r["failed"].items():
+            print("%s/%s: %s: %s" % (w["board"], w["name"], k, e))
+            rc = 1
+        for e in r["errors"]:
+            print("%s/%s: %s" % (w["board"], w["name"], e))
+            rc = 1
+        if not (r["would"] or r["made"] or r["failed"] or r["errors"]):
+            print("%s/%s: nothing new" % (w["board"], w["name"]))
+    return rc
+
+
 def cmd_ps(args) -> int:
     from . import registry, views
     es = registry.entries()
@@ -1368,6 +1415,16 @@ def build_parser() -> argparse.ArgumentParser:
     bp.add_argument("name", help="the project")
     bp.add_argument("board")
     p.set_defaults(func=cmd_board)
+
+    p = sub.add_parser("watch", help="the boards' watchers: list them, or poll them now",
+                       description="Watchers are [[watch]] tables in boards/<board>.toml; "
+                       "the board's runner polls them (docs/starters-v1.md).")
+    wsub = p.add_subparsers(dest="op", metavar="<op>")
+    wsub.add_parser("list", help="each watcher, when it last polled, what it made")
+    wp = wsub.add_parser("poll", help="poll now (all, a board's, or board/name)")
+    wp.add_argument("which", nargs="?", help="board or board/name")
+    wp.add_argument("--dry-run", action="store_true", help="say what it would make")
+    p.set_defaults(func=cmd_watch)
 
     p = sub.add_parser("ps", help="list packets of registered projects")
     p.add_argument("--all", action="store_true", help="include finished projects")
