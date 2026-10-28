@@ -312,3 +312,60 @@ def test_both_layouts_side_by_side(home, source, tmp_path):
         assert len(pages) > 10 and not bad, bad
     con.close()
     assert git(source, "status", "--porcelain") == ""
+
+
+def _post_new(c, **data):
+    import urllib.parse
+    r = c.post("/new", data=data, follow_redirects=False)
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(r.headers["location"]).query)
+    return q.get("ok", [""])[0] == "1", q.get("msg", [""])[0]
+
+
+def test_dash_new_makes_packets(home, source, tmp_path):
+    """The dashboard's New task makes a packet: the folder <dir>/<name>, a
+    clone of the repo given (or of the copied setup's one repo)."""
+    import subprocess
+    from test_dash_tasks import _client
+    from work_packet import setup
+    c = _client()
+    d = tmp_path / "tasks"
+    # A clone given: the folder is that clone, git sees nothing of the packet.
+    ok, msg = _post_new(c, name="a", dir=str(d), clone=str(source))
+    assert ok, msg
+    a = d / "a"
+    assert registry.get("a")["path"] == str(a / ".work-packet")
+    assert git(a, "remote", "get-url", "origin") == str(source)
+    assert os.path.isfile(a / "a.wp.md") and git(a, "status", "--porcelain") == ""
+    assert "steps work in" in c.get("/p/a/compose").text
+    # From a setup with one repo (an old-layout project): that repo, with its shared links.
+    project.new("old", path=str(tmp_path / "old"))
+    tg = setup.target("old")
+    subprocess.run(["git", "clone", "-q", str(source), os.path.join(tg.work, "dv-solve")],
+                   check=True)
+    os.symlink(str(source / "packages"), os.path.join(tg.work, "dv-solve", "packages"))
+    ok, msg = _post_new(c, name="b", dir=str(d), **{"from": "old"})
+    assert ok, msg
+    b = d / "b"
+    assert git(b, "remote", "get-url", "origin") == str(source)
+    assert os.path.realpath(b / "packages") == str(source / "packages")
+    t2 = setup.target("b")
+    assert "repo" not in t2.spec and setup.apply(t2) == ["nothing to do"]
+    assert not os.path.exists(os.path.join(t2.proj, "work"))
+    # An existing folder and no clone: the packet works in it as it is.
+    (d / "c").mkdir()
+    (d / "c" / "notes.txt").write_text("x\n")
+    ok, msg = _post_new(c, name="c", dir=str(d))
+    assert ok, msg
+    assert sorted(os.listdir(d / "c")) == [".work-packet", "c.wp.md", "notes.txt"]
+    # Refusals leave nothing behind.
+    (d / "e").mkdir()
+    (d / "e" / "f").write_text("x\n")
+    ok, msg = _post_new(c, name="e", dir=str(d), clone=str(source))
+    assert not ok and "exists" in msg and os.listdir(d / "e") == ["f"]
+    ok, msg = _post_new(c, name="Bad", dir=str(d), clone=str(source))
+    assert not ok and not os.path.exists(d / "Bad")
+    ok, msg = _post_new(c, name="g", dir=str(d), clone=str(tmp_path / "nowhere"))
+    assert not ok and not os.path.exists(d / "g") and registry.get("g") is None
+    subprocess.run(["git", "clone", "-q", str(source), os.path.join(tg.work, "two")], check=True)
+    ok, msg = _post_new(c, name="h", dir=str(d), **{"from": "old"})
+    assert not ok and "one clone" in msg and not os.path.exists(d / "h")

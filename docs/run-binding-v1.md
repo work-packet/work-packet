@@ -345,3 +345,10 @@ tracked in `docs/dash-history-v1.md`.
   dashboard. Archived views skip `runs/` as well as `packets/`. Suite 783
   passed. Not yet: converting back (`wpk convert` keeps a tarball, but a
   restore loses runs made since).
+- 2026-10-28: the dashboard's New task makes packets: the folder is
+  `<dir>/<name>` (worked in as it is if it exists), cloned from the "Clone"
+  repo, or from the copied setup's one repo (with its shared links; a setup
+  with several repos is refused until R7). `[setup]` repos are not cloned
+  into `work/` for a packet (`setup.apply` skips them). Still the old layout:
+  plain `wpk new`, `wpk setup` (TUI) and projects made by a request
+  (`requests.py`). Suite 784 passed.

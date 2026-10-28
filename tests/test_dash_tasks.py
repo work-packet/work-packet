@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from work_packet import actions, executor, project, registry
+from work_packet import actions, executor, layout, project, registry
 from work_packet.packet import Packet
 
 
@@ -214,8 +214,9 @@ def test_new_task_form_creates_a_held_project(tmp_path, fake):
                follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].startswith("/p/nt/compose")
     e = registry.get("nt")
-    assert e["path"] == str(tmp_path / "pp" / "nt")
-    meta, _ = Packet(os.path.join(e["path"], "packets", e["root"])).load_status()
+    assert e["path"] == str(tmp_path / "pp" / "nt" / ".work-packet")       # a packet
+    assert os.path.isfile(tmp_path / "pp" / "nt" / "nt.wp.md")
+    meta, _ = Packet(os.path.join(e["path"], "runs", e["root"])).load_status()
     assert meta["state"] == "PAUSED" and meta["reason"] == "setup"
     r = c.post("/new", data={"name": "nt", "dir": str(tmp_path / "pp")}, follow_redirects=False)
     msg, ok = _flash(r)
@@ -265,7 +266,7 @@ def test_compose_setup_flow(tmp_path, fake):
                                           "force": "1"}, follow_redirects=False)
     assert _flash(r)[1], _flash(r)
     assert r.headers["location"].startswith("/p/cf/%s/live" % e["root"])
-    pkt = Packet(os.path.join(e["path"], "packets", e["root"]))
+    pkt = Packet(layout.run_dir(e["path"], e["root"]))
     assert pkt.load_status()[0]["state"] == "RUNNABLE"
     # the runner has it now: Compose is read-only and refuses changes
     r = c.get("/p/cf/compose")

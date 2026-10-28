@@ -671,15 +671,48 @@ def _src(src):
     return shlex.quote(src)
 
 
-def clone_commands(tg, r):
+def clone_commands(tg, r, dst=None):
     """The commands that make ``[[setup.repo]]`` entry ``r``: a ``git clone`` into the
-    project's ``work/``, and a link for each shared directory."""
-    dst = os.path.join(tg.work, r["name"])
+    project's ``work/`` (or ``dst``), and a link for each shared directory."""
+    dst = dst or os.path.join(tg.work, r["name"])
     cmds = ["git clone %s %s" % (_src(r["from"]), tilde(dst))]
     for sh in r.get("share", []):
         cmds.append("ln -s %s %s" % (tilde(os.path.join(os.path.expanduser(r["from"]), sh)),
                                      tilde(os.path.join(dst, sh))))
     return cmds
+
+
+def packet_clone(copy=None, clone=None):
+    """For a new packet (docs/run-binding-v1.md): its folder is the one clone
+    steps work in, so ``[setup]`` repos are not cloned into ``work/``. Returns
+    ``copy`` without them, and the repo to clone as the folder (``clone``, a
+    path or URL, or the copied setup's one repo), or None."""
+    copy = json.loads(json.dumps(copy or {}))
+    s = copy.get("setup", {})
+    repos = s.pop("repo", [])
+    if not s:
+        copy.pop("setup", None)
+    if clone:
+        return copy, {"name": "", "from": clone}
+    if len(repos) > 1:
+        raise SetupError("that setup clones %d repos (%s); a packet works in one clone: "
+                         "give the one to clone" % (len(repos),
+                                                    ", ".join(r["name"] for r in repos)))
+    return copy, (repos[0] if repos else None)
+
+
+def clone_packet(r, folder):
+    """Clone repo ``r`` as the packet folder ``folder`` (absent or empty), with its
+    shared links. Returns the commands run."""
+    if os.path.lexists(folder) and not (os.path.isdir(folder) and not os.listdir(folder)):
+        raise SetupError("%s exists: to work in it, leave the repo empty" % tilde(folder))
+    out = []
+    for cmd in clone_commands(None, r, dst=folder):
+        res = run_fix(cmd)
+        if res.returncode:
+            raise SetupError("%s: %s" % (cmd, (res.stderr or res.stdout).strip()))
+        out.append(cmd)
+    return out
 
 
 def repo_entries(proj):
@@ -887,7 +920,8 @@ def apply(tg, echo=None):
     """Do what ``[setup]`` asks that is not done yet: clones, inputs, links."""
     msgs = []
     have = tg.entries()
-    for r in tg.spec.get("repo", []):
+    # A packet works in its folder: its [setup] repos are not cloned (packet_clone).
+    for r in [] if layout.is_packet_layout(tg.proj) else tg.spec.get("repo", []):
         if r["name"] not in have:
             for cmd in clone_commands(tg, r):
                 res = run_fix(cmd)

@@ -6,6 +6,7 @@ each one a call into ``work_packet.actions`` or ``project`` and nothing more.
 
 import logging
 import os
+import shutil
 import threading
 import urllib.parse
 
@@ -663,7 +664,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
     async def new_form(request):
         es = archived.entries(home)
         recent = sorted(es, key=lambda x: x.get("created") or "", reverse=True)
-        base = os.path.dirname(recent[0]["path"]) if recent else os.path.expanduser("~")
+        base = os.path.dirname(layout.packet_folder(recent[0]["path"])) if recent \
+            else os.path.expanduser("~")
         try:
             cfg = registry.load_config(home)
         except registry.ConfigError:
@@ -677,7 +679,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         f = await form(request)
         one = lambda k: (f.get(k) or [""])[0].strip()
         name, where, src = one("name"), one("dir"), one("from")
-        hn = one("harness")
+        hn, clone = one("harness"), one("clone")
 
         def make():
             from .. import harness as harness_mod
@@ -692,9 +694,21 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                     hn, ", ".join(harness_mod.names())))
             if hn and hn != registry.load_config(home)["harness"]:
                 copy = dict(copy or {}, harness=hn)
-            path = os.path.join(os.path.expanduser(where), name) if where else None
-            return project_mod.new(name, None, path=path, model=one("model") or None,
-                                   extra=copy, h=home)
+            # A new task is a packet (docs/run-binding-v1.md): the folder is
+            # <dir>/<name>, cloned from the repo if one is given.
+            folder = os.path.abspath(os.path.join(os.path.expanduser(where or "."), name))
+            copy, repo = setup.packet_clone(copy, clone)
+            project_mod.new(name, None, path=folder, packet=True, dry_run=True, h=home)
+            made = repo is not None and not os.path.lexists(folder)
+            if repo is not None:
+                setup.clone_packet(repo, folder)
+            try:
+                return project_mod.new(name, None, path=folder, model=one("model") or None,
+                                       extra=copy, packet=True, h=home)
+            except BaseException:
+                if made:                    # the clone made just now, for this packet
+                    shutil.rmtree(folder, ignore_errors=True)
+                raise
         try:
             plan = await run_in_threadpool(make)
         except (project_mod.ProjectError, setup.SetupError, registry.ConfigError, ValueError,

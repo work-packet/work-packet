@@ -10,7 +10,10 @@
   <p class="muted" style="font-size:12px;margin:2px 0 10px">Lower case, digits, <code>-</code> and <code>_</code>.</p>
   <label for="dir">In directory</label>
   <input type="text" id="dir" name="dir" value="{{ base }}">
-  <p class="muted" style="font-size:12px;margin:2px 0 10px">The project is made in <code>&lt;directory&gt;/&lt;name&gt;</code>.</p>
+  <p class="muted" style="font-size:12px;margin:2px 0 10px">The packet folder is <code>&lt;directory&gt;/&lt;name&gt;</code>: steps work in it. Its card is <code>&lt;name&gt;.wp.md</code> there, its runs in <code>.work-packet/</code>. If the folder exists, the packet works in it as it is.</p>
+  <label for="clone">Clone</label>
+  <input type="text" id="clone" name="clone" value="" placeholder="a repo path or URL (optional)">
+  <p class="muted" style="font-size:12px;margin:2px 0 10px">The folder is made as a clone of it. Empty: a plain folder, or the one repo of the setup copied below.</p>
   <label for="harness">Harness</label>
   <select id="harness" name="harness" style="font:inherit;padding:4px;display:block;margin-bottom:10px">
     {% for h in choices %}<option value="{{ h }}" {{ "selected" if h == harness }}>{{ h }}{{ " (the default)" if h == harness }}</option>{% endfor %}
@@ -27,7 +30,7 @@
     <option value="">nothing (start empty)</option>
     {% for p in projects %}<option value="{{ p.name }}">{{ p.name }}</option>{% endfor %}
   </select>
-  <p class="muted" style="font-size:12px;margin:2px 0 10px">Its <code>[setup]</code>, limits and permissions: repos to clone, inputs, smoke tests.</p>
+  <p class="muted" style="font-size:12px;margin:2px 0 10px">Its <code>[setup]</code>, limits and permissions: inputs, smoke tests, and its repo to clone if it has one.</p>
   {% endif %}
   <div class="row"><button class="go primary">Create and set up</button>
     <span class="muted" style="font-size:12px">It is held for setup: nothing runs until you hand it off.</span></div>

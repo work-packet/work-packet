@@ -17,6 +17,7 @@ wpk setup                  # a guided setup, with a shell built in (pip install 
 wpk doctor my-project      # what the setup has, what it lacks, and the command for each
 wpk new count-demo --prompt "Increment state/count.md until it reaches 8, then spawn a child that writes Hello World"
 wpk new my-task --here     # in a clone (or any folder): it becomes the packet, steps work in it
+# The dashboard's New task makes packets too: <dir>/<name>, cloned from the repo you give.
 wpk convert old-project    # a v0.2 project into that layout (no-repo projects for now)
 wpk tick --until-idle      # or from cron: */5 * * * * wpk tick -j 2
 wpk ps                     # what is running, sleeping, paused or failed
