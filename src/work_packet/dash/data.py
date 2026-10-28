@@ -1308,3 +1308,33 @@ def model_choices(h=None):
         elif m:
             lst.append({"id": m, "label": "%s (%s)" % (m, why)})
     return out
+
+
+_ORIGIN = {}
+
+
+def origin(entry):
+    """Where a packet came from (``project.toml [origin]``, docs/starters-v1.md):
+    {label, url}, or None."""
+    path = os.path.join(entry["path"], "project.toml")
+    try:
+        mt = os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+    hit = _ORIGIN.get(path)
+    if hit and hit[0] == mt:
+        return hit[1]
+    from ..tomlio import load_toml
+    try:
+        o = load_toml(path).get("origin")
+    except (OSError, ValueError):
+        o = None
+    out = None
+    if isinstance(o, dict) and o:
+        if o.get("kind") == "issue":
+            label = "%s#%s %s" % (o.get("repo", ""), o.get("number", ""), o.get("title", ""))
+        else:
+            label = o.get("title") or o.get("repo") or o.get("url") or o.get("kind", "")
+        out = {"label": label.strip(), "url": o.get("url") or ""}
+    _ORIGIN[path] = (mt, out)
+    return out

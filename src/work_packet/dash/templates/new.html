@@ -3,37 +3,62 @@
 {% block crumbs %}/ new task{% endblock %}
 {% block main %}
 <h1>New packet</h1>
+<nav class="tabs" style="margin-bottom:10px">
+  {% for s in starters %}<a class="{{ 'on' if s.name == starter.name }}" href="/new?starter={{ s.name }}">{{ s.title }}</a>{% endfor %}
+</nav>
+<p class="muted" style="max-width:640px">{{ starter.help }}</p>
+{% if error %}<p class="flash bad" style="max-width:640px">{{ error }}</p>{% endif %}
+{% for n, e in broken.items() %}<p class="muted" style="font-size:12px">Starter {{ n }} did not load: {{ e }}</p>{% endfor %}
+{% if preview %}
 <form class="act panel" method="post" action="/new" style="max-width:640px">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="starter" value="{{ starter.name }}">
+  <input type="hidden" name="recipe" value="{{ recipe }}">
   <label for="name">Name</label>
-  <input type="text" id="name" name="name" value="{{ new_name }}" required pattern="[a-z0-9][a-z0-9_-]{0,63}" placeholder="fw-uart16550" autofocus>
-  <p class="muted" style="font-size:12px;margin:2px 0 10px">Lower case, digits, <code>-</code> and <code>_</code>.</p>
-  <label for="dir">In directory</label>
-  <input type="text" id="dir" name="dir" value="{{ base }}">
-  <p class="muted" style="font-size:12px;margin:2px 0 10px">The packet folder is <code>&lt;directory&gt;/&lt;name&gt;</code>: steps work in it. Its card is <code>&lt;name&gt;.wp.md</code> there, its runs in <code>.work-packet/</code>. If the folder exists, the packet works in it as it is.</p>
-  <label for="clone">Clone</label>
-  <input type="text" id="clone" name="clone" value="" placeholder="a repo path or URL (optional)">
-  <p class="muted" style="font-size:12px;margin:2px 0 10px">The folder is made as a clone of it. Empty: a plain folder, or the one repo of the setup copied below.</p>
+  <input type="text" id="name" name="name" value="{{ values.name }}" required pattern="[a-z0-9][a-z0-9_-]{0,63}">
+  <ul class="preview" style="margin:6px 0 10px">{% for ln in preview %}<li>{{ ln }}</li>{% endfor %}</ul>
+  <label for="objective">Objective</label>
+  <textarea id="objective" name="objective" rows="10" style="width:100%;font:inherit">{{ values.objective or '' }}</textarea>
+  <label style="display:block;margin:8px 0"><input type="checkbox" name="go" value="1"> Hand it to the runner at once (else held: you look it over in Compose)</label>
+  <div class="row"><button class="go primary" name="action" value="create">Create</button>
+    <a href="/new?starter={{ starter.name }}">Start over</a></div>
+</form>
+{% else %}
+<form class="act panel" method="post" action="/new" style="max-width:640px" id="new-form" data-starter="{{ starter.name }}">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="starter" value="{{ starter.name }}">
+  {% for f in fields %}
+  <label for="f-{{ f.key }}">{{ f.label }}</label>
+  {% if f.kind == "textarea" %}
+  <textarea id="f-{{ f.key }}" name="{{ f.key }}" rows="5" style="width:100%;font:inherit" placeholder="{{ f.placeholder }}">{{ values.get(f.key, '') }}</textarea>
+  {% elif f.kind == "project" %}
+  {% if projects %}
+  <select id="f-{{ f.key }}" name="{{ f.key }}" style="font:inherit;padding:4px;display:block">
+    <option value="">nothing</option>
+    {% for p in projects %}<option value="{{ p.name }}" {{ "selected" if values.get(f.key) == p.name }}>{{ p.name }}</option>{% endfor %}
+  </select>
+  {% else %}<p class="muted">no projects yet</p>{% endif %}
+  {% elif f.kind in ("repo", "issue") %}
+  <input type="text" id="f-{{ f.key }}" name="{{ f.key }}" value="{{ values.get(f.key, '') }}" placeholder="{{ f.placeholder }}" list="dl-{{ f.key }}" data-search="{{ f.key }}" autocomplete="off" {{ "required" if f.required }}>
+  <datalist id="dl-{{ f.key }}"></datalist>
+  {% else %}
+  <input type="text" id="f-{{ f.key }}" name="{{ f.key }}" value="{{ values.get(f.key, '') }}" placeholder="{{ f.placeholder }}" {{ "required" if f.required }}{{ ' pattern=[a-z0-9][a-z0-9_-]{0,63}' if f.key == 'name' }}>
+  {% endif %}
+  {% if f.help %}<p class="muted" style="font-size:12px;margin:2px 0 10px">{{ f.help }}</p>{% endif %}
+  {% endfor %}
   <label for="harness">Harness</label>
   <select id="harness" name="harness" style="font:inherit;padding:4px;display:block;margin-bottom:10px">
-    {% for h in choices %}<option value="{{ h }}" {{ "selected" if h == harness }}>{{ h }}{{ " (the default)" if h == harness }}</option>{% endfor %}
+    {% for h in choices %}<option value="{{ h }}" {{ "selected" if h == (values.harness or harness) }}>{{ h }}{{ " (the default)" if h == harness }}</option>{% endfor %}
   </select>
   <label for="model">Model</label>
-  <input type="text" id="model" name="model" list="models-{{ harness }}" placeholder="{{ model }} (the default)" autocomplete="off">
+  <input type="text" id="model" name="model" value="{{ values.model or '' }}" list="models-{{ harness }}" placeholder="{{ model }} (the default)" autocomplete="off">
   {% for h, ms in choices.items() %}
   <datalist id="models-{{ h }}">{% for m in ms %}<option value="{{ m.id }}">{{ m.label }}</option>{% endfor %}</datalist>
   {% endfor %}
-  <p class="muted" style="font-size:12px;margin:2px 0 10px">Pick one, or type any model the harness takes. Empty: the default. An alias (<code>opus</code>, <code>sonnet</code>…) follows the newest model; a full name stays fixed. The list cannot be checked against your account: Claude Code has no way to list the models you may use.</p>
-  {% if projects %}
-  <label for="from">Copy the setup of</label>
-  <select id="from" name="from" style="font:inherit;padding:4px">
-    <option value="">nothing (start empty)</option>
-    {% for p in projects %}<option value="{{ p.name }}">{{ p.name }}</option>{% endfor %}
-  </select>
-  <p class="muted" style="font-size:12px;margin:2px 0 10px">Its <code>[setup]</code>, limits and permissions: inputs, smoke tests, and its repo to clone if it has one.</p>
-  {% endif %}
-  <div class="row"><button class="go primary">Create and set up</button>
-    <span class="muted" style="font-size:12px">It is held for setup: nothing runs until you hand it off.</span></div>
+  <p class="muted" style="font-size:12px;margin:2px 0 10px">Pick one, or type any model the harness takes. Empty: the default. An alias (<code>opus</code>, <code>sonnet</code>…) follows the newest model; a full name stays fixed.</p>
+  <div class="row"><button class="go primary" name="action" value="preview">Preview</button>
+    <span class="muted" style="font-size:12px">Shows what it will make; nothing is made yet.</span></div>
 </form>
+{% endif %}
 <script src="/static/new.js?v={{ asset_v }}"></script>
 {% endblock %}

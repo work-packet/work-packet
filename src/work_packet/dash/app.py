@@ -110,7 +110,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                       autoescape=select_autoescape(["html"]))
     env.filters.update(inline=_inline, money=_money, secs=_secs, when=_when, bytes=_bytes, tok=_tok, pct=_pct)
     stamp = max(os.path.getmtime(os.path.join(HERE, n)) for n in STATIC)
-    env.globals.update(version=__about__.__version__, refresh_s=REFRESH_S,
+    env.globals.update(origin_of=data.origin, version=__about__.__version__, refresh_s=REFRESH_S,
                        asset_v="%s-%d" % (__about__.__version__, stamp),
                        columns=data.COLUMNS, ask_text=ask_text)
 
@@ -661,7 +661,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
     def compose_url(e, frag=""):
         return "/p/%s/compose%s" % (urllib.parse.quote(e["name"]), frag)
 
-    async def new_form(request):
+    def new_page(request, starter, values, preview=None, recipe=None, error=None, status=200):
+        from .. import starters
         es = archived.entries(home)
         recent = sorted(es, key=lambda x: x.get("created") or "", reverse=True)
         base = os.path.dirname(layout.packet_folder(recent[0]["path"])) if recent \
@@ -670,54 +671,79 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             cfg = registry.load_config(home)
         except registry.ConfigError:
             cfg = {"model": "", "harness": "claude"}
-        return render(request, "new.html", projects=es, base=base, model=cfg["model"],
+        vals = dict(values)
+        vals.setdefault("dir", base)
+        st = starters.get(starter)
+        return render(request, "new.html", status=status, projects=es, model=cfg["model"],
                       harness=cfg["harness"], choices=data.model_choices(home),
-                      new_name=request.query_params.get("name", ""))
+                      starters=[starters.get(n) for n in starters.names()], starter=st,
+                      fields=st.all_fields(), values=vals, preview=preview,
+                      recipe=starters.dumps(recipe) if recipe else "", error=error,
+                      broken=starters.broken())
+
+    def _starter_of(vals):
+        from .. import starters
+        n = vals.get("starter") or ("clone" if vals.get("clone") else "folder")
+        return n if n in starters.names() else "folder"
+
+    async def new_form(request):
+        q = dict(request.query_params)
+        q.pop("msg", None), q.pop("ok", None)
+        return new_page(request, _starter_of(q), q)
+
+    async def new_search(request):
+        from .. import starters
+        q = dict(request.query_params)
+        try:
+            st = starters.get(q.pop("starter", ""))
+            got = await run_in_threadpool(st.search, q.pop("field", ""), q.pop("q", ""), q, home)
+        except starters.StartError as ex:
+            return JSONResponse({"error": str(ex)}, status_code=400)
+        return JSONResponse({"choices": got})
 
     async def new_create(request):
-        from .. import executor, project as project_mod, setup
+        """New task (docs/starters-v1.md): a starter's values, previewed, then made."""
+        from .. import executor, starters
         f = await form(request)
-        one = lambda k: (f.get(k) or [""])[0].strip()
-        name, where, src = one("name"), one("dir"), one("from")
-        hn, clone = one("harness"), one("clone")
+        vals = {k: v[0] for k, v in f.items() if k != "csrf"}
+        action = vals.pop("action", "create")
+        starter = _starter_of(vals)
+        go = vals.pop("go", "") == "1"
+        rtext = vals.pop("recipe", "")
 
-        def make():
-            from .. import harness as harness_mod
-            copy = None
-            if src:
-                se = archived.get(src, home)
-                if se is None:
-                    raise project_mod.ProjectError("no registered project named %r" % src)
-                copy = setup.copy_setup(project_mod.load_project(se["path"]), name, se["path"])
-            if hn and hn not in harness_mod.names():
-                raise project_mod.ProjectError("no harness %r; there are: %s" % (
-                    hn, ", ".join(harness_mod.names())))
-            if hn and hn != registry.load_config(home)["harness"]:
-                copy = dict(copy or {}, harness=hn)
-            # A new task is a packet (docs/run-binding-v1.md): the folder is
-            # <dir>/<name>, cloned from the repo if one is given.
-            folder = os.path.abspath(os.path.join(os.path.expanduser(where or "."), name))
-            copy, repo = setup.packet_clone(copy, clone)
-            project_mod.new(name, None, path=folder, packet=True, dry_run=True, h=home)
-            made = repo is not None and not os.path.lexists(folder)
-            if repo is not None:
-                setup.clone_packet(repo, folder)
-            try:
-                return project_mod.new(name, None, path=folder, model=one("model") or None,
-                                       extra=copy, packet=True, h=home)
-            except BaseException:
-                if made:                    # the clone made just now, for this packet
-                    shutil.rmtree(folder, ignore_errors=True)
-                raise
+        def recipe_of():
+            if rtext:                 # the previewed recipe, with your edits
+                import json
+                r = json.loads(rtext)
+                for k in ("name", "objective"):
+                    if k in vals:
+                        r[k] = vals[k].strip() if k == "name" else vals[k]
+                r = starters.check(r)
+            else:
+                r = starters.from_values(starter, vals, home)
+            r["hold"] = not go
+            return r
         try:
-            plan = await run_in_threadpool(make)
-        except (project_mod.ProjectError, setup.SetupError, registry.ConfigError, ValueError,
-                OSError) as ex:
-            q = urllib.parse.urlencode({"msg": str(ex), "ok": "0", "name": name})
+            r = await run_in_threadpool(recipe_of)
+            if action == "preview":
+                lines = await run_in_threadpool(starters.preview, r, home)
+                return new_page(request, starter, dict(vals, name=r["name"],
+                                                       objective=r.get("objective", "")),
+                                preview=lines, recipe=r)
+            plan = await run_in_threadpool(starters.make, r, home)
+        except (starters.StartError, registry.ConfigError, ValueError, OSError) as ex:
+            if action == "preview" or rtext:
+                return new_page(request, starter, vals, error=str(ex))
+            q = urllib.parse.urlencode({"msg": str(ex), "ok": "0", "name": vals.get("name", ""),
+                                        "starter": starter})
             return RedirectResponse("/new?" + q, status_code=303)
         e = {"name": plan.name}
+        if go:
+            return back("/p/%s" % urllib.parse.quote(plan.name), executor.Outcome(
+                executor.OK, "created %s at %s; the runner has it" % (plan.name, plan.path)))
         return back(compose_url(e), executor.Outcome(
-            executor.OK, "created %s at %s; held for setup" % (plan.name, plan.path)))
+            executor.OK, "created %s at %s; held for setup" % (plan.name, plan.path)),
+            poke_runner=False)
 
     async def compose(request):
         from .. import setup
@@ -1175,6 +1201,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         Route("/static/pane.js", pane_js),
         Route("/static/{name:path}", static),
         Route("/new", new_form),
+        Route("/new/search", new_search),
         Route("/new", new_create, methods=["POST"]),
         Route("/p/{project}/compose", compose),
         Route("/p/{project}/compose", compose_post, methods=["POST"]),

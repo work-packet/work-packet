@@ -700,10 +700,40 @@ def validate_sched(t):
 
 
 def validate_config(d):
-    out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched")) + \
-        _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d)
+    out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge")) \
+        + _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d) \
+        + _validate_forges(d.get("forge"))
     if "sched" in d:
         out += validate_sched(d["sched"])
+    return out
+
+
+FORGE_KEYS = (("name", "kind"), ("url", "token_env", "clone"))   # docs/starters-v1.md
+
+
+def _validate_forges(lst):
+    if lst is None:
+        return []
+    if not (isinstance(lst, list) and all(isinstance(e, dict) for e in lst)):
+        return [_err("forge", "must be a list of [[forge]] tables")]
+    out, seen = [], set()
+    for i, f in enumerate(lst):
+        k = "forge[%d]" % i
+        out += _unknown(f, FORGE_KEYS[0] + FORGE_KEYS[1], k)
+        if not is_name(f.get("name")):
+            out.append(_err(k + ".name", "required; must match [a-z0-9][a-z0-9_-]*"))
+        elif f["name"] in seen:
+            out.append(_err(k + ".name", "%s is named twice" % f["name"]))
+        seen.add(f.get("name"))
+        if f.get("kind") not in ("github", "forgejo"):
+            out.append(_err(k + ".kind", "must be github or forgejo"))
+        elif f["kind"] == "forgejo" and not isinstance(f.get("url"), str):
+            out.append(_err(k + ".url", "required for forgejo"))
+        if f.get("clone", "https") not in ("https", "ssh"):
+            out.append(_err(k + ".clone", "must be https or ssh"))
+        for x in ("url", "token_env"):
+            if x in f and not isinstance(f[x], str):
+                out.append(_err(k + "." + x, "must be a string"))
     return out
 
 
@@ -775,9 +805,12 @@ def validate_project(d):
     known = ("name", "root", "created", "template", "tz", "model", "harness", "profile",
              "step_timeout", "max_attempts", "step_budget_usd", "step_context_tokens",
              "carry_session", "carry_ttl", "carry_factor", "permissions", "setup",
-             "budget_usd_per_day", "budget_quota_per_week", "max_steps_per_hour") + \
-        PROJECT_SCHED_KEYS
+             "budget_usd_per_day", "budget_quota_per_week", "max_steps_per_hour",
+             "origin") + PROJECT_SCHED_KEYS
     out = _unknown(d, known) + _validate_setup(d.get("setup")) + _validate_project_sched(d)
+    if "origin" in d and not (isinstance(d["origin"], dict) and all(
+            isinstance(v, (str, int)) for v in d["origin"].values())):
+        out.append(_err("origin", "must be a table of strings and numbers (docs/starters-v1.md)"))
     if not is_name(d.get("name")):
         out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
     if not is_wpid(d.get("root")):

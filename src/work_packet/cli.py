@@ -128,6 +128,61 @@ def cmd_new(args) -> int:
     return 0
 
 
+def cmd_start(args) -> int:
+    """docs/starters-v1.md: make a packet with a starter, or from a recipe."""
+    import json
+    from . import starters
+    if args.list or not (args.starter or args.recipe):
+        for n in starters.names():
+            s = starters.get(n)
+            print("%-8s %s" % (n, s.help))
+            for f in s.fields:
+                print("         %-8s %s%s%s" % (f.key + "=", f.label, " (%s)" % f.placeholder
+                                                    if f.placeholder else "",
+                                                    ", required" if f.required else ""))
+        print("every starter: name= dir= objective= from= model= harness= hold=no")
+        for n, e in starters.broken().items():
+            print("%s: did not load: %s" % (n, e))
+        return 0
+    try:
+        if args.recipe:
+            fp = sys.stdin if args.recipe == "-" else open(args.recipe, encoding="utf-8")
+            with fp:
+                recipe = starters.check(json.load(fp))
+        else:
+            vals = {}
+            for kv in args.values:
+                k, eq, v = kv.partition("=")
+                if not eq:
+                    return _err("%s: give key=value" % kv)
+                vals[k] = v
+            if args.search:
+                for c in starters.get(args.starter).search(args.search, vals.get(
+                        args.search, ""), vals):
+                    print("%-40s %s" % (c["value"], c["label"]))
+                return 0
+            recipe = starters.from_values(args.starter, vals)
+        if args.go:
+            recipe["hold"] = False
+        lines = starters.preview(recipe)
+        if args.json:
+            print(starters.dumps(recipe))
+        for ln in lines:
+            print(ln)
+        if args.dry_run:
+            return 0
+        plan = starters.make(recipe)
+    except (starters.StartError, ValueError, OSError) as e:
+        return _err(str(e))
+    print("Created %s: the card is %s" % (plan.name, layout_card(plan)))
+    return 0
+
+
+def layout_card(plan):
+    from . import layout
+    return layout.card_path(plan.path, plan.name)
+
+
 def cmd_convert(args) -> int:
     from . import convert
     try:
@@ -1268,6 +1323,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="print what would be created")
     p.set_defaults(func=cmd_new)
 
+    p = sub.add_parser("start", help="make a packet with a starter: a folder, a repo, an issue",
+                       description="docs/starters-v1.md. `wpk start` lists the starters and "
+                       "their fields. `wpk start issue issue=home:owner/repo#12` makes a "
+                       "packet from an issue; held for setup unless --go.")
+    p.add_argument("starter", nargs="?")
+    p.add_argument("values", nargs="*", metavar="KEY=VALUE")
+    p.add_argument("--recipe", metavar="FILE", help="a recipe as JSON (- for stdin)")
+    p.add_argument("--search", metavar="FIELD", help="list the choices for a field "
+                   "(its value is the search text)")
+    p.add_argument("--go", action="store_true", help="runnable at once (needs an objective)")
+    p.add_argument("--dry-run", action="store_true", help="say what it would do")
+    p.add_argument("--json", action="store_true", help="print the recipe")
+    p.add_argument("--list", action="store_true", help="the starters and their fields")
+    p.set_defaults(func=cmd_start)
+
     p = sub.add_parser("convert", help="move a v0.2 project into the packet layout",
                        description="Renames only: the project becomes <packet>/.work-packet/, "
                        "packets/ becomes runs/, the card goes to the packet folder. A tarball "
@@ -1682,7 +1752,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, rest = parser.parse_known_args(argv)
+    if rest and getattr(args, "func", None) is cmd_start and all("=" in r for r in rest):
+        args.values += rest           # key=value after an option
+    elif rest:
+        parser.error("unrecognized arguments: %s" % " ".join(rest))
     if args.cmd is None:
         parser.print_help(sys.stderr)
         return 2
