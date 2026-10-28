@@ -337,3 +337,11 @@ tracked in `docs/dash-history-v1.md`.
   verified. Suite 782 passed. Next: converting projects with a repo; then
   R11 (pss-registers-up-planning) only with Matt's go.
 - 2026-10-28: R11 and the repo case of `wpk convert` parked (Matt).
+- 2026-10-28: both layouts are supported side by side for now: old
+  projects keep `packets/`, new ones opt in with `wpk new --here` /
+  `--packet` (plain `wpk new` still makes the old layout), and `wpk convert`
+  is per project. `test_both_layouts_side_by_side` runs one of each in one
+  home through the scheduler, views, history, stats, check and the
+  dashboard. Archived views skip `runs/` as well as `packets/`. Suite 783
+  passed. Not yet: converting back (`wpk convert` keeps a tarball, but a
+  restore loses runs made since).

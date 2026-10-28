@@ -65,7 +65,7 @@ def materialize(con, entry, ids, h=None):
         history.restore_project(con, entry["name"], tmp, h)
         if os.path.isdir(entry["path"]):
             for n in sorted(os.listdir(entry["path"])):
-                if n != "packets":
+                if n not in (layout.LEGACY_RUNS, layout.RUNS):
                     os.symlink(os.path.join(entry["path"], n), os.path.join(tmp, n))
         with open(os.path.join(tmp, MARK), "w", encoding="utf-8") as fp:
             json.dump({"project": entry["name"], "path": entry["path"], "packets": ids}, fp)

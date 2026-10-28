@@ -281,3 +281,34 @@ def test_convert_in_place_and_refusals(home, tmp_path):
     import pytest
     with pytest.raises(convert.ConvertError, match="already"):
         convert.convert("sr")
+
+
+def test_both_layouts_side_by_side(home, source, tmp_path):
+    """One home, one project of each layout: the scheduler steps both to the
+    end, and every view, the history, stats, check and the dashboard serve both."""
+    from starlette.testclient import TestClient
+    from work_packet import scheduler
+    from work_packet.dash import crawl
+    from work_packet.dash.app import create_app
+    old = project.new("old", "Count in state/count.md.", path=str(tmp_path / "old"))
+    new = new_here(source, name="new")
+    assert layout.runs_dir(old.path).endswith("/old/packets")
+    assert layout.runs_dir(new.path).endswith("/.work-packet/runs")
+    scheduler.tick(registry.entries(), jobs=2, until_idle=True, max_steps=40)
+    con = history.connect()
+    for plan, cardp in ((old, os.path.join(old.path, "old.wp.md")),
+                        (new, str(source / "new.wp.md"))):
+        name = os.path.basename(cardp)[:-6]
+        kid = child_wpid(plan.root, 8, 0)
+        assert {p.wpid for _, p, _, _ in views.packets(plan.path, plan.root)} == {plan.root, kid}
+        assert card.load(cardp).state() == "done"
+        assert history.verify_project(con, name, plan.path) == []
+        assert stats.report(stats.groups(*history.collect([name]))) == \
+            stats.report(stats.groups(*stats.collect([(name, plan.path)])))
+        assert check(plan.path).issues == []
+        assert registry.resolve(name) == layout.run_dir(plan.path, plan.root)
+        pages = crawl.crawl(TestClient(create_app()), name)
+        bad = [u for u, (st, _) in pages.items() if st >= 500]
+        assert len(pages) > 10 and not bad, bad
+    con.close()
+    assert git(source, "status", "--porcelain") == ""
