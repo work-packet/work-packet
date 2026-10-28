@@ -92,7 +92,9 @@ Consequences:
   - `wpk new --here` in an existing clone (Q2).
   - The runner works in place on the task folder's repos, so its outputs
     (e.g. `rundir/`) are in plain view. Checkouts for parallel sub-packets
-    and split mode stay visible too (Q6).
+    and split mode stay visible too: `<task>/<repo>@<child>/` (Q6).
+  - `wpk ide` opens the task folder, with those checkouts as extra roots,
+    and pauses the packet first (Q7).
 - [ ] R4. **The executor runs from a binding.**
   - `executor.step/admin` take any target R1 resolves.
   - At its event points the executor appends the card entries itself:
@@ -119,6 +121,8 @@ Consequences:
   - Its card goes in `runs/<root>/sub/<name>.wp.md`.
   - Its address is `<root>.<child>` (already in the index).
 - [ ] R8. **Done.** `wpk done`:
+  - list ignored outputs (`rundir/`, `build/`…) with sizes and ask what
+    to keep (Q8);
   - harvest (archive, load, verify);
   - pin and freeze the card;
   - check that the repos are pushed (the D5 workspace gate, reused);
@@ -160,16 +164,16 @@ Consequences:
 - Q4. Where the history store and blobs live by default, given home-space
       limits. Proposed: stay in `~/.work-packet/` but configurable (R10).
       Or a per-machine data directory set at first run.
-- Q6. Checkouts of sub-packets that work in parallel must stay visible
+- Q6. **Decided (yes, 2026-10-28).** Checkouts of sub-packets that work in parallel must stay visible
       for human inspection (their build output and waveforms). Proposed:
       `<task>/<repo>@<child>/` beside the main checkout, not under
       `.work-packet/`; `wpk ide` opens the task folder with them as extra
       roots. Same for split mode's scratch worktrees.
-- Q7. Human and runner sharing a checkout: the IDE action pauses the
+- Q7. **Decided (yes, 2026-10-28).** Human and runner sharing a checkout: the IDE action pauses the
       packet first (as the dashboard's IDE button does today); a step that
       fails resets the repo, so nothing is changed by hand while a step
       runs. Keep this rule, and make `wpk ide` apply it too.
-- Q8. Ignored outputs (`rundir/`, `build/`) are not in the record and
+- Q8. **Decided (yes, 2026-10-28).** Ignored outputs (`rundir/`, `build/`) are not in the record and
       vanish when `wpk done` deletes the task folder. Proposed: `wpk done`
       lists ignored outputs and their sizes and asks; listed deliverables
       are archived (≤ 10 MB, as now); larger ones become attachments in
@@ -191,3 +195,4 @@ tracked in `docs/dash-history-v1.md`.
 - 2026-10-28: plan written; runs-in-task-folder decided; nothing started.
 - 2026-10-28: added: the run is the record, outputs stay in the visible
   checkouts (fw-picorv32 waveforms as the example); Q6–Q8.
+- 2026-10-28: Q6, Q7, Q8 decided as proposed.
