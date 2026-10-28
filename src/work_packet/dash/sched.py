@@ -5,7 +5,7 @@ plan Q3). Every change goes through ``sched/control.py``."""
 import logging
 from datetime import datetime, timezone
 
-from .. import registry, schema
+from .. import archived, registry, schema
 from ..sched import control, events, explain
 from ..sched.budget import fmt
 from ..sched.classes import CLASSES
@@ -114,7 +114,7 @@ def chart(snap, home=None):
     pts, total = [(x(t0), y(0))], 0.0
     if b["measure"] != "quota":
         cut = w["start"]
-        for r in bmod.ledger(registry.entries(home)):
+        for r in bmod.ledger(archived.entries(home)):
             if (r.end or "") < cut or (r.end or "") > snap["now"]:
                 continue
             v = r.amount(b["measure"])

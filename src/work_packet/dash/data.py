@@ -13,6 +13,7 @@ from urllib.parse import quote as urlquote
 
 from .. import (clock, frontmatter, lease as lease_mod, notes as notes_mod, procs as procs_mod,
                questions, registry, report as report_mod, schema)
+from .. import archived
 from ..packet import Packet
 from ..project import ProjectError, load_project
 from ..views import packets, relative
@@ -330,7 +331,7 @@ def board(h=None, now=None, rows=None):
     cols = {c: [] for c in COLUMNS}
     broken = []
     names = [b["name"] for b in registry.boards(h)]
-    for e in registry.entries(h):
+    for e in archived.entries(h):
         on = registry.board_of(e, names)
         if not os.path.isdir(e["path"]):
             broken.append({"name": e["name"], "board": on, "why": "%s is missing" % e["path"]})
@@ -1264,7 +1265,7 @@ def model_choices(h=None):
     for name in harness_mod.names():
         out[name] = [{"id": m, "label": lbl} for m, lbl in harness_mod.get(name).models()]
     used = [(cfg["harness"], cfg["model"], "the default")]
-    for e in registry.entries(h):
+    for e in archived.entries(h):
         try:
             d = load_project(e["path"])
         except (ProjectError, OSError):

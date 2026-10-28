@@ -14,10 +14,11 @@ from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
                                  RedirectResponse, Response)
+from starlette.middleware import Middleware
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from .. import __about__, clock, registry
+from .. import __about__, archived, clock, registry
 from . import data, markup, plan, tokens
 from . import sched as dsched
 from ..sched.classes import CLASSES
@@ -170,7 +171,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
 
     def entry(request):
         try:
-            return registry.get(request.path_params["project"], home)
+            return archived.get(request.path_params["project"], home)
         except (KeyError, OSError, ValueError, registry.ConfigError):
             return None
 
@@ -184,7 +185,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         days = days if days in tokens.WINDOWS else 7
         cols, broken = data.board(home)
         side = data.side(home, cols, broken)
-        burn = tokens.board(registry.entries(home), days=days, on=[b["name"] for b in side])
+        burn = tokens.board(archived.entries(home), days=days, on=[b["name"] for b in side])
         ov = data.overview(cols, broken, side, burn)
         snap = await run_in_threadpool(dsched.snapshot, home)
         return render(request, "overview.html", ov=ov, burn=burn, broken=broken, live=True,
@@ -213,7 +214,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         states = sorted({r["state"] for r in rows}, key=str)
         snap = await run_in_threadpool(dsched.snapshot, home)
         cls = {}
-        for e in registry.entries(home):
+        for e in archived.entries(home):
             for r in rows:
                 if r["project"] == e["name"]:
                     cls[r["wpid"]] = dsched.packet_info(snap, e, r["wpid"])
@@ -376,7 +377,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         lines, worst, held = [], 0, set()
 
         def run_one(project, wpid):
-            e = registry.get(project, home)
+            e = archived.get(project, home)
             if e is None or data.packet(e, wpid) is None:
                 return executor.Outcome(executor.USAGE, "%s/%s: not found" % (project, wpid[:8]))
             if op == "prio":
@@ -659,7 +660,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         return "/p/%s/compose%s" % (urllib.parse.quote(e["name"]), frag)
 
     async def new_form(request):
-        es = registry.entries(home)
+        es = archived.entries(home)
         recent = sorted(es, key=lambda x: x.get("created") or "", reverse=True)
         base = os.path.dirname(recent[0]["path"]) if recent else os.path.expanduser("~")
         try:
@@ -681,7 +682,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             from .. import harness as harness_mod
             copy = None
             if src:
-                se = registry.get(src, home)
+                se = archived.get(src, home)
                 if se is None:
                     raise project_mod.ProjectError("no registered project named %r" % src)
                 copy = setup.copy_setup(project_mod.load_project(se["path"]), name, se["path"])
@@ -1135,7 +1136,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             return await websocket.close(1008)
         return await dide.proxy_ws(ide_backend, websocket)
 
-    return Starlette(routes=[
+    return Starlette(middleware=[Middleware(ArchivedReadOnly, home=home)], routes=[
         Route("/ide/{rest:path}", ide_http,
               methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         WebSocketRoute("/ide/{rest:path}", ide_ws),
@@ -1184,3 +1185,28 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         Route("/p/{project}/{wpid}/{step}", step),
     ])
 
+
+class ArchivedReadOnly:
+    """Refuse changes to a project whose runs have been removed and that is
+    shown from the history store (``archived``); moving it between boards
+    is still allowed."""
+
+    def __init__(self, app, home=None):
+        self.app = app
+        self.home = home
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] == "POST":
+            parts = scope["path"].strip("/").split("/")
+            if len(parts) >= 3 and parts[0] == "p" and parts[2] != "board":
+                name = urllib.parse.unquote(parts[1])
+                try:
+                    e = await run_in_threadpool(archived.get, name, self.home)
+                except (KeyError, OSError, ValueError, registry.ConfigError):
+                    e = None
+                if e is not None and archived.is_archived(e):
+                    resp = PlainTextResponse(
+                        "%s is archived: its runs were removed and it is shown from"
+                        " the history store, read-only\n" % name, status_code=409)
+                    return await resp(scope, receive, send)
+        return await self.app(scope, receive, send)

@@ -22,7 +22,9 @@ import dataclasses
 import io
 import json
 import os
+import re
 import sqlite3
+import urllib.parse
 import zipfile
 
 from . import blobs, clock, fsutil, schema, stats
@@ -31,8 +33,9 @@ from .packet import Packet
 SCHEMA_VERSION = 1
 ARCHIVE_VERSION = 1
 
-TIERS = ("metrics", "narrative", "changes", "transcripts", "logs")
-SKIP_DIRS = {"work", ".git", "__pycache__"}
+TIERS = ("metrics", "narrative", "changes", "transcripts", "logs", "deliverables")
+SKIP_TOP = {"work"}                  # the workspaces: not part of the record
+SKIP_DIRS = {".git", "__pycache__"}  # at any depth
 SKIP_FILES = {".lease"}
 
 _SCHEMA = """
@@ -131,6 +134,7 @@ def _files(run_dir):
     out = []
     for dp, dns, fns in os.walk(run_dir):
         dns[:] = sorted(d for d in dns if d not in SKIP_DIRS
+                        and not (dp == run_dir and d in SKIP_TOP)
                         and not os.path.islink(os.path.join(dp, d)))
         for f in sorted(fns):
             p = os.path.join(dp, f)
@@ -138,6 +142,69 @@ def _files(run_dir):
                 continue
             out.append(os.path.relpath(p, run_dir))
     return out
+
+
+LINK = re.compile(r"\]\(\s*<?([^)\s>]+)")
+LINKED_MAX = 10 << 20
+
+
+def _under(run_dir, r):
+    p = os.path.join(run_dir, r)
+    return (".git" not in r.split(os.sep) and not os.path.islink(p)
+            and os.path.realpath(p).startswith(os.path.realpath(run_dir) + os.sep))
+
+
+def _linked_work(run_dir, rels):
+    """Files under ``work/`` that the record's reports list as deliverables
+    (the dashboard serves only those), so they can still be opened once the
+    workspace is gone: each listed file; a listed folder whole when it holds
+    at most ``LINKED_MAX`` bytes, otherwise the files in it that the reports
+    link to."""
+    from . import report as report_mod
+    reps = [r for r in rels if r == report_mod.NAME
+            or (r.startswith(os.path.join("state", "history", "report-")) and r.endswith(".md"))]
+    tops, texts = set(), []
+    for r in reps:
+        rep = report_mod.load(os.path.join(run_dir, r))
+        if not rep:
+            continue
+        texts.append(rep[1])
+        for d in rep[0].get("deliverables") or ():
+            top = os.path.normpath(str((d or {}).get("path") or ""))
+            if top.split(os.sep)[0] == "work" and _under(run_dir, top):
+                tops.add(top)
+    out = set()
+    for top in sorted(tops):
+        p = os.path.join(run_dir, top)
+        if os.path.isfile(p):
+            if os.path.getsize(p) <= LINKED_MAX:
+                out.add(top)
+            continue
+        if not os.path.isdir(p):
+            continue
+        found, total = [], 0
+        for dp, dns, fns in os.walk(p):
+            dns[:] = sorted(x for x in dns if x not in SKIP_DIRS
+                            and not os.path.islink(os.path.join(dp, x)))
+            for f in sorted(fns):
+                fp = os.path.join(dp, f)
+                if os.path.isfile(fp) and not os.path.islink(fp):
+                    found.append(os.path.relpath(fp, run_dir))
+                    total += os.path.getsize(fp)
+            if total > LINKED_MAX:
+                break
+        if total <= LINKED_MAX:
+            out.update(found)
+            continue
+        for text in texts:
+            for target in LINK.findall(text):
+                target = urllib.parse.unquote(target.partition("#")[0])
+                r = os.path.normpath(target)
+                if (r.startswith(top + os.sep) and _under(run_dir, r)
+                        and os.path.isfile(os.path.join(run_dir, r))
+                        and os.path.getsize(os.path.join(run_dir, r)) <= LINKED_MAX):
+                    out.add(r)
+    return sorted(out)
 
 
 def _journal(path):
@@ -213,10 +280,15 @@ def read_run(project, run_dir, with_files=True, h=None):
     tasks, questions = _tasks_and_questions(recs)
     files = {}
     if with_files:
-        for rel in _files(run_dir):
+        rels = _files(run_dir)
+        for rel in rels:
             p = os.path.join(run_dir, rel)
             files[rel] = {"sha": blobs.put_file(p, h), "size": os.path.getsize(p),
                           "tier": tier_of(rel)}
+        for rel in _linked_work(run_dir, rels):
+            p = os.path.join(run_dir, rel)
+            files[rel] = {"sha": blobs.put_file(p, h), "size": os.path.getsize(p),
+                          "tier": "deliverables"}
     wpid = os.path.basename(os.path.normpath(run_dir))
     return {
         "id": wpid, "project": project, "parent": status.get("parent"),
@@ -447,6 +519,45 @@ def collect(names, since=None, h=None, con=None):
 
 def projects(con):
     return [r[0] for r in con.execute("SELECT DISTINCT project FROM packet ORDER BY project")]
+
+
+# --- restoring a record ----------------------------------------------------------
+
+def harvested(con, project):
+    """The ids of ``project``'s harvested packets, in order."""
+    return [r[0] for r in con.execute(
+        "SELECT id FROM packet WHERE project = ? AND harvested IS NOT NULL"
+        " AND provisional = 0 ORDER BY id", (project,))]
+
+
+def restore_packet(con, pid, dest, h=None):
+    """Write packet ``pid``'s record (every file but ``work/``) to the run
+    directory ``dest``, from the blob store, read-only. Symlinks (the
+    ``children/`` links of older runs) are not kept; the edges record the
+    same thing. Returns the number of files written."""
+    n = 0
+    for rel, sha, size in con.execute(
+            "SELECT path, sha, size FROM file WHERE packet = ? ORDER BY path", (pid,)):
+        data = blobs.get_bytes(sha, h)
+        if len(data) != size:
+            raise IOError("blob %s of %s/%s has %d bytes, expected %d"
+                          % (sha, pid, rel, len(data), size))
+        p = os.path.join(dest, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "wb") as fp:
+            fp.write(data)
+        os.chmod(p, 0o444)
+        n += 1
+    return n
+
+
+def restore_project(con, project, dest, h=None):
+    """Write the records of ``project``'s harvested packets under
+    ``dest/packets/<id>/``. Returns the ids restored."""
+    ids = harvested(con, project)
+    for pid in ids:
+        restore_packet(con, pid, os.path.join(dest, "packets", pid), h)
+    return ids
 
 
 # --- verification ----------------------------------------------------------------
