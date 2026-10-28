@@ -1,4 +1,4 @@
-# Overview: "Recently completed", and token use on its own page (plan and status)
+# Overview: finished work in Needs attention, and token use on its own page (plan and status)
 
 Started 2026-10-28. Changes the Overview (`docs/overview.md`). Status:
 **proposed**, waiting for decisions on Q1–Q5 before building.
@@ -14,55 +14,50 @@ page. You look at it now and then, not every time you open the Overview.
 
 ## What changes
 
-### 1. Recently completed (new, on the Overview)
+### 1. Finished work joins "Needs attention"
 
-This is an inbox of finished work you have not looked at yet.
+There is no new section. Finished work you have not looked at becomes one
+more kind of row in the existing **Needs attention** list. That list is
+already "what waits on you", and finished work waits on you to read it.
 
 - **What is listed:** each project whose root packet is COMPLETED, and
   which you have not opened since it completed.
   - A completion is identified by the project and the root's `updated`
     time.
   - A project that gets a next task and completes again shows up again.
-- **A row:**
+- **A row** (kind `done`, after asks, failures and setup):
   - a `DONE` badge, the project and its board;
-  - the task's instruction, cut to one line;
   - the report's outcome, cut to one line;
   - when it completed (for example, "2 h ago");
   - what the task cost;
   - the PR link, if `[pr]` is set;
-  - an Open link, a checkbox, and a `×` to dismiss.
+  - Open, and a `×` to dismiss.
+- **Only `done` rows can be dismissed.** Asks, failures and setup leave the
+  list when they are dealt with (answered, handed off, removed), as now.
+  Dismissing a failure would hide a packet that is still broken.
 - **Removing a row:**
   - **By opening it.** A visit to `/p/<project>` or any page under it
-    (a task, a packet, a step, the live view) marks the project's current
-    completion as seen. Opening the project while it is still running does
-    not mark a completion that happens afterwards.
+    marks the project's current completion as seen. Opening the project
+    while it is still running does not mark a completion that happens
+    afterwards.
   - **By dismissing it.** The `×` on a row removes it without opening it.
-  - **By selecting.** You tick rows, or tick a header box to select them
-    all, then press "Mark seen". This works like the selection bar on All
-    packets. A plain "Clear all" button is next to it.
+  - **By selecting.** A checkbox on each `done` row, and a bar above the
+    list: "Select all done", "Mark seen", "Clear all done".
   - Each of these sends one POST, `POST /seen`, with a `project=` value
     per row and the CSRF token. The flash says "marked N seen".
 - **Where it is stored:** `$WPK_HOME/dash/seen.json`, as
   `{project: "<root updated ISO time>"}`.
-  - A row is listed while the root is COMPLETED and its `updated` time is
-    later than the stored time.
-  - The file is written atomically under a lock, so two tabs, or the
-    runner and a page, do not lose each other's writes.
-  - Nothing in the project changes; the file only records what you have
-    read.
-- **Placement:** after "Needs attention" and before "Running now /
-  Coming up".
-  - A new tile, **Done, unread**, sits next to "Needs you" and links to
-    `#done`.
-  - The side tab shows the same count on Overview.
-- **Order:** newest first, up to 20 rows, then "and N more" (expanding
-  the list shows the rest).
-- **Live refresh:** the page reloads itself, and ticked boxes have to
-  survive that.
-  - The list's form is marked `data-filter`, so a ticked box does not stop
-    live refresh, as already happens on All packets.
-  - The ticks are kept in session storage, as `packets.js` already does
-    for its filters.
+  - The file is written atomically under a lock.
+  - Nothing in the project changes.
+- **Tiles:** a **Done** tile (count of unread completions, links to
+  `#attention`) next to "Needs you". It is not coloured: done is good news.
+- **Many at once:** the list shows up to 20 `done` rows, newest first, then
+  "and N more" (expands).
+- **Live refresh:** ticked boxes survive it. The bar's form is marked
+  `data-filter`, and the ticks are kept in session storage, as on All
+  packets.
+- **Empty list:** "Nothing needs you." stays the wording when there are no
+  rows of any kind.
 
 ### 2. Token use moves to a new page: Statistics (`/stats`)
 
@@ -91,16 +86,16 @@ This is an inbox of finished work you have not looked at yet.
     current root `updated`) and `unread(cards, h)`;
   - the lock and the atomic write;
   - tests.
-- [ ] O2. `data.overview` adds `done` (the rows above), the outcome from
-  `report.of_packet`, the task's instruction and cost, and `[pr]`; the
-  `done` tile.
+- [ ] O2. `data.overview` adds attention rows of kind `done` (the outcome
+  from `report.of_packet`, the task's cost, `[pr]`), after setup; the `done`
+  tile.
 - [ ] O3. Routes:
   - `POST /seen` (ids or `all`, with CSRF);
   - the project pages mark a project seen on GET, in `project_page`,
     `packet`, `step` and `live_view`;
   - tests: open → gone, dismiss, select, all, re-complete → back.
-- [ ] O4. `overview.html`: the Recently completed list, the selection bar,
-  the tile; `overview.js` (or reuse `packets.js`) for select-all and ticks
+- [ ] O4. `overview.html`: `done` rows in Needs attention, the selection
+  bar (shown only when there are `done` rows), the tile; `overview.js` (or reuse `packets.js`) for select-all and ticks
   that survive refresh.
 - [ ] O5. `/stats`:
   - a new `stats.html`, with the token section moved from `overview.html`
@@ -108,18 +103,17 @@ This is an inbox of finished work you have not looked at yet.
   - the Overview drops `tokens.board()`;
   - a side-tab entry, and the tile links updated;
   - update tests `test_dash.py::test_pages` and `test_token_panels`.
-- [ ] O6. Docs: `docs/overview.md` (layout §2a Recently completed, §6 moved
+- [ ] O6. Docs: `docs/overview.md` (§2 Attention gains `done` rows, §6 moved
   to Statistics), `docs/boards.md` (Dash list); check the page in a browser
   at 1400 and 1100 wide.
 
 ## Questions (proposed answers in bold)
 
 - **Q1. What counts as "completed"?**
-  - **Root COMPLETED only.** FAILED and "asks" are already in Needs
-    attention.
-  - A root PAUSED by a budget or step limit also ends a run without you.
-    It could be listed here as `STOPPED`.
-  - Proposed: include it, since it is "finished, go look".
+  - Root COMPLETED, as `DONE`. FAILED and asks are already in the list.
+  - **Also a root PAUSED by a budget or step limit, as `STOPPED`**: it
+    ended a run without you, so it is "finished, go look". Dismissable like
+    `DONE`; handing it off again also clears it.
 - **Q2. Per project or per packet?** **Per project.** Boards hold projects,
   and a project's children finishing is part of its run, not an event of
   its own. A child that fails already shows as "trouble".
@@ -127,8 +121,8 @@ This is an inbox of finished work you have not looked at yet.
   match `wpk stats`.
   - "History" is already the name of the history store (`wpk history`,
     `history.db`).
-  - A History page should later be the list of *all* past completions,
-    including those you marked seen. Q5 below is that page in small.
+  - A History page could later list *all* past completions, including
+    those marked seen.
 - **Q4. Whose "seen"?** With unix login several people can sign in to one
   board. **One shared seen-list per home for now**, since the board is the
   owner's.
@@ -142,3 +136,5 @@ This is an inbox of finished work you have not looked at yet.
 ## Status
 
 - 2026-10-28: plan written; nothing built.
+- 2026-10-28: changed: no separate section; unread completions are `done`
+  rows in Needs attention, and only those rows can be dismissed.
