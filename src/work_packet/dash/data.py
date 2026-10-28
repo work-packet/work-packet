@@ -596,15 +596,32 @@ def work_doc(entry, rel):
     None for anything outside it, a symlink out of it included."""
     if not isinstance(rel, str):
         return None
-    want = os.path.normpath(rel or "work")
+    want = work_rel(entry, rel)
     parts = want.split(os.sep)
     if os.path.isabs(want) or ".." in parts or parts[0] != "work":
         return None
-    root = os.path.realpath(os.path.join(entry["path"], "work"))
-    p = os.path.realpath(os.path.join(entry["path"], want))
+    if layout.is_packet_layout(entry["path"]):
+        # The packet folder is the work, seen as work/<folder> as in a run.
+        folder = layout.packet_folder(entry["path"])
+        if len(parts) < 2 or parts[1] != os.path.basename(folder) or \
+                (len(parts) > 2 and parts[2] == layout.DOT):
+            return None
+        root = os.path.realpath(folder)
+        p = os.path.realpath(os.path.join(folder, *parts[2:]))
+    else:
+        root = os.path.realpath(os.path.join(entry["path"], "work"))
+        p = os.path.realpath(os.path.join(entry["path"], want))
     if not (p == root or p.startswith(root + os.sep)) or not os.path.exists(p):
         return None
     return p, os.path.isdir(p)
+
+
+def work_rel(entry, rel):
+    """``rel`` normalized; a packet's bare ``work`` is ``work/<folder>``."""
+    want = os.path.normpath(rel or "work") if isinstance(rel, str) else "work"
+    if want == "work" and layout.is_packet_layout(entry["path"]):
+        want = os.path.join("work", os.path.basename(layout.packet_folder(entry["path"])))
+    return want
 
 
 def doc_listing(p, rel):

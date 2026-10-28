@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import time
 
-from . import clock, frontmatter, fsutil, journal, schema
+from . import clock, frontmatter, fsutil, journal, layout, schema
 
 
 LOCK_RETRY_S = 1.0
@@ -173,7 +173,31 @@ def add_worktree(clone, tree, branch=None, detach=False):
         _git(clone, "worktree", "add", "-b", branch, tree, "HEAD")
 
 
+def _packet_link(pkt, proj):
+    """The packet layout: ``work/<folder>`` is a relative link to the packet
+    folder, so steps work in it (the clone) and nothing else changes."""
+    folder = layout.packet_folder(proj)
+    dst = os.path.join(pkt.path, "work")
+    d = os.path.join(dst, os.path.basename(folder))
+    if os.path.lexists(d):
+        return []
+    os.makedirs(dst, exist_ok=True)
+    os.symlink(os.path.relpath(folder, dst), d)
+    return ["work/%s (the packet folder)" % os.path.basename(folder)]
+
+
+def in_packet(path):
+    """``path`` (a run's ``work/`` entry) is the packet folder holding the run."""
+    proj = os.path.abspath(path)
+    for _ in range(4):                  # <folder>/.work-packet/runs/<id>/work/<n>
+        proj = os.path.dirname(proj)
+    return layout.is_packet_layout(proj) and os.path.islink(path) and \
+        os.path.realpath(path) == os.path.realpath(layout.packet_folder(proj))
+
+
 def _work(pkt, proj, project, spec):
+    if layout.is_packet_layout(proj):
+        return _packet_link(pkt, proj)
     added = []
     src = os.path.join(proj, "work")
     if not os.path.isdir(src):
@@ -237,8 +261,8 @@ def git_trees(pkt):
     if os.path.isdir(w):
         for n in sorted(os.listdir(w)):
             p = os.path.join(w, n)
-            if not n.startswith(".") and not os.path.islink(p) and os.path.isdir(p) \
-                    and is_git(p):
+            if not n.startswith(".") and (not os.path.islink(p) or in_packet(p)) \
+                    and os.path.isdir(p) and is_git(p):
                 out[n] = p
     return out
 

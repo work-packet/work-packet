@@ -49,8 +49,8 @@ def crawl(client, name, limit=2000):
 
 def compare(before, after, subst=()):
     """Differences between two crawls: urls missing on either side, and
-    pages whose status or body differs once each ``(old, new)`` in ``subst``
-    is applied to ``after``."""
+    pages whose status or body differs once each ``(new, old)`` in ``subst``
+    (``new`` replaced by ``old``) is applied to ``after``."""
     probs = []
     for u in sorted(set(before) | set(after)):
         if u not in after:
@@ -60,9 +60,11 @@ def compare(before, after, subst=()):
             probs.append("%s: only after" % u)
             continue
         (s1, b1), (s2, b2) = before[u], after[u]
-        if isinstance(b2, str):
-            for new, old in subst:
+        for new, old in subst:
+            if isinstance(b2, str):
                 b2 = b2.replace(new, old)
+            else:
+                b2 = b2.replace(new.encode(), old.encode())
         if s1 != s2:
             probs.append("%s: status %s, then %s" % (u, s1, s2))
         elif b1 != b2:

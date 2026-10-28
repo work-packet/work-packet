@@ -1029,6 +1029,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         """A file or folder in the project's ``work/`` (docs/doc-markup.md)."""
         e = entry(request)
         rel = os.path.normpath(request.query_params.get("path") or "work")
+        rel = data.work_rel(e, rel) if e is not None else rel
         hit = data.work_doc(e, rel) if e is not None else None
         if hit is None:
             return not_found(request, "file %s" % rel)

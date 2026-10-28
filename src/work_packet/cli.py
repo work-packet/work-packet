@@ -88,9 +88,13 @@ def cmd_new(args) -> int:
             copy = setup.copy_setup(project.load_project(src), args.name, src)
         except (ValueError, project.ProjectError) as e:
             return _err(str(e))
+    packet = args.here or args.packet
+    if args.here and args.dir:
+        return _err("--here and --dir: give one")
     try:
-        plan = project.new(args.name, prompt, path=args.dir, model=args.model, tz=args.tz,
-                           paused=args.paused, dry_run=args.dry_run, extra=copy)
+        plan = project.new(args.name, prompt, path=os.getcwd() if args.here else args.dir,
+                           model=args.model, tz=args.tz, paused=args.paused,
+                           dry_run=args.dry_run, extra=copy, packet=packet)
     except (project.ProjectError, OSError) as e:
         return _err(str(e))
     verb = "Would create" if args.dry_run else "Created"
@@ -102,12 +106,18 @@ def cmd_new(args) -> int:
         plan.permission_mode, ",".join(plan.allowed_tools)))
     if args.dry_run:
         return 0
+    if packet:
+        from . import layout
+        folder = layout.packet_folder(plan.path)
+        print("Steps work in %s (the packet folder); the card is %s." % (
+            folder, os.path.basename(layout.card_path(plan.path, plan.name))))
     if prompt is None:
         print("The root is held for setup. Fill in %s:" % plan.path)
         print("  prompt.md   the first instruction (or `wpk instruct %s --template outline`)"
               % plan.name)
-        print("  work/       what the task works on: git clones (steps get a worktree of "
-              "each), or any directory")
+        if not packet:
+            print("  work/       what the task works on: git clones (steps get a worktree "
+                  "of each), or any directory")
         print("  state/      plans and notes the steps read (copied in at the first step)")
         print("  identity/   links to read-only material")
         print("Next: `wpk setup %s` (a guided setup), or `wpk doctor %s` (what is missing)."
@@ -307,7 +317,7 @@ def _target(t):
 
 
 def _doctor_lines(tg, checks, verbose=False):
-    from . import setup
+    from . import layout, setup
     meta = tg.status() or {}
     st = meta.get("state", "?") + (": %s" % meta["reason"] if meta.get("reason") else "")
     out = ["%s  %s   root %s  (%s)" % (tg.name, setup.tilde(tg.proj), tg.packet.wpid[:8], st)]
@@ -316,7 +326,7 @@ def _doctor_lines(tg, checks, verbose=False):
         if not cs:
             continue
         head = g
-        if g == "work":
+        if g == "work" and not layout.is_packet_layout(tg.proj):
             head += "      " + setup.tilde(tg.work)
         out.append("")
         out.append(head)
@@ -1219,7 +1229,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="copy [setup] (with the clones in its work/ and the links in its "
                    "identity/), [permissions] and "
                    "limits from another project; `wpk setup NAME --apply` then clones")
-    p.add_argument("--dir", help="project directory (default ./<name>)")
+    p.add_argument("--dir", help="project directory (default ./<name>); with --packet, "
+                   "the packet folder")
+    p.add_argument("--here", action="store_true",
+                   help="make the current directory (a clone, or any folder) the packet: "
+                   "the card and .work-packet/ go in it, and steps work in it")
+    p.add_argument("--packet", action="store_true",
+                   help="the packet layout in --dir or ./<name>, as --here does")
     p.add_argument("--model", help="model for the root packet")
     p.add_argument("--tz", help="IANA zone for resume times (default: local)")
     p.add_argument("--paused", action="store_true", help="create the root PAUSED")

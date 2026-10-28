@@ -29,7 +29,7 @@ from .packet import Packet
 VSDIR = ".vscode"                       # in the packet or the project root; not packet format
 WATCH_EXCLUDE = ["**/packages/**", "**/rundir/**", "**/build*/**"]
 PACKET_HIDE = ["work", "state", "steps", "children", ".pending", ".state.old", VSDIR]
-ROOT_HIDE = ["work", "state", "packets", ".setup", VSDIR]
+ROOT_HIDE = ["work", "state", "packets", "runs", ".setup", VSDIR]
 TITLE_PREFIX = "wpk: "
 # While the runner owns the packet (docs/vscode-plan.md §5, workflow-review §4.2):
 # a guard against mistakes, not a security boundary.
@@ -303,7 +303,9 @@ def packet_folders(tg, pkt):
             p = os.path.join(w, n)
             if n.startswith(".") or not os.path.isdir(p):
                 continue
-            if os.path.islink(p):
+            if workspace.in_packet(p):
+                out.append(("%s (the packet folder)" % n, os.path.realpath(p)))
+            elif os.path.islink(p):
                 out.append(("%s (shared, no rollback)" % n, p))
             elif workspace.is_git(p):
                 out.append(("%s (packet: %s)" % (n, tg.branch), p))

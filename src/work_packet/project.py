@@ -110,6 +110,7 @@ def settings(proj, config=None):
 
 TEMPLATE = "blank@1"
 SETUP_DIRS = ("state", "identity", "work")    # at the project root (docs/setup.md §10)
+PACKET_SETUP_DIRS = ("state", "identity")     # the packet folder is the work
 SETUP_REASON = "setup"        # PAUSED for setup until L1's HELD/setup (docs/setup.md §8)
 
 
@@ -134,12 +135,20 @@ class Plan:
         return layout.run_dir(self.path, self.root)
 
 
-def _check_new(name, path, tz, h):
+def _check_new(name, path, tz, h, packet=False):
     if not schema.is_name(name):
         raise ProjectError("name %r must match [a-z0-9][a-z0-9_-]{0,63}" % name)
     if registry.get(name, h) is not None or os.path.exists(registry.entry_path(name, h)):
         raise ProjectError("a project named %r is already registered" % name)
-    if os.path.exists(path) and (not os.path.isdir(path) or os.listdir(path)):
+    if packet:
+        folder = layout.packet_folder(path)
+        if os.path.exists(folder) and not os.path.isdir(folder):
+            raise ProjectError("%s is not a directory" % folder)
+        if os.path.lexists(path):
+            raise ProjectError("%s already holds a packet (%s)" % (folder, layout.DOT))
+        if os.path.lexists(layout.card_path(path, name)):
+            raise ProjectError("%s already exists" % layout.card_path(path, name))
+    elif os.path.exists(path) and (not os.path.isdir(path) or os.listdir(path)):
         if os.path.isfile(os.path.join(path, "project.toml")):
             raise ProjectError("%s already holds a project; `wpk adopt %s` registers it"
                                % (path, path))
@@ -149,7 +158,7 @@ def _check_new(name, path, tz, h):
 
 
 def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run=False, h=None,
-        extra=None):
+        extra=None, packet=False):
     """``docs/runner.md`` ``wpk new`` steps 1-4 with the blank template.
 
     With no ``prompt`` the root is held for setup (docs/setup.md): ``PAUSED``
@@ -157,6 +166,13 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     way the project gets the structure you set it up in (docs/setup.md §10):
     ``prompt.md``, ``state/``, ``identity/`` and ``work/``. ``extra``
     holds more ``project.toml`` keys (``new --from-setup``).
+
+    ``packet``: the packet layout (docs/run-binding-v1.md, stage A). ``path``
+    is then the packet folder (a clone, a folder with files, or a new one),
+    and the project goes in its ``.work-packet/``, with ``runs/`` for
+    ``packets/`` and no ``work/``: steps work in the packet folder itself.
+    In a git clone, ``.work-packet/`` and the card are put in
+    ``info/exclude``.
 
     The project is built in a hidden sibling directory and renamed into
     place, and the registry entry is written last, so a ``wpk new`` that
@@ -167,9 +183,11 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     from .packet import Packet, new_status
 
     path = os.path.abspath(path or name)
+    if packet:
+        path = os.path.join(path, layout.DOT)
     if prompt is not None and not prompt.strip():
         raise ProjectError("the prompt is empty")
-    _check_new(name, path, tz, h)
+    _check_new(name, path, tz, h, packet)
     try:
         cfg = registry.load_config(h)
     except registry.ConfigError as e:
@@ -180,8 +198,10 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     extra.pop("model", None)
     perms = dict(schema.PERMISSION_DEFAULTS)
     perms.update(extra.pop("permissions", {}))
-    rel = os.path.join("packets", root)
-    files = ["project.toml", "prompt.md"] + [d + "/" for d in SETUP_DIRS] + [
+    runs = os.path.relpath(layout.runs_dir(path), path)
+    rel = os.path.join(runs, root)
+    dirs = PACKET_SETUP_DIRS if packet else SETUP_DIRS
+    files = ["project.toml", "prompt.md"] + [d + "/" for d in dirs] + [
         rel + "/status.md", rel + "/memento.md", rel + "/journal.jsonl", rel + "/state/"]
     plan = Plan(name, path, root, files, model, tz, perms["allowed_tools"],
                 perms["permission_mode"])
@@ -195,7 +215,7 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     if os.path.lexists(tmp):
         import shutil
         shutil.rmtree(tmp)
-    os.makedirs(layout.runs_dir(tmp))
+    os.makedirs(os.path.join(tmp, runs))
     ptoml = {"name": name, "root": root, "created": now, "template": TEMPLATE}
     if tz is not None:
         ptoml["tz"] = tz
@@ -208,14 +228,14 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
         raise ProjectError("project.toml: %s: %s" % (probs[0].field, probs[0].msg))
     from .tomlio import save_toml
     save_toml(os.path.join(tmp, "project.toml"), ptoml)
-    for d in SETUP_DIRS:
+    for d in dirs:
         os.makedirs(os.path.join(tmp, d))
     if prompt:
         text = prompt if prompt.endswith("\n") else prompt + "\n"
     else:
         text = ""                 # held for setup: you write prompt.md (or `wpk instruct`)
     fsutil.atomic_write(os.path.join(tmp, "prompt.md"), text)
-    pkt = Packet(layout.run_dir(tmp, root))
+    pkt = Packet(os.path.join(tmp, rel))
     os.makedirs(pkt.state_dir)
     st = new_status(root, name, model, now)
     if not prompt:
@@ -229,9 +249,17 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     if os.path.isdir(path):
         os.rmdir(path)            # empty, checked above
     fsutil.rename(tmp, path)
+    if packet:
+        from . import workspace
+        folder = layout.packet_folder(path)
+        if workspace.is_git(folder):
+            workspace.exclude(folder, [layout.DOT, name + ".wp.md"])
     faults.point("new-before-register")
-    registry.register({"name": name, "path": path, "root": root, "created": now,
-                       "template": TEMPLATE}, h)
+    entry = {"name": name, "path": path, "root": root, "created": now, "template": TEMPLATE}
+    registry.register(entry, h)
+    if packet:
+        from . import livecard
+        livecard.update_project(entry, h)       # the card, from the start
     return plan
 
 

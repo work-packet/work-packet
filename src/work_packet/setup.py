@@ -369,13 +369,19 @@ def _legacy_checks(tg, name):
     if dirty:
         out.append(Check("work.%s.clean" % name, "work", "missing",
                          "%s has uncommitted changes (%s)" % (name, _few(dirty)),
-                         "A failed step resets the repo to its last commit, which would "
-                         "drop them. Commit them, or ignore build output.",
+                         "Steps work on top of them, so their changes and the steps' mix. "
+                         "Commit them, or ignore build output.",
                          ["cd %s && git add -A && git commit -m 'Setup'" % q]))
     return out
 
 
 def _work(tg):
+    if layout.is_packet_layout(tg.proj):
+        folder = layout.packet_folder(tg.proj)
+        return [Check("work.packet", "work", "ok",
+                      "steps work in %s%s" % (tilde(folder), " (a git clone)"
+                                              if workspace.is_git(folder) else ""),
+                      "The packet folder is the work: put what the task needs in it.")]
     out = []
     names = tg.entries()
     want = {r["name"]: r for r in tg.spec.get("repo", [])}
