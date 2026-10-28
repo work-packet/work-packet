@@ -336,3 +336,4 @@ tracked in `docs/dash-history-v1.md`.
 - 2026-10-28: stage A built (A1–A3) and solver-research converted (A4),
   verified. Suite 782 passed. Next: converting projects with a repo; then
   R11 (pss-registers-up-planning) only with Matt's go.
+- 2026-10-28: R11 and the repo case of `wpk convert` parked (Matt).
