@@ -164,6 +164,47 @@ Home directories are often severely limited, so nothing large goes to
     children with per-child branches (R7, new capability: children have
     no workspace today), and cwd in the clone if still wanted.
 
+  **Stage A, as built (2026-10-28):**
+
+  - [x] A1. `layout.py`: `runs_dir`/`run_dir` (`packets/` for legacy,
+    `runs/` when the project directory is named `.work-packet`),
+    `packet_folder`, `card_path`, `project_of_runs`. All ~50 hard-coded
+    `packets/` joins replaced; `project_of` and `livecard._entry_of`
+    accept either. Legacy behaviour unchanged (full suite).
+  - [x] A2. `wpk new NAME --here` (or `--packet [--dir D]`): the project
+    goes in `<folder>/.work-packet/` (`project.toml`, `prompt.md`,
+    `state/`, `identity/`, `runs/`; no `work/`), `.work-packet` and the
+    card go in `info/exclude` in a clone, the card is written at once.
+    The root run's `work/<folder>` is a relative link to the packet
+    folder, so steps work in the clone; `git_trees`/`heads`/`dirty` see it.
+    `registry.resolve` takes a packet folder or a card. Dash file browser
+    maps `work/<folder>` to the packet folder (`.work-packet` hidden);
+    doctor/compose say "steps work in <folder>". The wrong "a failed step
+    resets the repo" text is fixed.
+  - [x] A3. `wpk convert NAME [--dry-run]` (`convert.py`): renames only,
+    tarball first (`~/.work-packet/migration/convert/`). Refuses
+    projects with anything in `work/` (repos come later) and runs with a
+    live lease. The packet folder is the parent when it holds only the
+    project (`…/x/x` → `…/x`), else the project folder in place. Then
+    card, index, history links brought up to date and verified (history,
+    stats, `wpk check`). `migrate.link_runs` re-points moved links.
+  - [x] A4. **solver-research converted** (2026-10-28 04:04). Now
+    `~/projects/packets/solver-research/` holds `solver-research.wp.md`
+    and `.work-packet/`. Stats identical; 69 pages crawled before and
+    after (`scripts/convert_verify.py`, report
+    `~/.work-packet/migration/convert/solver-research-verify.md`): equal
+    but for clock text ("3m ago", quota countdown, timeline ticks) and the
+    compose work check (intended). Step logs had shown full old paths;
+    fixed (`data._run_prefix` strips the run's old or new place).
+  - Notes: the `work/<folder>` link points at the folder that contains
+    it. Git, ripgrep (honours `info/exclude`, does not follow links) and
+    the history snapshot (skips `work/`) are unaffected; `find -L` would
+    loop. The card's `x-wpk` still says `migrated:` for a new packet
+    (cosmetic, goes with R2).
+  - Next in stage A: projects with a repo (the root's `work/<repo>`
+    becomes the packet folder; needs the worktree folded back into the
+    clone or the clone moved), then R11 with Matt's go.
+
 - [ ] R1. **Locator** (`runs.py`): one function from a target (packet
       folder or anything inside it, card path, name, id, or legacy
       project) to a *binding*: `{card, id, packet_dir, run_dir, legacy}`.
@@ -292,3 +333,6 @@ tracked in `docs/dash-history-v1.md`.
   runs, blobs and the archive; `--here` is the main form; packets without
   a repo are folders; children get sibling worktrees; `git clean -x`
   guarded. Plan rewritten to match. Next: R0.
+- 2026-10-28: stage A built (A1–A3) and solver-research converted (A4),
+  verified. Suite 782 passed. Next: converting projects with a repo; then
+  R11 (pss-registers-up-planning) only with Matt's go.

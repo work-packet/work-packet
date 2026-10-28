@@ -153,6 +153,15 @@ def test_dash_pages_match_the_legacy_layout(home, tmp_path, monkeypatch):
     compose = [u for u in after if u.startswith("/p/sr/compose")]
     assert compose and all("steps work in " in after[u][1] for u in compose)
     probs = [p for p in probs if not p.startswith("/p/sr/compose")]
+    if probs:                      # say what differs (seen once, not reproduced)
+        import difflib
+        u = probs[0].split(":")[0]
+        a, b = before.get(u, (0, ""))[1], after.get(u, (0, ""))[1]
+        if isinstance(a, str) and isinstance(b, str):
+            for x, y in subst:
+                b = b.replace(x, y)
+            probs.append("".join(list(difflib.unified_diff(
+                a.splitlines(1), b.splitlines(1), n=0))[:20]))
     if probs and os.environ.get("WPK_DUMP"):
         import difflib
         with open(os.environ["WPK_DUMP"], "w") as fp:

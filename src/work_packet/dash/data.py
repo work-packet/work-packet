@@ -1012,7 +1012,7 @@ def log(path, limit=LOG_RESULT_MAX):
     for its header line, as a CI log's group line does.
     """
     groups, uses = [], {}
-    pkt = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(path)))) + os.sep
+    pkt = _run_prefix(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(path)))))
     for b in transcript(path, limit):
         k = b["kind"]
         if k == "tool_use":
@@ -1023,7 +1023,7 @@ def log(path, limit=LOG_RESULT_MAX):
                         for i, ln in enumerate(inp["command"].splitlines())]
             else:
                 body = _input_lines(inp, skip=label, pkt=pkt)
-            label = label[len(pkt):] if label.startswith(pkt) else label
+            label = pkt.sub("", label, count=1)
             g = {"kind": "tool", "title": "%s  %s" % (b["name"], _one_line(label, 200)),
                  "in": body, "out": [], "error": False, "done": False}
             groups.append(g)
@@ -1059,6 +1059,16 @@ def log(path, limit=LOG_RESULT_MAX):
     return {"groups": groups, "lines": n}
 
 
+def _run_prefix(run_dir):
+    """A pattern for the run directory at the start of a path: where it is
+    now, or where it was when the step ran (``packets/<wpid>/`` before
+    ``wpk convert``, ``runs/<wpid>/`` after)."""
+    import re
+    wpid = re.escape(os.path.basename(run_dir))
+    return re.compile(r"^(?:%s|/\S*/(?:%s|%s)/%s/)" % (
+        re.escape(run_dir + os.sep), layout.LEGACY_RUNS, layout.RUNS, wpid))
+
+
 def _input_lines(inp, skip, pkt):
     """A tool's input as ``key: value`` lines, without the value in the title;
     a multi-line string goes under its key, indented."""
@@ -1071,7 +1081,7 @@ def _input_lines(inp, skip, pkt):
             out += ["  " + ln for ln in v.splitlines()]
         else:
             v = v if isinstance(v, str) else json.dumps(v)
-            out.append("%s: %s" % (key, v[len(pkt):] if v.startswith(pkt) else v))
+            out.append("%s: %s" % (key, pkt.sub("", v, count=1)))
     return out
 
 
