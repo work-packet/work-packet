@@ -91,6 +91,9 @@ run directories surviving.
   for the view model (P3) to read the history store, and for your go.
 - M2 (moving pss-registers-up-planning to a task folder) and M4.
 
+Next: `docs/dash-history-v1.md` (dashboard on the history store, then
+removing the finished runs).
+
 ## Status
 
 - 2026-10-28: plan written; steps 1–8 done.
