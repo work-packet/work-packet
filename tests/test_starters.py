@@ -41,6 +41,7 @@ def forge(home, source, monkeypatch):
                   "user": {"login": "bob"}, "labels": []}}
     seen = Seen()
     seen.issues = issues
+    seen.pulls = []
 
     def get(url, headers, timeout=20):
         assert headers.get("Authorization") == "token sekrit"
@@ -58,13 +59,27 @@ def forge(home, source, monkeypatch):
             want = set(filter(None, q.get("labels", "").split(",")))
             return [i for i in issues.values() if q.get("q", "").lower() in i["title"].lower()
                     and want <= {x["name"] for x in i["labels"]}]
+        if p == "/repos/owner/dv-solve/pulls":
+            return list(reversed(seen.pulls))
         if p.startswith("/repos/owner/dv-solve/issues/") and p.endswith("/comments"):
             return [{"user": {"login": "cy"}, "body": "Also in count_all().",
                      "created_at": "2026-10-01T00:00:00Z"}]
         if p.startswith("/repos/owner/dv-solve/issues/"):
             return issues[int(p.rsplit("/", 1)[1])]
         raise forges.ForgeError("%s: HTTP 404" % url)
+    def post(url, headers, body, timeout=30):
+        assert headers.get("Authorization") == "token sekrit"
+        p = urllib.parse.urlparse(url).path[len("/api/v1"):]
+        seen.append(("POST " + p, body))
+        assert p == "/repos/owner/dv-solve/pulls"
+        n = 100 + len(seen.pulls)
+        pr = {"number": n, "html_url": "https://forge.test/owner/dv-solve/pulls/%d" % n,
+              "state": "open", "title": body["title"], "head": {"ref": body["head"]},
+              "base": {"ref": body["base"]}, "body": body["body"]}
+        seen.pulls.append(pr)
+        return pr
     monkeypatch.setattr(forges, "_get", get)
+    monkeypatch.setattr(forges, "_post", post)
     return seen
 
 
@@ -281,3 +296,87 @@ def test_watch_an_org_and_the_board_page(forge, tmp_path):
     assert 'href="/p/dv-solve-7"' in page and "1 made" in page
     r = c.post("/b/solver/watch/nope/poll", follow_redirects=False)
     assert "ok=0" in r.headers["location"]
+
+
+def _finish(e, outcome="Fixed count()", body="Changed count() to return n."):
+    """As if the packet's last step completed with a report."""
+    from work_packet import frontmatter
+    pkt = Packet(layout.run_dir(e["path"], e["root"]))
+    meta, b = pkt.load_status()
+    meta["state"] = "COMPLETED"
+    pkt.save_status(meta, b)
+    with open(os.path.join(pkt.path, "report.md"), "w") as f:
+        f.write(frontmatter.dump({"outcome": outcome, "deliverables": [
+            {"path": "count.py", "what": "the fix"}]}, body + "\n"))
+
+
+def test_pr(forge, tmp_path, source, capsys):
+    from work_packet import cli, pr
+    from test_setup import git
+    plan = starters.make(starters.from_values("issue", {
+        "issue": "home:owner/dv-solve#7", "dir": str(tmp_path / "w"), "hold": "yes"}))
+    e = registry.get(plan.name)
+    folder = layout.packet_folder(e["path"])
+    with pytest.raises(pr.PRError, match="no commits beyond main"):
+        pr.open_pr(e["name"])
+    (tmp_path / "w" / plan.name / "count.py").write_text("def count(n): return n\n")
+    git(folder, "add", "count.py")
+    git(folder, "commit", "-q", "-m", "fix count")
+    (tmp_path / "w" / plan.name / "README.md").write_text("changed\n")
+    with pytest.raises(pr.PRError, match="not committed.*README.md"):
+        pr.open_pr(e["name"])
+    git(folder, "checkout", "README.md")
+    _finish(e)
+    r = pr.open_pr(e["name"], dry_run=True)
+    assert r["branch"].startswith("wpk/7-") and r["base"] == "main" and r["ahead"] == 1
+    assert r["title"] == "Fix the off-by-one in count()"
+    assert r["body"].startswith("Closes #7.") and "Changed count()" in r["body"]
+    assert "`count.py`: the fix" in r["body"] and not forge.pulls
+    assert cli.main(["pr", e["name"]]) == 0
+    assert "opened pull request: https://forge.test/owner/dv-solve/pulls/100" in \
+        capsys.readouterr().out
+    assert git(source, "rev-parse", r["branch"]) == git(folder, "rev-parse", "HEAD")
+    rec = project.load_project(e["path"])["pr"]
+    assert rec["number"] == 100 and rec["base"] == "main"
+    [p] = forge.pulls
+    assert p["head"]["ref"] == r["branch"] and p["base"]["ref"] == "main"
+    # Again, after another commit: pushed, the same pull request found.
+    (tmp_path / "w" / plan.name / "count.py").write_text("def count(n):\n    return n\n")
+    git(folder, "commit", "-qam", "tidy")
+    r2 = pr.open_pr(e["name"])
+    assert not r2["new"] and r2["number"] == 100 and len(forge.pulls) == 1
+    assert git(source, "rev-parse", r["branch"]) == git(folder, "rev-parse", "HEAD")
+    # The dashboard's button: the same, said in the flash.
+    from test_dash_tasks import _client
+    got = _client().post("/p/%s/pr" % e["name"], follow_redirects=False)
+    assert got.status_code == 303 and "already+open" in got.headers["location"]
+    # A project not from a forge is refused with the reason.
+    other = project.new("plain", None, path=str(tmp_path / "plain"), packet=True)
+    with pytest.raises(pr.PRError, match="did not come from a forge"):
+        pr.open_pr(other.name)
+
+
+def test_pr_by_a_watcher_and_the_page(forge, tmp_path):
+    from work_packet import pr, watch
+    from test_dash_tasks import _client
+    from test_setup import git
+    _watch_board(tmp_path, pr="draft")
+    [w] = watch.watchers()
+    [(_, name)] = watch.poll(w)["made"]
+    e = registry.get(name)
+    folder = layout.packet_folder(e["path"])
+    assert pr.sync() == 0                              # not completed yet
+    _finish(e)
+    assert pr.sync() == 0                              # completed, nothing committed: kept
+    assert "nothing to hand off" in watch.load_state(w)["pr_failed"][name]
+    (tmp_path / "w" / name / "count.py").write_text("x\n")
+    git(folder, "add", "count.py")
+    git(folder, "commit", "-q", "-m", "fix")
+    assert pr.sync() == 0                              # a failure is not retried by itself
+    pr.forget_failure(name)
+    assert pr.sync() == 1 and forge.pulls[0]["title"].startswith("WIP: ")
+    assert pr.sync() == 0 and len(forge.pulls) == 1    # recorded: not opened twice
+    assert schema.validate_watches([{"name": "x", "repos": ["a:b/c"], "dir": "d",
+                                     "pr": "yes"}])[0].field == "watch[0].pr"
+    page = _client().get("/p/%s" % name).text
+    assert "pull request #100" in page and "Push to PR #100" in page

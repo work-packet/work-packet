@@ -50,7 +50,8 @@ Inbox, Outbox and Connections show in the tab as "later" and do nothing yet.
 A board can poll issue trackers and start a packet per new issue, on that
 board: `[[watch]]` tables in `boards/<board>.toml` (docs/starters-v1.md,
 Watchers). The board page lists them, with "Poll now"; `wpk watch` lists
-and polls them from the shell.
+and polls them from the shell. With `pr = "draft"` (or `"ready"`), a
+packet a watcher made is handed back as a pull request when it completes.
 
 ## CLI
 

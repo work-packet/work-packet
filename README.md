@@ -19,6 +19,7 @@ wpk new count-demo --prompt "Increment state/count.md until it reaches 8, then s
 wpk new my-task --here     # in a clone (or any folder): it becomes the packet, steps work in it
 wpk start issue issue=github:owner/repo#12   # a packet from an issue: clone, branch, objective (docs/starters-v1.md)
 wpk watch                         # boards' watchers: a packet per new labelled issue ([[watch]] in boards/<board>.toml)
+wpk pr <project> [--draft]        # hand a packet back to its forge: push its branch, open a pull request
 # The dashboard's New task does the same: a folder, a repo (searched on your forges), an issue.
 wpk convert old-project    # a v0.2 project into that layout (no-repo projects for now)
 wpk tick --until-idle      # or from cron: */5 * * * * wpk tick -j 2

@@ -255,6 +255,25 @@ def cmd_board(args) -> int:
     return 0
 
 
+def cmd_pr(args) -> int:
+    """Hand a packet back to its forge: push its branch, open a pull request."""
+    from . import pr
+    try:
+        r = pr.open_pr(args.project, draft=args.draft, dry_run=args.dry_run)
+    except pr.PRError as e:
+        return _err(str(e))
+    if args.dry_run:
+        print("would push %s (%d commit%s) to %s:%s and open a pull request into %s:" % (
+            r["branch"], r["ahead"], "" if r["ahead"] == 1 else "s", r["forge"], r["repo"],
+            r["base"]))
+        print("\n# %s\n\n%s" % (r["title"], r["body"]))
+        return 0
+    pr.forget_failure(args.project)
+    print("%s %s: %s" % ("opened" if r["new"] else "pushed; already open:",
+                         "draft" if r.get("draft") else "pull request", r["url"]))
+    return 0
+
+
 def cmd_watch(args) -> int:
     """Watchers on boards (docs/starters-v1.md): list them, or poll them now."""
     import datetime
@@ -1425,6 +1444,16 @@ def build_parser() -> argparse.ArgumentParser:
     wp.add_argument("which", nargs="?", help="board or board/name")
     wp.add_argument("--dry-run", action="store_true", help="say what it would make")
     p.set_defaults(func=cmd_watch)
+
+    p = sub.add_parser("pr", help="hand a packet back to its forge: push, open a pull request",
+                       description="Push the packet's branch and open a pull request into "
+                       "its repo's default branch, from the packet's report; for an issue, "
+                       "one that closes it. Again: pushes, and finds the same one "
+                       "(docs/starters-v1.md, Hand-off).")
+    p.add_argument("project")
+    p.add_argument("--draft", action="store_true", help="open it as a draft")
+    p.add_argument("--dry-run", action="store_true", help="say what it would do")
+    p.set_defaults(func=cmd_pr)
 
     p = sub.add_parser("ps", help="list packets of registered projects")
     p.add_argument("--all", action="store_true", help="include finished projects")

@@ -5,7 +5,7 @@
 token is found. Tokens are read from the environment (or ``gh auth token``)
 when used, never stored.
 
-Every request goes through ``_get`` so tests can replace it.
+Every request goes through ``_get`` or ``_post`` so tests can replace them.
 """
 
 import json
@@ -34,6 +34,25 @@ def _get(url, headers, timeout=20):
         raise ForgeError("%s: HTTP %d %s" % (url.split("?")[0], e.code, e.reason)) from None
     except (urllib.error.URLError, OSError, ValueError) as e:
         raise ForgeError("%s: %s" % (url.split("?")[0], e)) from None
+
+
+def _post(url, headers, body, timeout=30):
+    """POST ``body`` as JSON to ``url``: the decoded JSON. Raises ForgeError."""
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                 headers=dict(headers, **{"Content-Type": "application/json"}),
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            why = json.loads(e.read().decode("utf-8")).get("message") or ""
+        except (OSError, ValueError, AttributeError):
+            why = ""
+        raise ForgeError("%s: HTTP %d %s%s" % (url, e.code, e.reason,
+                                               ": " + why if why else "")) from None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise ForgeError("%s: %s" % (url, e)) from None
 
 
 def slug(text, n=40):
@@ -70,6 +89,15 @@ class Forge:
         """Every repo of a user or org (not archived): ["owner/name"]."""
         raise NotImplementedError
 
+    def pull_for(self, repo, branch):
+        """The newest pull request from ``branch`` of ``repo`` (any state):
+        {number, url, state, draft}, or None."""
+        raise NotImplementedError
+
+    def open_pull(self, repo, branch, base, title, body, draft=False):
+        """Open a pull request from ``branch`` into ``base``: {number, url, state, draft}."""
+        raise NotImplementedError
+
     # -- helpers --------------------------------------------------------------------
     def token(self):
         return os.environ.get(self.token_env) if self.token_env else None
@@ -82,6 +110,15 @@ class Forge:
         if t:
             h["Authorization"] = "token %s" % t
         return _get(url, h)
+
+    def _send(self, path, body):
+        h = {"Accept": "application/json", "User-Agent": "work-packet"}
+        t = self.token()
+        if not t:
+            raise ForgeError("forge %s: no token (%s)" % (self.name, self.token_env or
+                                                          "GITHUB_TOKEN"))
+        h["Authorization"] = "token %s" % t
+        return _post(self.api + path, h, body)
 
     def _cached(self, key, fn, ttl=120):
         now = time.monotonic()
@@ -157,6 +194,15 @@ class GitHub(Forge):
                              labels=",".join(labels))
         return [_brief(i) for i in got if "pull_request" not in i]
 
+    def pull_for(self, repo, branch):
+        got = self._json("/repos/%s/pulls" % repo, state="all",
+                         head="%s:%s" % (repo.split("/")[0], branch), per_page=10)
+        return _pull(got[0]) if got else None
+
+    def open_pull(self, repo, branch, base, title, body, draft=False):
+        return _pull(self._send("/repos/%s/pulls" % repo, {
+            "title": title, "head": branch, "base": base, "body": body, "draft": draft}))
+
     def issue(self, repo, number):
         i = self._json("/repos/%s/issues/%d" % (repo, number))
         cs = self._json("/repos/%s/issues/%d/comments" % (repo, number), per_page=100) \
@@ -203,6 +249,23 @@ class Forgejo(Forge):
         cs = self._json("/repos/%s/issues/%d/comments" % (repo, number)) \
             if i.get("comments") else []
         return _issue_out(i, cs)
+
+    def pull_for(self, repo, branch):
+        got = self._json("/repos/%s/pulls" % repo, state="all", limit=50)
+        got = [p for p in got if (p.get("head") or {}).get("ref") == branch]
+        return _pull(got[0]) if got else None
+
+    def open_pull(self, repo, branch, base, title, body, draft=False):
+        # Forgejo has no draft flag; a "WIP:" title is its work in progress
+        return _pull(self._send("/repos/%s/pulls" % repo, {
+            "title": ("WIP: " if draft else "") + title, "head": branch, "base": base,
+            "body": body}))
+
+
+def _pull(p):
+    return {"number": p["number"], "url": p["html_url"],
+            "state": "merged" if p.get("merged") or p.get("merged_at") else p["state"],
+            "draft": bool(p.get("draft")) or p.get("title", "").startswith("WIP:")}
 
 
 def _brief(i):

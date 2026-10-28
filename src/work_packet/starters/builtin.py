@@ -165,5 +165,6 @@ class IssueStarter(Starter):
                                                    url=i["url"], input=inp, branch=branch))
         r["inputs"] = [{"name": inp, "text": issue_markdown(repo, i)}]
         r["origin"] = {"kind": "issue", "forge": fname, "repo": repo, "number": n,
-                       "title": i["title"], "url": i["url"]}
+                       "title": i["title"], "url": i["url"], "branch": branch,
+                       "base": info.get("default_branch") or ""}
         return r

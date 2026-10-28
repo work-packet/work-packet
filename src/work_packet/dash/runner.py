@@ -106,8 +106,9 @@ class Runner:
 
     def _watch_loop(self):
         """Poll the boards' watchers that are due; poke the dispatcher when one
-        made a packet. Only here, so one runner per home polls."""
-        from .. import watch
+        made a packet; open the pull requests of their packets that completed
+        (pr.sync). Only here, so one runner per home polls."""
+        from .. import pr, watch
 
         def report(w, r):
             for k, name in r["made"]:
@@ -122,4 +123,9 @@ class Runner:
                     self.poke()
             except Exception:                  # keep polling; say why
                 log.exception("watch pass failed")
+            try:
+                pr.sync(self.home, report=lambda name, msg, ok: log.warning(
+                    "pr %s: %s%s", name, "" if ok else "not opened: ", msg))
+            except Exception:
+                log.exception("pull request pass failed")
             self._stopping.wait(self.watch_tick)

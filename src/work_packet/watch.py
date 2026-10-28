@@ -86,6 +86,17 @@ def _save_state(w, s, h):
     fsutil.atomic_write(p, json.dumps(s, indent=1, sort_keys=True))
 
 
+def update_state(w, h, change):
+    """Apply ``change(state)`` under the watcher's lock (waiting for a poll)."""
+    lock = state_path(w, h) + ".lock"
+    os.makedirs(os.path.dirname(lock), exist_ok=True)
+    with open(lock, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        s = load_state(w, h)
+        change(s)
+        _save_state(w, s, h)
+
+
 def every(w):
     return schema.parse_duration(w["every"]) if w.get("every") else EVERY_S
 

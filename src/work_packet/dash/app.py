@@ -291,6 +291,23 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             "moved %s from %s to %s" % (e["name"], was, to)
         return back(url, executor.Outcome(executor.OK, msg), poke_runner=False)
 
+    async def pr_open(request):
+        """Hand the packet back to its forge: push, open (or find) the pull request."""
+        from .. import executor, pr
+        e = entry(request)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        f = await form(request)
+        url = "/p/%s" % urllib.parse.quote(e["name"])
+        try:
+            r = await run_in_threadpool(pr.open_pr, e["name"], home,
+                                        draft=(f.get("draft") or [""])[0] == "1", by=who(request))
+        except pr.PRError as ex:
+            return back(url, executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+        await run_in_threadpool(pr.forget_failure, e["name"], home)
+        return back(url, executor.Outcome(executor.OK, "%s %s" % (
+            "opened" if r["new"] else "pushed; already open:", r["url"])), poke_runner=False)
+
     # --- the scheduler (docs/scheduler.md §9) ------------------------------------
 
     async def sched_page(request):
@@ -1215,6 +1232,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         Route("/b/{board}/delete", board_delete, methods=["POST"]),
         Route("/b/{board}/watch/{name}/poll", watch_poll, methods=["POST"]),
         Route("/p/{project}/board", board_move, methods=["POST"]),
+        Route("/p/{project}/pr", pr_open, methods=["POST"]),
         Route("/healthz", health),
         Route("/static/live.js", live_js),
         Route("/static/pane.js", pane_js),

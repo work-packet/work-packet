@@ -1315,7 +1315,8 @@ _ORIGIN = {}
 
 def origin(entry):
     """Where a packet came from (``project.toml [origin]``, docs/starters-v1.md):
-    {label, url}, or None."""
+    {label, url, forge (it can be handed off as a pull request), pr ([pr]: url,
+    number)}, or None."""
     path = os.path.join(entry["path"], "project.toml")
     try:
         mt = os.stat(path).st_mtime_ns
@@ -1326,16 +1327,19 @@ def origin(entry):
         return hit[1]
     from ..tomlio import load_toml
     try:
-        o = load_toml(path).get("origin")
+        d = load_toml(path)
     except (OSError, ValueError):
-        o = None
+        d = {}
+    o, pr = d.get("origin"), d.get("pr")
     out = None
     if isinstance(o, dict) and o:
         if o.get("kind") == "issue":
             label = "%s#%s %s" % (o.get("repo", ""), o.get("number", ""), o.get("title", ""))
         else:
             label = o.get("title") or o.get("repo") or o.get("url") or o.get("kind", "")
-        out = {"label": label.strip(), "url": o.get("url") or ""}
+        out = {"label": label.strip(), "url": o.get("url") or "",
+               "forge": bool(o.get("forge") and o.get("repo")),
+               "pr": pr if isinstance(pr, dict) and pr.get("url") else None}
     _ORIGIN[path] = (mt, out)
     return out
 

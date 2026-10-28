@@ -106,6 +106,7 @@ every = "15m"             # how often to poll (default 15m)
 hold = true               # held for setup (default); false: the runner starts it
 from = "dv-solve-base"    # copy this project's setup (optional); model, harness too
 max_new = 5               # at most this many packets per poll (default 5)
+pr = "draft"              # off (default), draft or ready: open a pull request when one completes
 enabled = true
 ```
 
@@ -128,6 +129,40 @@ packet with sibling clones: that waits for R7 (run-binding-v1.md). Until
 then the packet clones the issue's repo, and the objective names the
 board's other repos.
 
+### Hand-off: a pull request
+
+A packet that came from a forge hands its work back the way a person would:
+push its branch, open a pull request into the repo's default branch.
+
+- **What goes up:** the branch the starter made (`[origin] branch`, else
+  the one checked out), into `[origin] base` (else the repo's default
+  branch). Title: the issue's title (else the report's outcome); body:
+  `Closes #n` for an issue, the report's outcome, body and deliverables,
+  and the packet's name.
+- **Refused, with the reason, before anything is pushed:** not from a forge,
+  not a git clone, on the base branch or a detached HEAD, changes not
+  committed (untracked files are left alone), or no commits beyond the base.
+- **Pushing:** `git push -u origin <branch>`, never forced, with the
+  clone's own credentials. The API call uses the forge's token
+  (`token_env`), which needs write access to pull requests.
+- **Once:** the pull request is kept in `project.toml [pr]` (url, number,
+  branch, base, opened) and shown under the project's name. Opening again
+  pushes the new commits and finds the same pull request (by its branch)
+  instead of opening a second.
+- **By hand:** `wpk pr <project> [--draft] [--dry-run]`; on the project page,
+  "Open PR" / "Draft PR", then "Push to PR #n".
+- **By itself:** a watcher with `pr = "draft"` or `"ready"`. When a packet
+  it made is COMPLETED (not failed) and has no `[pr]`, the runner opens one
+  (`pr.sync`, every minute beside the watchers). A failure is kept in the
+  watcher's state (`pr_failed`), logged, and not retried by itself; opening
+  it by hand clears it. Forgejo has no draft flag, so a draft there is a
+  `WIP:` title.
+
+With `hold = false` and `pr = "draft"`, a watcher runs the whole loop:
+issue → packet → steps → draft pull request, and a person reviews the pull
+request, not the packet. Forge review comments back into the packet (a new
+task from the review) is the next step of this loop.
+
 ## Steps
 
 - [x] S1. Recipe, maker, starter registry; `folder` and `clone` (path or
@@ -145,9 +180,13 @@ board's other repos.
   issue lists, `watch.py` (poll, dedupe, make, put on the board), the
   runner polls, `wpk watch [list|poll]`, shown on the board page with
   "Poll now"; `owner/*` for all of an org's repos.
-- [ ] S6 (later). Finishing back to the forge (push the branch, open a PR:
-  with R8 `wpk done`); multi-repo issue packets (with R7); sub-boards
-  (a watcher files each issue on its repo's sub-board).
+- [x] S6. Hand-off as a pull request: `pr.py` (`open_pr`, `sync`), forges'
+  `pull_for`/`open_pull`, `[pr]` in `project.toml`, `wpk pr`, "Open PR" on
+  the project page, watchers' `pr = off|draft|ready`.
+- [ ] S7 (later). Review comments on the pull request back into the packet
+  as a new task; multi-repo issue packets (with R7); sub-boards (a watcher
+  files each issue on its repo's sub-board); `wpk done` (R8) checks the
+  pull request is open or merged instead of only "pushed".
 
 ## Status
 
@@ -174,3 +213,9 @@ board's other repos.
   [board[/name]] [--dry-run]]`, a Watchers table on `/b/<board>` with "Poll
   now" (`POST /b/<board>/watch/<name>/poll`). Forges: `labels=` on issue
   lists, `owner_repos`. Tests in `tests/test_starters.py` (10).
+- 2026-10-28: S6 built: hand-off opens a pull request (above). The issue
+  starter now keeps `branch` and `base` in `[origin]`. Tests: `test_pr`,
+  `test_pr_by_a_watcher_and_the_page` (a fake Forgejo that takes pull
+  requests; the push goes to a local repo). Suite 796 passed. Not tried
+  live: needs the home Forgejo's `[[forge]]` entry and a token with write
+  access.

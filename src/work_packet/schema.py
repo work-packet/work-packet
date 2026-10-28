@@ -806,11 +806,14 @@ def validate_project(d):
              "step_timeout", "max_attempts", "step_budget_usd", "step_context_tokens",
              "carry_session", "carry_ttl", "carry_factor", "permissions", "setup",
              "budget_usd_per_day", "budget_quota_per_week", "max_steps_per_hour",
-             "origin") + PROJECT_SCHED_KEYS
+             "origin", "pr") + PROJECT_SCHED_KEYS
     out = _unknown(d, known) + _validate_setup(d.get("setup")) + _validate_project_sched(d)
     if "origin" in d and not (isinstance(d["origin"], dict) and all(
             isinstance(v, (str, int)) for v in d["origin"].values())):
         out.append(_err("origin", "must be a table of strings and numbers (docs/starters-v1.md)"))
+    if "pr" in d and not (isinstance(d["pr"], dict) and all(
+            isinstance(v, (str, int)) for v in d["pr"].values())):
+        out.append(_err("pr", "must be a table of strings and numbers (docs/starters-v1.md)"))
     if not is_name(d.get("name")):
         out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
     if not is_wpid(d.get("root")):
@@ -911,7 +914,7 @@ def validate_board(d, stem=None):
 
 
 WATCH_KEYS = ("name", "repos", "dir", "labels", "query", "every", "hold", "from", "model",
-              "harness", "max_new", "enabled")      # docs/starters-v1.md, watchers
+              "harness", "max_new", "enabled", "pr")      # docs/starters-v1.md, watchers
 WATCH_REPO_RX = re.compile(r"^[a-z0-9][a-z0-9_-]*:[\w.-]+/(\*|[\w.-]+)$")   # owner/*: all
 
 
@@ -946,6 +949,9 @@ def validate_watches(lst):
         for x in ("hold", "enabled"):
             if x in w and not isinstance(w[x], bool):
                 out.append(_err(k + "." + x, "must be true or false"))
+        if "pr" in w and w["pr"] not in ("off", "draft", "ready"):
+            out.append(_err(k + ".pr", "off, draft or ready (open a pull request when a "
+                            "packet completes)"))
         if "every" in w:
             try:
                 if parse_duration(w["every"]) < 60:
