@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% import "_console.html" as cv %}
+{% block title %}Console · {{ m.title or m.id }}{% endblock %}
+{% block crumbs %}/ <a href="/console">Console</a> / {{ m.id }}{% endblock %}
+{% block head %}{{ cv.style() }}{% endblock %}
+{% block main %}
+<div class="titlebar"><h1>{{ m.title or "(no question yet)" }}</h1>
+  <span class="muted">about <a href="{{ m.page }}">{% if m.wpid %}{{ m.project }} / {{ m.wpid[:8] }}{% elif m.project %}{{ m.project }}{% else %}the server{% endif %}</a>
+  · {{ m.model }} · {{ m.turns }} repl{{ "y" if m.turns == 1 else "ies" }} · {{ m.cost|money or "$0" }} · started {{ m.created|epoch }} by {{ m.by }}{% if busy %} · <span class="state running">answering</span>{% endif %}</span></div>
+<p class="muted">Read-only. To go on with it, open the console on <a href="{{ m.page }}">its page</a> (<kbd>`</kbd>); if it is not that page's latest, <code>/sessions {{ m.id.split("-")[-1] }}</code> first. Its files: <code>{{ m.cwd }}</code> was the agent's directory.</p>
+<div class="tx panel">
+{% for x in ev %}
+  {% if x.k == "ask" %}<div class="q">{{ x.text }}</div><div class="who">{{ x.by }} · {{ x.t|epoch }}</div>
+  {% elif x.k == "say" %}<div class="say">{% for ln, prop, acted in x.parts %}{% if prop %}<span class="prop">{{ prop.line }}</span> <span class="muted">{{ acted or ("waited for a click" if not prop.auto else "") }}</span>{% else %}{{ ln }}{% endif %}{% if not loop.last %}
+{% endif %}{% endfor %}</div>
+  {% elif x.k == "tool" %}<div class="tool">· {{ x.name }} {{ x.what }}</div>
+  {% elif x.k == "cmd" %}<div class="card {{ 'ok' if x.out.ok else 'bad' }}"><div class="in">{{ x.line }} <span class="who">· {{ "run at once" if x.auto else x.by }}{% if x.ref and not x.auto %} (proposed){% endif %}</span></div>
+    <div class="head">{% if x.out.href %}<a href="{{ x.out.href }}">{{ x.out.text }}</a>{% else %}{{ x.out.text }}{% endif %}</div>
+    {% for l in x.out.lines or [] %}<div>{% if l.href %}<a href="{{ l.href }}">{{ l.text }}</a>{% else %}{{ l.text }}{% endif %}</div>{% endfor %}</div>
+  {% elif x.k == "decline" %}<div class="tool">· dismissed a proposal ({{ x.by }})</div>
+  {% elif x.k == "end" %}<div class="end{{ '' if x.ok else ' bad' }}">{% if not x.ok %}{{ x.error or "failed" }} · {% endif %}${{ "%.3f"|format(x.cost or 0) }} so far</div>
+  {% elif x.k == "note" %}<div class="tool">{{ x.text }}</div>
+  {% endif %}
+{% else %}
+  <p class="muted">Empty.</p>
+{% endfor %}
+</div>
+{% endblock %}

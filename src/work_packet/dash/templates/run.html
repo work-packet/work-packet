@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% import "_dfm.html" as dfm with context %}
+{#- One DFM run as a list (docs/dfm-events.md §6): what it is doing, has done and plans to do. -#}
+{% block title %}{{ r.title }}{% endblock %}
+{% block crumbs %}/ <a href="/runs">DFM runs</a>{% if r.project and r.wpid %} / <a href="/p/{{ r.project|urlencode }}/{{ r.wpid }}"><code>{{ r.wpid[:8] }}</code></a>{% endif %} / <code>{{ r.sid[-8:] }}</code>{% endblock %}
+{% block head %}{{ dfm.style() }}
+<style>
+.dfmhead { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.dfmhead h1 { margin: 0; font-size: 18px; }
+.dfmhead .dfmbar { width: 200px; }
+table.tasks td.t { white-space: nowrap; }
+table.tasks td.cmd { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
+ul.marks { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+ul.marks li.error { color: var(--FAILED); }
+</style>
+{% endblock %}
+{% macro name(n) -%}<code title="{{ n.id }}">{{ n.label or n.name }}</code>{%- endmacro %}
+{% macro log(n) -%}{% if n.log or n.logfile %} <a href="/runs/{{ r.sid }}/log.txt?id={{ n.id|urlencode }}" target="_blank">log</a>{% endif %}{%- endmacro %}
+{% macro marks(n) -%}
+{% if n.errors %}<span class="err">{{ n.errors }} error{{ 's' if n.errors != 1 }}</span>{% endif %}
+{% if n.warnings %}<span class="muted">{{ n.warnings }} warning{{ 's' if n.warnings != 1 }}</span>{% endif %}
+{% if n.markers %}<ul class="marks">{% for m in n.markers %}<li class="{{ m.severity }}">{% if m.loc and m.loc.path %}<code>{{ m.loc.path }}{% if m.loc.line %}:{{ m.loc.line }}{% endif %}</code> {% endif %}{{ m.msg }}</li>{% endfor %}</ul>{% endif %}
+{%- endmacro %}
+{% block main %}
+<div class="dfmhead">
+  <h1><code>{{ r.title }}</code></h1>
+  {{ dfm.status(r) }}
+  <span>{{ r.elapsed|secs }}</span>
+  {{ dfm.bar(r) }}
+  <span>{{ r.finished }}/{{ r.total }}</span>
+  {% if r.failed %}<span class="err">{{ r.failed|length }} failed</span>{% endif %}
+</div>
+<p class="muted" style="font-size:12px">
+  {{ r.host }} pid {{ r.pid }}{% if r.peer and r.peer != r.pid %} (socket peer {{ r.peer }}){% endif %} · <code>{{ r.cwd }}</code>
+  {% if r.rundir %}· rundir <code>{{ r.rundir }}</code>{% endif %}
+  {% if r.jobs %}· -j{{ r.jobs }}{% endif %}
+  {% if r.dfm_run_id %}· DFM run {{ r.dfm_run_id }}{% endif %}
+  {% if r.parent %}· started inside <a href="/runs/{{ r.parent }}">another run</a>{% endif %}
+  {% if r.wpid %}· {% if r.project %}<a href="/p/{{ r.project|urlencode }}/{{ r.wpid }}">packet <code>{{ r.wpid[:8] }}</code></a>{% else %}packet <code>{{ r.wpid[:8] }}</code>{% endif %}{% if r.step %} step {{ r.step }}{% if r.attempt and r.attempt != "1" %} attempt {{ r.attempt }}{% endif %}{% endif %}{% endif %}
+</p>
+{% if r.status == "lost" %}<div class="flash bad">The run stopped reporting{% if r.closed %} ({{ r.closed }}){% endif %} before it finished: the process was killed, hung, or the board restarted while it ran. What follows is the last thing it reported.</div>{% endif %}
+{% if r.partial or r.gaps or r.dropped %}<p class="muted" style="font-size:12px">Incomplete stream:{% if r.partial %} the start is missing;{% endif %}{% if r.gaps %} {{ r.gaps }} lines lost in transit;{% endif %}{% if r.dropped %} DFM dropped {{ r.dropped }} events;{% endif %} counts may be off.</p>{% endif %}
+
+{% if kids %}<h2>Nested runs ({{ kids|length }})</h2>{{ dfm.table(kids, packet=False) }}{% endif %}
+
+<h2>Running ({{ r.running|length }})</h2>
+{% if r.running %}
+<div class="wrap"><table class="tasks">
+  {% for n in r.running %}
+  <tr><td>{{ name(n) }}</td><td class="t num">{{ n.for_s|secs }}</td><td class="cmd">{{ n.cmd or n.state }}</td><td>{{ log(n) }}</td><td>{{ marks(n) }}</td></tr>
+  {% endfor %}
+</table></div>
+{% else %}<p class="muted">Nothing is running.</p>{% endif %}
+
+{% if r.failed %}
+<h2 class="err">Failed ({{ r.failed|length }})</h2>
+<div class="wrap"><table class="tasks">
+  {% for n in r.failed %}
+  <tr><td>✗ {{ name(n) }}</td><td class="t num">{{ n.dur|secs }}</td><td>status {{ n.status }}</td><td>{{ log(n) }}</td><td>{{ marks(n) }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+
+<h2>Pending ({{ r.pending|length }})</h2>
+{% if r.pending %}
+<div class="wrap"><table class="tasks">
+  {% for n in r.pending %}
+  <tr><td>{{ name(n) }}</td><td class="muted">{% if n.waiting %}waiting on <code>{{ n.waiting }}</code>{% if n.n_waiting > 1 %} and {{ n.n_waiting - 1 }} more{% endif %}{% elif r.live %}ready{% else %}never ran{% endif %}</td></tr>
+  {% endfor %}
+</table></div>
+{% else %}<p class="muted">Nothing left to run.</p>{% endif %}
+
+{% if r.skipped %}
+<details id="skipped"><summary><strong>Skipped ({{ r.skipped|length }})</strong> <span class="muted">after a failure</span></summary>
+<div class="wrap"><table class="tasks">{% for n in r.skipped %}<tr><td>{{ name(n) }}</td></tr>{% endfor %}</table></div>
+</details>
+{% endif %}
+
+<h2>Done ({{ r.done|length + r.quiet|length }})</h2>
+{% if r.done %}
+<div class="wrap"><table class="tasks">
+  {% for n in r.done %}
+  <tr><td>✓ {{ name(n) }}</td><td class="t num">{{ n.dur|secs }}</td><td>{{ log(n) }}</td><td>{{ marks(n) }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+{% if r.quiet %}
+<details id="quiet"><summary class="muted">· {{ r.quiet|length }} up to date or cached</summary>
+<div class="wrap"><table class="tasks">{% for n in r.quiet %}<tr><td>{{ name(n) }}</td><td class="muted">{{ n.quiet|replace("_", " ") }}</td></tr>{% endfor %}</table></div>
+</details>
+{% endif %}
+{% if not r.done and not r.quiet %}<p class="muted">Nothing has finished yet.</p>{% endif %}
+
+<details id="argv"><summary class="muted">Command and context</summary>
+<pre>{{ r.argv|join(" ") }}</pre>
+{% if r.ctx %}<dl class="kv">{% for k, v in r.ctx|dictsort %}<dt>{{ k }}</dt><dd><code>{{ v }}</code></dd>{% endfor %}</dl>{% endif %}
+<p class="muted">Stream <code>{{ r.sid }}</code>{% if r.scopes %} · {{ r.scopes }} dynamic sub-graph{{ 's' if r.scopes != 1 }}{% endif %}</p>
+</details>
+{% endblock %}

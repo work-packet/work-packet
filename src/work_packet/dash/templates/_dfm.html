@@ -1,0 +1,53 @@
+{#- DFM runs (docs/dfm-events.md §5): the table on /runs, a step and a packet. -#}
+{% macro status(r) -%}
+<span class="state dfm-{{ r.status }}{{ ' pulse' if r.live }}">{{ r.status }}</span>
+{%- endmacro %}
+{% macro bar(r) -%}
+<span class="dfmbar" title="{{ r.finished }} of {{ r.total }} tasks finished"><i style="width:{{ r.pct }}%"></i></span>
+{%- endmacro %}
+{% macro table(runs, packet=True) -%}
+<div class="wrap"><table>
+  <tr><th>Run</th><th>Status</th><th>Progress</th><th class="num">Failed</th><th>Started</th><th class="num">Time</th>{% if packet %}<th>Packet</th>{% endif %}<th>Where</th></tr>
+  {% for r in runs %}
+  <tr>
+    <td><a href="/runs/{{ r.sid }}"><code>{{ r.title }}</code></a>{% if r.parent %} <span class="muted" title="started by a task of run {{ r.parent }}">nested</span>{% endif %}</td>
+    <td>{{ status(r) }}</td>
+    <td style="white-space:nowrap">{{ bar(r) }} <span class="muted">{{ r.finished }}/{{ r.total }}</span></td>
+    <td class="num {{ 'err' if r.failed }}">{{ r.failed|length or "" }}</td>
+    <td style="white-space:nowrap">{{ r.t0|epoch }}</td>
+    <td class="num">{{ r.elapsed|secs }}</td>
+    {% if packet %}<td>{% if r.wpid and r.project %}<a href="/p/{{ r.project|urlencode }}/{{ r.wpid }}"><code>{{ r.wpid[:8] }}</code></a>{% if r.step %} step {{ r.step }}{% endif %}{% elif r.wpid %}<code>{{ r.wpid[:8] }}</code>{% else %}<span class="muted">shell</span>{% endif %}</td>{% endif %}
+    <td class="muted" style="word-break:break-all">{{ r.host }}:{{ r.cwd }}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{%- endmacro %}
+{% macro panel(r, next_n=3) -%}
+{#- One run, compact: the live view's side column, next to the processes. -#}
+<div class="panel dfmpanel">
+  <div class="dfmline"><a href="/runs/{{ r.sid }}"><code>{{ r.title }}</code></a> {{ status(r) }}
+    <span class="muted">{{ r.elapsed|secs }}</span></div>
+  <div class="dfmline">{{ bar(r) }} <span class="muted">{{ r.finished }}/{{ r.total }} done{% if r.failed %} · </span><span class="err">{{ r.failed|length }} failed</span>{% else %}</span>{% endif %}{% if r.pending %} <span class="muted">· {{ r.pending|length }} to go</span>{% endif %}</div>
+  {% if r.running %}<table class="procs dfmtasks">
+    {% for n in r.running %}<tr><td class="cmd" title="{{ n.id }}"><span class="dot run"></span><code>{{ n.label or n.name }}</code>{% if n.cmd %} <span class="muted" title="{{ n.cmd }}">{{ n.cmd }}</span>{% endif %}</td><td class="num muted">{{ n.for_s|secs }}</td></tr>{% endfor %}
+  </table>{% endif %}
+  {% if r.failed %}<table class="procs dfmtasks">
+    {% for n in r.failed[:5] %}<tr><td class="cmd" title="{{ n.markers[0].msg if n.markers else n.id }}"><span class="err">✗</span> <code>{{ n.label or n.name }}</code>{% if n.markers %} <span class="err">{{ n.markers[0].msg }}</span>{% endif %}</td><td class="num">{% if n.log or n.logfile %}<a href="/runs/{{ r.sid }}/log.txt?id={{ n.id|urlencode }}" target="_blank">log</a>{% endif %}</td></tr>{% endfor %}
+    {% if r.failed|length > 5 %}<tr><td class="muted">… and {{ r.failed|length - 5 }} more</td><td></td></tr>{% endif %}
+  </table>{% endif %}
+  {% if r.live and r.pending %}<div class="muted dfmnext">Next: {% for n in r.pending[:next_n] %}<code>{{ n.label or n.name }}</code>{% if n.waiting %} (after <code>{{ n.waiting }}</code>){% endif %}{{ ", " if not loop.last }}{% endfor %}{% if r.pending|length > next_n %} …{% endif %}</div>{% endif %}
+</div>
+{%- endmacro %}
+{% macro style() -%}
+<style>
+.state.dfm-running { background: var(--running); } .state.dfm-ok { background: var(--COMPLETED); }
+.state.dfm-fail, .state.dfm-error { background: var(--FAILED); } .state.dfm-lost { background: var(--unknown); }
+.dfmbar { display: inline-block; width: 90px; height: 8px; border-radius: 4px; background: var(--line); vertical-align: middle; overflow: hidden; }
+.dfmpanel { padding: 8px 10px; margin-bottom: 10px; font-size: 13px; }
+.dfmpanel .dfmline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.dfmpanel table.dfmtasks { margin-top: 4px; }
+.dfmpanel .dfmnext { font-size: 12px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dfmpanel .dot.run { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--running); margin-right: 6px; animation: pulse 1.4s ease-in-out infinite; }
+.dfmbar i { display: block; height: 100%; background: var(--COMPLETED); }
+</style>
+{%- endmacro %}

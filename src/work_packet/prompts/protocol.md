@@ -78,7 +78,18 @@ executor; if you change one, this step is thrown away.
       q: One commit per item, or per sub-item?
       recommend: per item
       choices: [per item, per sub-item]   # optional
+    - id: budget
+      q: Raise the step budget to 5 USD, or split the item into smaller steps?
+      recommend: raise
+      choices: [raise, split]
+      sets: {raise: {step_budget_usd: 5.00}}   # this answer applies the setting
   ```
+
+  When a step's budget, time or context is too small for the work, ask
+  with `sets` so the owner's answer changes it: `{key: value}` applies on
+  a yes; `{choice: {key: value}}` when that choice is picked. Keys:
+  `step_budget_usd`, `step_timeout`, `step_context_tokens`. Asking in
+  words alone changes nothing.
 
   To start sub-tasks, add `spawn`, a list of children. Each child is a new
   packet that starts with `instruction` as its first instruction and a

@@ -132,6 +132,14 @@ def test_handoff_note_from_stdin(asker, monkeypatch):
     ({"resume": "now", "ask": [{"id": "a"}]}, "x", "the question as a non-empty string"),
     ({"resume": "now", "ask": [{"id": "a", "q": "x", "grants": "Bash"}]}, "x", "list of strings"),
     ({"resume": "now", "ask": [{"id": "a", "q": "x", "why": 1}]}, "x", "unknown key"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "sets": {"model": "m"}}]}, "x",
+     "cannot be set by an answer"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "sets": {"step_budget_usd": -1}}]}, "x",
+     "must be a number > 0"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "choices": ["up", "no"],
+                                "sets": {"up": {"max_attempts": 9}}}]}, "x",
+     "cannot be set by an answer"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "sets": []}]}, "x", "must be a mapping"),
 ])
 def test_ask_rules(meta, body, match):
     probs = schema.validate_memento(meta, body)
@@ -313,3 +321,50 @@ def test_string_ask_answers_as_q1(asker):
     executor.step(proj)
     assert main(["answer", root.path, "q1=blue"]) == 0
     assert records(root, "handoff")[-1]["answers"] == {"q1": "blue"}
+
+
+@pytest.fixture
+def budget(tmp_path, fake):
+    fake("budget_asker")
+    proj, root = make_project(tmp_path)
+    executor.step(proj)
+    return proj, root
+
+
+def test_sets_shown(budget, capsys):
+    proj, root = budget
+    assert_clean(proj)
+    assert main(["show", root.path]) == 0
+    out = capsys.readouterr().out
+    assert '"raise budget" sets step_budget_usd 5.0' in out
+    assert "yes sets step_timeout 60m" in out
+
+
+def test_answer_choice_applies_sets(budget):
+    proj, root = budget
+    assert main(["answer", root.path, "-r"]) == 0
+    d = toml(proj)
+    assert (d["step_budget_usd"], d["step_timeout"]) == (5.0, "60m")
+    assert sorted(records(root, "config")[-1]["changes"]) == \
+        ["set step_budget_usd = 5.0", "set step_timeout = '60m'"]
+    assert status(root)["state"] == "RUNNABLE"
+    from work_packet import project
+    assert project.settings(proj).step_budget_usd == 5.0
+    assert_clean(proj)
+
+
+def test_answer_other_choice_sets_nothing(budget):
+    proj, root = budget
+    assert main(["answer", root.path, "budget=split smaller", "time=no"]) == 0
+    assert "step_budget_usd" not in toml(proj) and "step_timeout" not in toml(proj)
+    assert records(root, "config") == []
+
+
+def test_answer_sets_over_the_ceiling_refused(budget):
+    proj, root = budget
+    os.makedirs(os.environ["WPK_HOME"], exist_ok=True)
+    with open(os.path.join(os.environ["WPK_HOME"], "config.toml"), "a") as f:
+        f.write("max_step_budget_usd = 3.0\n")
+    assert main(["answer", root.path, "budget=Raise Budget"]) != 0
+    assert "step_budget_usd" not in toml(proj)
+    assert status(root)["state"] == "NEEDS_INPUT"

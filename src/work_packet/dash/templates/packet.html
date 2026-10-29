@@ -3,6 +3,7 @@
 {% import "_tokens.html" as tkm %}
 {% import "_sched.html" as schm with context %}
 {% import "_report.html" as rpm %}
+{% import "_console.html" as cv %}
 {% import "_answer.html" as ans with context %}
 {% block title %}{{ p.short }} · {{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <code>{{ p.short }}</code>{% endblock %}
@@ -83,6 +84,10 @@
       {% if f.text is not none %}<pre>{{ f.text }}</pre>{% else %}<p class="muted">Binary or too large to show.</p>{% endif %}
     </details>
     {% endfor %}
+    {% if convs %}
+    <h2 id="conversations">Console</h2>
+    {{ cv.table(convs, False) }}
+    {% endif %}
     {% if p.children %}
     <h2>Children</h2>
     <table>
@@ -128,6 +133,13 @@
 </table></div>
 {% else %}
 <p class="muted">No steps yet.</p>
+{% endif %}
+
+{% if dfm %}
+{% import "_dfm.html" as dfmm with context %}{{ dfmm.style() }}
+<h2 id="dfm">DFM runs ({{ dfm|length }})</h2>
+{{ dfmm.table(dfm[:5], packet=False) }}
+{% if dfm|length > 5 %}<p><a href="/runs?wpid={{ p.wpid }}">All {{ dfm|length }} runs</a></p>{% endif %}
 {% endif %}
 
 <details id="journal">

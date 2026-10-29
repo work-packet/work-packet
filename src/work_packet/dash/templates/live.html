@@ -72,6 +72,12 @@ table.procs td.cmd code { font-size: 11px; }
     {% endif %}
   </section>
   <section>
+    {% if dfm %}
+    {% import "_dfm.html" as dfmm with context %}{{ dfmm.style() }}
+    {% set shown = dfm|selectattr("live")|list or dfm[:1] %}
+    <h2 id="dfm">DFM runs <span class="muted" style="font-weight:400;font-size:13px">this step{% if dfm|length > shown|length %} · <a href="/runs?wpid={{ l.wpid }}">{{ dfm|length }} in all</a>{% endif %}</span></h2>
+    {% for r in shown %}{{ dfmm.panel(r) }}{% endfor %}
+    {% endif %}
     {% set pr = l.procs %}
     {% if pr %}
     <h2 id="procs">Processes{% if pr.procs %} <span class="muted" style="font-weight:400;font-size:13px">{{ pr.count }} · {{ pr.rss|bytes }} · {{ pr.cpu_s|secs }} CPU</span>{% endif %}</h2>
@@ -83,7 +89,7 @@ table.procs td.cmd code { font-size: 11px; }
       <tr><th class="num">PID</th><th>Command</th><th></th><th class="num">CPU</th><th class="num">Memory</th><th class="num">Age</th></tr>
       {% for p in pr.procs[:procs_max] %}
       <tr><td class="num muted">{{ p.pid }}</td>
-        <td class="cmd" style="padding-left:{{ 4 + p.depth * 14 }}px" title="{{ p.cmd }}">{% if p.depth %}<span class="muted">└ </span>{% endif %}<code>{{ p.cmd }}</code></td>
+        <td class="cmd" style="padding-left:{{ 4 + p.depth * 14 }}px" title="{{ p.cmd }}">{% if p.depth %}<span class="muted">└ </span>{% endif %}{% if p.pid in dfm_pids %}<a href="/runs/{{ dfm_pids[p.pid].sid }}" title="this DFM run's tasks" class="cls">DFM</a> {% endif %}<code>{{ p.cmd }}</code></td>
         <td class="muted" title="state">{{ p.state }}</td>
         <td class="num">{{ p.cpu_s|secs }}</td><td class="num">{{ p.rss|bytes }}</td><td class="num muted">{{ p.age_s|secs }}</td></tr>
       {% endfor %}

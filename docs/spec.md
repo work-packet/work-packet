@@ -58,6 +58,7 @@ All keys are optional. Unknown keys are errors.
 | `step_budget_usd` | number > 0 | 1.00 | `--max-budget-usd` for one attempt |
 | `step_context_tokens` | int ≥ 0 | 80000 | context at which a step is told to wrap up; 0 = off (context.md C3) |
 | `carry_session` | bool | false | resume the previous step's session when allowed (context.md C4) |
+| `max_step_budget_usd` | number > 0 | 10.00 | the most a question's `sets` may raise `step_budget_usd` to (docs/interaction.md §2); `wpk set` by hand is not limited |
 | `carry_ttl` | duration | `55m` | longest gap after which a session is carried over |
 | `carry_factor` | number > 1 | 4 | start fresh once a carried session's context reaches this multiple of its base |
 | `[profiles.<name>]` | table | built-ins | extra profiles, checked before the built-in ones (harness.md §4) |
@@ -302,7 +303,7 @@ instruction for the next step.
 |---|---|---|---|
 | `resume` | resume expression (§5) | yes | when the packet runs next |
 | `reason` | string | with `resume: fail` | why the work cannot be done |
-| `ask` | non-empty string, or a list of questions (docs/interaction.md §2: `id`, `q`, optional `recommend`, `choices`, `grants`) | no | questions for the owner: the step commits as `NEEDS_INPUT` with this as `reason`, whatever `resume` says; `resume` is kept in `resume_expr` as a record |
+| `ask` | non-empty string, or a list of questions (docs/interaction.md §2: `id`, `q`, optional `recommend`, `choices`, `grants`, `request`, `sets`) | no | questions for the owner: the step commits as `NEEDS_INPUT` with this as `reason`, whatever `resume` says; `resume` is kept in `resume_expr` as a record |
 | `spawn` | list of spawn entries | no | children to create (§6) |
 | `item` | string, number or a list of them | no | the plan item this step worked on (such as `2a`); it only labels the step for `wpk stats --by item` and the board. Missing or malformed is never an error: the step is just not charged to an item. A failed attempt is charged to its own pending memento's item, else to the item its step committed |
 | `size` | name | no | the job size for the next step only (docs/scheduler.md §5.2): one of the project's `sizes` (§3.1), else the memento is refused like any bad one. Committed as `next_size` in `status.md` |

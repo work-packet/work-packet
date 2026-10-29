@@ -506,3 +506,38 @@ def test_tasks_nest_children_under_the_task_that_spawned_them(tmp_path):
     assert ts[0]["state"] == "FAILED" and ts[0]["report"] == "state/history/report-1.md"
     assert (ts[1]["first"], ts[1]["last"], ts[1]["instruction"]) == (3, 3, "Try again.")
     assert data.tasks(e, []) == []
+
+
+def test_live_view_shows_the_steps_dfm_runs(live_pkt):
+    """The DFM runs a running step started sit beside its processes (docs/dfm-events.md)."""
+    e, root, client = live_pkt
+    now = time.time()
+    sid = "01JBLIVELIVELIVELIVELIVELI"
+
+    def ev(seq, kind, **kw):
+        return json.dumps(dict(v=1, src="dfm", sid=sid, seq=seq, t=now - 5 + seq, ev=kind, **kw)) + "\n"
+    nodes = [{"id": n, "name": n, "kind": "leaf", "parent": None, "needs": nd}
+             for n, nd in (("d.build", []), ("d.sim", [{"id": "d.build", "block": False}]),
+                           ("d.cov", [{"id": "d.sim", "block": False}]))]
+    d = os.path.join(os.environ["WPK_HOME"], "runs", "dfm")
+    os.makedirs(d, exist_ok=True)
+    # stands in for the step's dfm process: found, like it, by its WPK_* tags
+    dfm = subprocess.Popen(["sleep", "30"], env=dict(os.environ, WPK_WPID=root.wpid, WPK_STEP="2"))
+    with open(os.path.join(d, sid + ".jsonl"), "w") as fp:
+        fp.write(ev(0, "run.start", host="h", pid=dfm.pid, cwd="/w", argv=["dfm", "run", "d.cov"],
+                    ctx={"WPK_WPID": root.wpid, "WPK_STEP": "2", "WPK_ATTEMPT": "1"}))
+        fp.write(ev(1, "graph.plan", nodes=nodes))
+        fp.write(ev(2, "task.state", id="d.build", state="done", status=0, changed=True))
+        fp.write(ev(3, "task.state", id="d.sim", state="enter"))
+        fp.write(ev(4, "task.exec", id="d.sim", phase="start", cmd=["vcs", "-R"]))
+    try:
+        t = client.get("/p/q/%s/live" % root.wpid).text
+        assert 'id="dfm"' in t and "/runs/" + sid in t and "run d.cov" in t
+        assert t.index('id="dfm"') < t.index('id="procs"')       # beside, above the processes
+        assert "d.sim" in t and "vcs -R" in t and "1/3 done" in t
+        assert "Next: <code>d.cov</code> (after <code>d.sim</code>)" in t
+        assert 'class="cls">DFM</a>' in t                         # its dfm process, tagged
+    finally:
+        dfm.kill()
+        dfm.wait()
+        os.unlink(os.path.join(d, sid + ".jsonl"))

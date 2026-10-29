@@ -121,6 +121,8 @@ def show(pkt):
                 extra.append("choices: %s" % " / ".join(q["choices"]))
             if q["grants"]:
                 extra.append("yes grants: %s" % ", ".join(q["grants"]))
+            if q.get("sets"):
+                extra.append(questions.describe_sets(q))
             if q.get("request"):
                 extra.append("yes sends request %s (state/requests/%s.md)" % (
                     q["request"], q["request"]))

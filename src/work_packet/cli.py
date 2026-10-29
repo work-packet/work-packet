@@ -1666,7 +1666,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("answer", help="answer a packet's open questions and hand it off",
                        description="Answer the questions of a NEEDS_INPUT packet (`wpk show` "
                        "lists them) as id=answer pairs. A yes to a question that grants tools "
-                       "allows them first. Then the packet is handed off, and the next step "
+                       "allows them first, and an answer a question's `sets` names applies those "
+                       "settings (step_budget_usd up to max_step_budget_usd). Then the packet is handed off, and the next step "
                        "sees each question with its answer.")
     p.add_argument("target", help="WPID (or unique prefix), project name, or a packet directory")
     p.add_argument("answers", nargs="*", metavar="id=answer")

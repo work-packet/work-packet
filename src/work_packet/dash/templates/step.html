@@ -66,6 +66,12 @@ pre.diff .hunk { background: var(--hunk); color: var(--muted); }
   </section>
 </div>
 
+{% if dfm %}
+{% import "_dfm.html" as dfmm with context %}{{ dfmm.style() }}
+<h2 id="dfm">DFM runs</h2>
+{{ dfmm.table(dfm, packet=False) }}
+{% endif %}
+
 {% if tk and tk.tools %}
 <h2 id="context">Where the context went</h2>
 {{ tkm.tools(tk.tools, one=True) }}

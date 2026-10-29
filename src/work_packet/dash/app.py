@@ -4,6 +4,8 @@ GET routes only read. The POST routes are the actions of docs/interaction.md §5
 each one a call into ``work_packet.actions`` or ``project`` and nothing more.
 """
 
+import datetime
+import json
 import logging
 import os
 import shutil
@@ -21,7 +23,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import __about__, archived, clock, layout, livecard, registry
-from . import data, markup, plan, tokens
+from . import data, dfmrun, markup, plan, tokens
 from . import sched as dsched
 from ..sched.classes import CLASSES
 from .guard import split_host
@@ -36,7 +38,7 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pane.js"), "
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Served from the package: compose.js, shell.js and the vendored xterm.js (no CDN, the CSP
 # is script-src 'self'). Name -> media type.
-STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript",
+STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript",
           "vendor/xterm.js": "text/javascript", "vendor/addon-fit.js": "text/javascript",
           "vendor/xterm.css": "text/css"}
 REFRESH_S = 10
@@ -86,6 +88,13 @@ def _when(dt):
     return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
 
+def _epoch(t):
+    """A Unix time as local ``YYYY-MM-DD HH:MM``."""
+    if not isinstance(t, (int, float)):
+        return ""
+    return datetime.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M")
+
+
 def _view(request, default):
     """The transcript view asked for: ``?view=log``, or ``default``."""
     return "log" if request.query_params.get("view") == "log" else default
@@ -98,17 +107,28 @@ def ask_text(rel):
             "each comment ({== text ==}{>> comment <<}), then remove the markup." % rel)
 
 
-def create_app(home=None, runner=None, shells=None, ide_backend=None):
+def _scope_href(m):
+    """The page a conversation belongs to: where the drawer continues it."""
+    if m.get("wpid"):
+        return "/p/%s/%s" % (urllib.parse.quote(m["project"]), m["wpid"])
+    if m.get("project"):
+        return "/p/%s" % urllib.parse.quote(m["project"])
+    return "/"
+
+
+def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=None):
     """The app, reading the registry under ``home`` (default: ``WPK_HOME``).
 
     ``runner`` (``dash.runner.Runner``) is poked after every action that can
     make a packet due (dash-tasks.md §7). ``shells`` (``dash.shells.Shells``)
     serves the browser shell (§5); without it Compose has no shell pane.
     ``ide_backend`` (``dash.ide.Backends``) serves web VS Code under ``/ide/<key>/``
-    when ``[ide] web`` is on (docs/vscode-plan.md §4)."""
+    when ``[ide] web`` is on (docs/vscode-plan.md §4). ``agents``
+    (``dash.agent.Agents``) answers the console's questions (docs/console.md);
+    without it the console runs slash commands only."""
     env = Environment(loader=FileSystemLoader(TEMPLATES),
                       autoescape=select_autoescape(["html"]))
-    env.filters.update(inline=_inline, money=_money, secs=_secs, when=_when, bytes=_bytes, tok=_tok, pct=_pct)
+    env.filters.update(epoch=_epoch, inline=_inline, money=_money, secs=_secs, when=_when, bytes=_bytes, tok=_tok, pct=_pct)
     stamp = max(os.path.getmtime(os.path.join(HERE, n)) for n in STATIC)
     env.globals.update(origin_of=data.origin, version=__about__.__version__, refresh_s=REFRESH_S,
                        asset_v="%s-%d" % (__about__.__version__, stamp),
@@ -207,6 +227,48 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                             on=[b["name"] for b in side])
         return render(request, "stats.html", burn=burn, side=side, here=None,
                       windows=tokens.WINDOWS)
+
+    def run_links(vs):
+        """Name each run's project from its packet: a step's env carries only the wpid."""
+        need = [v for v in vs if v["wpid"] and not v["project"] and data.schema.is_wpid(v["wpid"])]
+        if need:
+            ents = archived.entries(home)
+            for v in need:
+                v["project"] = next((e["name"] for e in ents if os.path.isdir(
+                    layout.run_dir(e["path"], v["wpid"]))), None)
+        return vs
+
+    def dfm_home():
+        return home or registry.home()
+
+    async def runs_page(request):
+        """DFM runs (``/runs``; docs/dfm-events.md §5): live first, then newest."""
+        wpid = request.query_params.get("wpid") or None
+        vs = await run_in_threadpool(lambda: run_links(dfmrun.runs(dfm_home(), wpid=wpid)))
+        cols, broken = data.board(home)
+        return render(request, "runs.html", runs=vs, wpid=wpid, live=any(v["live"] for v in vs),
+                      refresh_ms=LIVE_MS, side=data.side(home, cols, broken))
+
+    async def run_page(request):
+        """One DFM run (``/runs/{sid}``): Running, Pending and Done (§6)."""
+        sid = request.path_params["sid"]
+        run = await run_in_threadpool(dfmrun.load, dfm_home(), sid)
+        if run is None:
+            return not_found(request, "DFM run %s" % sid)
+        r = run_links([dfmrun.view(run)])[0]
+        kids = [k for k in await run_in_threadpool(dfmrun.runs, dfm_home()) if k["parent"] == sid]
+        return render(request, "run.html", r=r, kids=kids, live=r["live"], refresh_ms=LIVE_MS)
+
+    async def run_log(request):
+        """The tail of one task's log, if the run's journal names it inside its rundir."""
+        run = await run_in_threadpool(dfmrun.load, dfm_home(), request.path_params["sid"])
+        nid = request.query_params.get("id", "")
+        p = dfmrun.log_path(run, nid) if run else None
+        if p is None:
+            return not_found(request, "log of %s" % nid)
+        text, cut = await run_in_threadpool(dfmrun.log_tail, p)
+        head = "[... the first part of %s is not shown]\n" % p if cut else ""
+        return PlainTextResponse(head + text)
 
     async def board(request):
         """One board (``/b/{board}``; docs/boards.md): its cards."""
@@ -603,7 +665,11 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
             return not_found(request, "packet %s" % request.path_params["wpid"])
         await run_in_threadpool(mark_seen, request, e)
         snap = await run_in_threadpool(dsched.snapshot, home)
-        return render(request, "packet.html", e=e, p=p, live=True, classes=CLASSES,
+        dfm = await run_in_threadpool(dfmrun.runs, dfm_home(), wpid=request.path_params["wpid"])
+        convs = await run_in_threadpool(conv_rows, lambda m: m.get("project") == e["name"] and
+                                        m.get("wpid") == request.path_params["wpid"])
+        return render(request, "packet.html", e=e, p=p, live=True, classes=CLASSES, dfm=dfm,
+                      convs=convs,
                       sch=dsched.packet_info(snap, e, request.path_params["wpid"]),
                       tk=tokens.packet(e, request.path_params["wpid"]))
 
@@ -618,8 +684,11 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         # A committed or failed step never changes, so only a running one refreshes.
         sd = os.path.join(layout.run_dir(e["path"], request.path_params["wpid"]), "steps",
                           request.path_params["step"])
+        n = data.schema.parse_step_dir(request.path_params["step"])
+        dfm = await run_in_threadpool(dfmrun.runs, dfm_home(), wpid=request.path_params["wpid"],
+                                      step=n[0] if n else None) if n else []
         return render(request, "step.html", e=e, s=s, view=view, tk=tokens.step(sd, s["meta"]),
-                      live=s["info"]["outcome"] == "running")
+                      dfm=dfm, live=s["info"]["outcome"] == "running" or any(r["live"] for r in dfm))
 
     # --- actions (POST) ---------------------------------------------------------
 
@@ -704,6 +773,131 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         if not to.startswith("/") or to.startswith("//"):
             to = "/p/%s" % urllib.parse.quote(e["name"])
         return back(to, out, poke_runner=op == "resume")
+
+    async def console_cmd(request):
+        """One line from the console drawer (docs/console.md): a slash command,
+        or a question for the agent, whose reply streams on /console/ws.
+        JSON in (``line``, ``path``: the page it was typed on), JSON out."""
+        from . import console
+        from ..sched import authz
+        try:
+            body = json.loads((await request.body()) or b"{}")
+        except ValueError:
+            body = {}
+        ctx = console.Ctx(home, who(request), authz.principal_of(request), poke, agents)
+        out = await run_in_threadpool(console.line, str(body.get("line") or ""),
+                                      console.scope_of(str(body.get("path") or "/")), ctx,
+                                      body.get("ref"), body.get("decline"))
+        return JSONResponse(out)
+
+    def conv_rows(pred):
+        """Conversations ``pred(meta)`` keeps, for the history pages."""
+        if agents is None:
+            return []
+        return [dict(m, href="/console/c/%s" % m["id"],
+                     page=_scope_href(m), busy=agents.busy(m["id"]))
+                for m in agents.list() if pred(m)]
+
+    async def console_list(request):
+        """Every conversation the console has had (docs/console.md §5)."""
+        rows = await run_in_threadpool(conv_rows, lambda m: True)
+        cols, broken = await run_in_threadpool(data.board, home)
+        return render(request, "console_list.html", rows=rows, agent_on=agents is not None,
+                      side=data.side(home, cols, broken))
+
+    async def console_view(request):
+        """One conversation's transcript, read-only."""
+        from . import console
+        m = agents.get(request.path_params["cid"]) if agents is not None else None
+        if m is None:
+            return not_found(request, "conversation %s" % request.path_params["cid"])
+        ev = await run_in_threadpool(agents.transcript, m["id"], 100000)
+        acted = {}
+        for x in ev:
+            if x.get("ref"):
+                acted[x["ref"]] = "declined" if x["k"] == "decline" else (
+                    "ran" if not x.get("auto") else "ran at once")
+        for x in ev:
+            if x["k"] == "say":
+                lines = x["text"].split("\n")
+                props = {p["at"]: p for p in x.get("props") or []}
+                x["parts"] = [(ln, props.get(i), acted.get("%s:%d" % (x.get("id"), props[i]["i"]))
+                               if i in props else None) for i, ln in enumerate(lines)]
+        return render(request, "console_view.html", m=dict(m, page=_scope_href(m)), ev=ev,
+                      scope=console.scope_of(_scope_href(m)), busy=agents.busy(m["id"]))
+
+    async def project_console(request, e, now, kw):
+        rows = await run_in_threadpool(conv_rows, lambda m: m.get("project") == e["name"])
+        return render(request, "project_console.html", rows=rows, agent_on=agents is not None,
+                      **kw)
+
+    async def console_commands(request):
+        from . import console
+        return JSONResponse(console.complete())
+
+    async def console_conv(request):
+        """The page's current conversation and its transcript (``?path=``)."""
+        from . import agent, console
+        if agents is None:
+            return JSONResponse({"conv": None, "events": [], "agent": False})
+        sc = console.scope_of(request.query_params.get("path") or "/")
+        m = await run_in_threadpool(agents.latest, agent.scope_key(sc))
+        if m is None:
+            return JSONResponse({"conv": None, "events": [], "agent": True})
+        ev = await run_in_threadpool(agents.transcript, m["id"])
+        return JSONResponse({"conv": {k: m[k] for k in ("id", "model", "title", "cwd")},
+                             "events": ev, "busy": agents.busy(m["id"]), "agent": True})
+
+    async def console_ws(ws):
+        """A conversation's events as they happen. The first message carries
+        the CSRF token, as the shell's does; ``?since=`` replays what came after."""
+        import asyncio
+        import hmac
+        await ws.accept()
+        try:
+            first = await asyncio.wait_for(ws.receive_text(), 5)
+            token = (json.loads(first) or {}).get("token") or ""
+        except (asyncio.TimeoutError, ValueError, KeyError, TypeError, AttributeError,
+                WebSocketDisconnect):
+            token = ""
+        want = ws.scope.get("state", {}).get("csrf") or ""
+        cid = ws.path_params["cid"]
+        if agents is None or not want or not hmac.compare_digest(token, want) \
+                or agents.get(cid) is None:
+            return await ws.close(1008)
+        queue = asyncio.Queue()
+        agents.subscribe(cid, asyncio.get_running_loop(), queue)
+        try:
+            since = float(ws.query_params.get("since") or 0)
+        except ValueError:
+            since = 0.0
+        try:
+            await ws.send_text(json.dumps({"k": "busy", "on": agents.busy(cid)}))
+            for ev in await run_in_threadpool(agents.transcript, cid):
+                if ev.get("t", 0) > since:
+                    await ws.send_text(json.dumps(ev))
+            rx = asyncio.ensure_future(ws.receive())
+            while True:
+                get = asyncio.ensure_future(queue.get())
+                done, _ = await asyncio.wait({rx, get}, return_when=asyncio.FIRST_COMPLETED)
+                if rx in done:
+                    get.cancel()
+                    if rx.result()["type"] == "websocket.disconnect":
+                        break
+                    rx = asyncio.ensure_future(ws.receive())
+                    continue
+                await ws.send_text(json.dumps(get.result()))
+            rx.cancel()
+        except (WebSocketDisconnect, RuntimeError, OSError):
+            pass
+        finally:
+            agents.unsubscribe(cid, queue)
+            if ws.client_state == WebSocketState.CONNECTED and \
+                    ws.application_state == WebSocketState.CONNECTED:
+                try:
+                    await ws.close()
+                except (WebSocketDisconnect, RuntimeError, OSError):
+                    pass
 
     async def ide_open(request):
         """Open a packet or a work folder in VS Code (docs/vscode-plan.md V2).
@@ -1117,7 +1311,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         if lv is None:
             return not_found(request, "packet %s" % request.path_params["wpid"])
         await run_in_threadpool(mark_seen, request, e)
-        return render(request, "live.html", e=e, l=lv, view=view, live=True,
+        dfm = await run_in_threadpool(dfmrun.runs, dfm_home(), wpid=request.path_params["wpid"],
+                                      step=lv["step"]["n"]) if lv["step"] else []
+        return render(request, "live.html", e=e, l=lv, view=view, live=True, dfm=dfm,
+                      dfm_pids={r["pid"]: r for r in dfm if r["live"] and r["pid"]},
                       refresh_ms=LIVE_MS, procs_max=PROCS_MAX)
 
     async def raw(request):
@@ -1313,6 +1510,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         WebSocketRoute("/ide/{rest:path}", ide_ws),
         Route("/", overview),
         Route("/stats", stats_page),
+        Route("/runs", runs_page),
+        Route("/runs/{sid}", run_page),
+        Route("/runs/{sid}/log.txt", run_log),
         Route("/sched", sched_page),
         Route("/sched.json", sched_json),
         Route("/sched/mode", sched_mode, methods=["POST"]),
@@ -1331,6 +1531,12 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         Route("/p/{project}/pr", pr_open, methods=["POST"]),
         Route("/p/{project}/run", project_run, methods=["POST"]),
         Route("/healthz", health),
+        Route("/console/cmd", console_cmd, methods=["POST"]),
+        Route("/console/commands", console_commands),
+        Route("/console/conv", console_conv),
+        Route("/console", console_list),
+        Route("/console/c/{cid}", console_view),
+        WebSocketRoute("/console/ws/{cid}", console_ws),
         Route("/static/live.js", live_js),
         Route("/static/pane.js", pane_js),
         Route("/static/{name:path}", static),
@@ -1358,6 +1564,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         Route("/p/{project}/steps", project_page(project_steps)),
         Route("/p/{project}/cost", project_page(project_cost)),
         Route("/p/{project}/settings", project_page(project_settings)),
+        Route("/p/{project}/console", project_page(project_console)),
         Route("/p/{project}/{wpid}", packet),
         Route("/p/{project}/{wpid}/{step}", step),
     ])

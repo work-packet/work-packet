@@ -229,6 +229,8 @@ def rebuild_thread(run_dir, project, requester=None, sent=None, name_of_child=No
                     tr.append(("Choices", " | ".join(map(str, q["choices"]))))
                 if q.get("grants"):
                     tr.append(("Grants", ", ".join(map(str, q["grants"]))))
+                if q.get("sets"):
+                    tr.append(("Sets", str(q["sets"])))
                 th.add("question", RUNNER, asked_t or t, _demote(q.get("q")), tr, arg=qid,
                        src=src)
                 a = ans.get(q.get("id")) if isinstance(ans, dict) else None

@@ -66,7 +66,7 @@ nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(-
   {% endif %}
 </div>
 <nav class="ptabs" aria-label="packet">
-  {% for key, label, href in (("overview", "Overview", base), ("tasks", "Tasks", base ~ "/tasks"), ("steps", "Steps", base ~ "/steps"), ("cost", "Cost", base ~ "/cost"), ("settings", "Settings", base ~ "/settings")) %}
+  {% for key, label, href in (("overview", "Overview", base), ("tasks", "Tasks", base ~ "/tasks"), ("steps", "Steps", base ~ "/steps"), ("cost", "Cost", base ~ "/cost"), ("settings", "Settings", base ~ "/settings"), ("console", "Console", base ~ "/console")) %}
   <a href="{{ href }}"{% if key == active %} class="on" aria-current="page"{% endif %}>{{ label }}</a>
   {% endfor %}
 </nav>

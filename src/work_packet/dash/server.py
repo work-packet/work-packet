@@ -156,7 +156,10 @@ class Board:
             slot = False
         self.ide = Backends(self.home, ide_cfg.load_config(self.home), slot=slot,
                             poke=runner.poke if runner is not None else None)
-        self.app = create_app(home, runner=runner, shells=self.shells, ide_backend=self.ide)
+        from .agent import Agents
+        self.agents = Agents(self.home)
+        self.app = create_app(home, runner=runner, shells=self.shells, ide_backend=self.ide,
+                              agents=self.agents)
         self.secret = load_secret(self.home)
         self.user = getpass.getuser()
         self.network = cfg["auth"] == "unix" and (
@@ -178,6 +181,8 @@ class Board:
             self.gate = Gate(self.home, self.secret, self.port, authz.home_owner(self.home),
                              cfg["allow"], cfg.get("session_days", 30))
         self.urls = {"loopback": [], "tailnet": [], "network": []}
+        from .events import Collector
+        self.events = Collector(self.home)
         self.sock = None
         self.names = set()
         self._stop = None
@@ -345,6 +350,11 @@ class Board:
                     self.urls["loopback"] = [_url(ip, self.port)]
                 if self.tailnet is not None:
                     tasks.append(asyncio.ensure_future(self._tailnet()))
+            try:            # before the runner, so its steps inherit DFM_EVENT_SINK
+                await self.events.start()
+            except OSError as e:
+                log.warning("DFM runs will not show: cannot listen on %s: %s",
+                            self.events.path, e)
             if self.runner is not None:
                 self.runner.start()
             self._write_state()
@@ -354,7 +364,9 @@ class Board:
         finally:
             self._stop.set()
             self.shells.shutdown()
+            self.agents.shutdown()
             self.ide.stop()             # on the loop: it cancels the idle task
+            await self.events.stop()
             for srv, _ in servers:
                 srv.should_exit = True
             await asyncio.gather(*tasks, *(t for _, t in servers), return_exceptions=True)

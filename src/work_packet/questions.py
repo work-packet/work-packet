@@ -3,7 +3,8 @@
 from . import schema
 
 YES = ("yes", "y", "true", "ok", "approve", "approved", "grant", "granted")
-QUESTION_FIELDS = ("id", "q", "recommend", "choices", "grants", "request")
+QUESTION_FIELDS = ("id", "q", "recommend", "choices", "grants", "request", "sets")
+SETS_KEYS = ("step_budget_usd", "step_timeout", "step_context_tokens")
 
 
 def validate(ask):
@@ -40,6 +41,35 @@ def validate(ask):
                 out.append(P("%s.%s" % (w, k), "must be a non-empty list of strings"))
         if "request" in q and not schema.is_name(q["request"]):
             out.append(P(w + ".request", "must name a brief, state/requests/<id>.md"))
+        if "sets" in q:
+            out += _validate_sets(q["sets"], q.get("choices"), w + ".sets")
+    return out
+
+
+def _by_choice(sets, choices):
+    """True when ``sets`` is keyed by answers (``{choice: {key: value}}``)."""
+    return (isinstance(sets, dict) and bool(sets) and isinstance(choices, list)
+            and all(k in choices and isinstance(v, dict) for k, v in sets.items()))
+
+
+def _validate_sets(sets, choices, w):
+    """``sets``: settings a yes applies, ``{key: value}``, or ``{choice: {key: value}}``
+    applied when that choice is the answer. Keys: ``SETS_KEYS``."""
+    P = schema.Problem
+    if not isinstance(sets, dict) or not sets:
+        return [P(w, "must be a mapping of settings, or of choices to settings")]
+    out = []
+    for when, vals in (sets.items() if _by_choice(sets, choices) else [(None, sets)]):
+        at = w if when is None else "%s.%s" % (w, when)
+        if not vals:
+            out.append(P(at, "must set something"))
+        for k in vals:
+            if k not in SETS_KEYS:
+                out.append(P("%s.%s" % (at, k), "cannot be set by an answer; settable: %s"
+                             % ", ".join(SETS_KEYS)))
+        out += [P("%s.%s" % (at, p.field), p.msg)
+                for p in schema._validate_limits({k: v for k, v in vals.items()
+                                                  if k in SETS_KEYS})]
     return out
 
 
@@ -50,16 +80,26 @@ def _text(v):
 
 
 def normalise(ask):
-    """``ask:`` as a list of ``{id, q, recommend, choices, grants, request}``; [] for None."""
+    """``ask:`` as a list of ``{id, q, recommend, choices, grants, request, sets}``; []
+    for None. ``sets`` becomes ``{answer: {key: value}}``, with ``"yes"`` for a plain
+    mapping."""
     if ask is None:
         return []
     if isinstance(ask, str):
         return [{"id": "q1", "q": " ".join(ask.split()), "recommend": None, "choices": [],
-                 "grants": [], "request": None}]
+                 "grants": [], "request": None, "sets": {}}]
     return [{"id": q["id"], "q": q["q"].strip(), "recommend": _text(q.get("recommend")),
              "choices": list(q.get("choices") or []), "grants": list(q.get("grants") or []),
-             "request": q.get("request")}
+             "request": q.get("request"), "sets": _sets(q.get("sets"), q.get("choices"))}
             for q in ask]
+
+
+def _sets(sets, choices):
+    if not sets:
+        return {}
+    if _by_choice(sets, choices):
+        return {k: dict(v) for k, v in sets.items()}
+    return {"yes": dict(sets)}
 
 
 def summary(qs):
@@ -102,6 +142,31 @@ def requests(qs, answers):
     """Request ids to send: the ``request`` of every question answered yes
     (docs/delegation.md §3)."""
     return [q["request"] for q in qs if q.get("request") and is_yes(answers.get(q["id"]))]
+
+
+def sets(qs, answers):
+    """Settings to apply: for every question, the ``sets`` entry its answer picks
+    (``"yes"``: any yes; else the choice, ignoring case). Later questions win."""
+    out = {}
+    for q in qs:
+        a = answers.get(q["id"])
+        if not isinstance(a, str):
+            continue
+        for when, vals in (q.get("sets") or {}).items():
+            if (is_yes(a) if when == "yes" else a.strip().lower() == when.strip().lower()):
+                out.update(vals)
+    return out
+
+
+def describe_sets(q):
+    """``sets`` as text for the owner: ``step_budget_usd 5.0`` or
+    ``"raise budget" sets step_budget_usd 5.0``."""
+    def kv(vals):
+        return ", ".join("%s %s" % (k, v) for k, v in vals.items())
+    s = q.get("sets") or {}
+    if list(s) == ["yes"] and "yes" not in (q.get("choices") or []):
+        return "yes sets " + kv(s["yes"])
+    return "; ".join('"%s" sets %s' % (w, kv(v)) for w, v in s.items())
 
 
 def grants(qs, answers):

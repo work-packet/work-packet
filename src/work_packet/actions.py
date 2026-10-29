@@ -8,13 +8,14 @@ import json
 import os
 
 from . import clock, executor, fsutil, lease, notes, questions
-from .project import ProjectError, allow, project_of
+from .project import ProjectError, allow, project_of, set_values
 
 DRAFTS = os.path.join(".setup", "next")    # <project>/.setup/next/<wpid>.{md,json}
 
 
 def answer(pkt, answers=None, note=None, take_recommendations=False, by=None):
-    """Answer a ``NEEDS_INPUT`` packet: grant what yes-answers grant, then hand it off.
+    """Answer a ``NEEDS_INPUT`` packet: grant what yes-answers grant, apply the
+    settings the answers pick (``sets``), then hand it off.
 
     ``answers`` maps question ids to text. With ``take_recommendations``,
     every unanswered question gets its ``recommend``.
@@ -34,15 +35,33 @@ def answer(pkt, answers=None, note=None, take_recommendations=False, by=None):
         return executor.Outcome(executor.USAGE, "nothing to send: give answers, a note, "
                                 "or take the recommendations")
     done = []
-    tools = questions.grants(qs, got)
+    tools, vals = questions.grants(qs, got), questions.sets(qs, got)
+    proj = project_of(pkt.path) if tools or vals else None
+    if vals:
+        if not proj:
+            return executor.Outcome(executor.USAGE, "%s has no project to set %s in" % (
+                pkt.wpid[:8], ", ".join(vals)))
+        from . import registry
+        cap = registry.load_config().get("max_step_budget_usd")
+        if vals.get("step_budget_usd", 0) > cap:
+            return executor.Outcome(executor.USAGE, "the answer sets step_budget_usd %s, over "
+                                    "max_step_budget_usd %s in config.toml; raise that, or "
+                                    "`wpk set` the budget and answer otherwise" % (
+                                        vals["step_budget_usd"], cap))
     if tools:
-        proj = project_of(pkt.path)
         try:
             ch = allow(proj, tools, by) if proj else []
         except ProjectError as e:
             return executor.Outcome(executor.LEASED, str(e))
         if ch:
             done.append("granted " + ", ".join(t.split(" ", 1)[1] for t in ch))
+    if vals:
+        try:
+            ch = set_values(proj, [(k, json.dumps(v)) for k, v in vals.items()], by)
+        except ProjectError as e:
+            return executor.Outcome(executor.LEASED, str(e))
+        if ch:
+            done.append("; ".join(ch))
     for rid in questions.requests(qs, got):
         from . import requests
         try:

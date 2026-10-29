@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% import "_tabs.html" as tabs with context %}
+{% import "_console.html" as cv %}
+{% block title %}{{ e.name }} · console{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / console{% endblock %}
+{% block main %}
+{{ tabs.top(e, card, "console", work) }}
+{% if rows %}
+<p class="muted">Conversations about this project and its packets, the latest first. The drawer (<kbd>`</kbd>) continues a page's latest one; <code>/sessions</code> goes back to another.</p>
+{{ cv.table(rows) }}
+{% else %}
+<p class="muted">No conversations about {{ e.name }} yet. Open the console here (<kbd>`</kbd>) and ask about it.</p>
+{% endif %}
+{% endblock %}

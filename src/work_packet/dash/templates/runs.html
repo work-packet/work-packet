@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% import "_side.html" as sidem with context %}
+{% import "_dfm.html" as dfm with context %}
+{% block title %}DFM runs{% endblock %}
+{% block crumbs %}/ <a href="/runs">DFM runs</a>{% endblock %}
+{% block head %}{{ dfm.style() }}{% endblock %}
+{% block main %}
+<div class="withside">
+{{ sidem.tab(side, None, "runs") }}
+<div>
+<div class="titlebar"><h1>DFM runs</h1><span class="muted">{% if wpid %}started by packet <code>{{ wpid[:8] }}</code> · <a href="/runs">all runs</a>{% else %}every <code>dfm run</code> started under this board{% endif %}</span></div>
+{% if runs %}
+{{ dfm.table(runs) }}
+{% else %}
+<p class="muted">No DFM runs yet. Any <code>dfm run</code> started under this board (a step, a board shell, a terminal that inherits <code>DFM_EVENT_SINK</code>) shows up here as it runs.</p>
+{% endif %}
+</div>
+</div>
+{% endblock %}

@@ -18,6 +18,7 @@
     <div class="muted" style="font-size:12px">
       {% if q.recommend %}Recommends: <strong>{{ q.recommend }}</strong>.{% endif %}
       {% if q.grants %}A yes allows {% for t in q.grants %}<code>{{ t }}</code>{{ ", " if not loop.last }}{% endfor %}.{% endif %}
+      {% for w, vals in (q.sets or {}).items() %}{{ "A yes" if w == "yes" and w not in q.choices else "“" ~ w ~ "”" }} sets {% for k, v in vals.items() %}<code>{{ k }} {{ v }}</code>{{ ", " if not loop.last }}{% endfor %}.{% endfor %}
     </div>
   </div>
   {% endfor %}

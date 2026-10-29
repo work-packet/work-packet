@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% import "_side.html" as sidem with context %}
+{% import "_console.html" as cv %}
+{% block title %}Console{% endblock %}
+{% block crumbs %}/ <a href="/console">Console</a>{% endblock %}
+{% block main %}
+<div class="withside">
+{{ sidem.tab(side, None, "console") }}
+<div>
+<div class="titlebar"><h1>Console</h1><span class="muted">every conversation in the console drawer, the latest first · open the drawer with <kbd>`</kbd> on any page</span></div>
+{% if not agent_on %}<p class="muted">The agent is not on in this board: the drawer runs slash commands only.</p>{% endif %}
+{% if rows %}
+{{ cv.table(rows) }}
+{% else %}
+<p class="muted">No conversations yet. Open the console on a page (<kbd>`</kbd>) and ask about it, or run a slash command: each page's conversation is kept here.</p>
+{% endif %}
+</div>
+</div>
+{% endblock %}

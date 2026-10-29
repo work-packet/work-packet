@@ -48,6 +48,7 @@ CONFIG_DEFAULTS = {
     "budget_usd_per_day": 0,          # per project; 0 = no cap (docs/scheduler.md §4.5)
     "budget_quota_per_week": 0,       # share of the weekly quota per project; 0 = no cap
     "max_steps_per_hour": 0,          # per packet; 0 = no cap
+    "max_step_budget_usd": 10.00,     # the most an answer's `sets` may raise step_budget_usd to
 }
 SERVER_DEFAULTS = {                   # server.md §6
     "port": 7878,
@@ -74,6 +75,12 @@ IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
     "idle_minutes": 60,
     "max_servers": 8,                  # one server per open target; LRU idle one makes room
     "workspace_trust": False,          # V0 finding 4: the runner already runs this code
+}
+CONSOLE_DEFAULTS = {                  # docs/console.md §3
+    "model": "haiku",                  # the agent's model; /model changes one conversation's
+    "budget_usd": 0.5,                 # the most one reply may spend
+    "max_running": 4,                  # replies at once, across conversations
+    "timeout_s": 600,                  # a reply is stopped after this long
 }
 SCHED_DEFAULTS = {                    # docs/scheduler.md §10
     "backend": "local",                # local | slurm | lsf
@@ -714,10 +721,33 @@ def validate_sched(t):
     return out
 
 
+def _validate_console(d):
+    t = d.get("console")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("console", "must be a table")]
+    out = _unknown(t, tuple(CONSOLE_DEFAULTS), "console")
+    if "model" in t and not (isinstance(t["model"], str) and t["model"].strip()):
+        out.append(_err("console.model", "must be a model name"))
+    v = t.get("budget_usd", 0.5)
+    if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
+        out.append(_err("console.budget_usd", "must be a number > 0"))
+    for k in ("max_running", "timeout_s"):
+        m = t.get(k, 1)
+        if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
+            out.append(_err("console." + k, "must be a positive whole number"))
+    return out
+
+
 def validate_config(d):
-    out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge")) \
+    out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
+                                                "console")) \
         + _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d) \
-        + _validate_forges(d.get("forge"))
+        + _validate_console(d) + _validate_forges(d.get("forge"))
+    v = d.get("max_step_budget_usd", 1)
+    if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
+        out.append(_err("max_step_budget_usd", "must be a number > 0"))
     if "sched" in d:
         out += validate_sched(d["sched"])
     return out
