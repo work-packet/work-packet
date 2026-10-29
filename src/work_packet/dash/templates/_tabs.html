@@ -72,7 +72,7 @@ nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(-
   <form class="act row" method="post" action="{{ base }}/ide">
     <input type="hidden" name="csrf" value="{{ csrf or '' }}">
     <button class="go" name="go" value="desktop">Open the project</button>
-    {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
+    {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
     <span class="muted" style="font-size:12px">{{ "The root packet's worktrees and state/." if card.root and not card.setup else "Its root: work/, state/ and the prompt." }}</span>
   </form>
   {% if work %}
@@ -83,7 +83,7 @@ nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(-
     <input type="hidden" name="csrf" value="{{ csrf or '' }}">
     <input type="hidden" name="repo" value="{{ name }}">
     <button class="go" name="go" value="desktop">{{ "Your clone" if git else "Open (shared)" }}</button>
-    {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}
+    {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}
     {% if git and tree %}<button class="go" name="go" value="desktop-packet">Packet worktree</button>
     {% if ide_web %}<button class="go" name="go" value="web-packet" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}{% endif %}
   </form></td></tr>

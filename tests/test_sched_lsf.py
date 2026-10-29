@@ -67,6 +67,26 @@ def test_size_resources_schema():
     assert "cannot read" in " ".join(str(e) for e in bad)
 
 
+def test_size_env_label_description():
+    from work_packet.prompt import sizes_section
+    c = sconfig.load(raw={"sched": {"backend": "lsf", "node_env": "module load wpk", "sizes": {
+        "xl": {"cpus": 16, "env": "module load bigsim\n\nexport OMP=16\n", "label": "X-large",
+               "description": "full-chip sims"}}}})
+    z = sconfig.size(c, "xl")
+    t = Task("j", "step", "p", "w", "/w", z, "/h/j.log", step=1, name="n")
+    assert Lsf(c).submit_argv(t)[-1] == \
+        "module load wpk && module load bigsim && export OMP=16 && exec wpk step /w"
+    t.size = sconfig.size(c, "look")
+    assert Lsf(c).submit_argv(t)[-1] == "module load wpk && exec wpk step /w"
+    assert (z.text, z.title) == ("X-large", "16 cores: full-chip sims")
+    assert sconfig.size(c, "look").text == "look"
+    s = sizes_section([sconfig.size(c, "look"), z])
+    assert "- `xl` (X-large): 16 cores: full-chip sims" in s and "- `look`: 1 core, 4G\n" in s
+    from work_packet import schema
+    bad = schema.validate_config({"sched": {"sizes": {"a": {"cpus": 1, "env": ["x"], "label": 1}}}})
+    assert {e.field for e in bad} >= {"sched.sizes.a.env", "sched.sizes.a.label"}
+
+
 def test_bjobs_states():
     assert Lsf._state({"STAT": "PEND"}).state == PENDING
     assert Lsf._state({"STAT": "RUN"}).state == RUNNING

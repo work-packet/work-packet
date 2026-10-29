@@ -129,7 +129,7 @@ class Lsf(Backend):
             argv += ["-P", self.common["project"]]
         argv += self.common["extra"] + list(z.extra) + ["-o", task.log]
         cmd = " ".join(shlex.quote(a) for a in task.argv) if task.argv else \
-            node_command(self.cfg, task.path, task.lost)
+            node_command(self.cfg, task.path, task.lost, z)
         return argv + ["bash", "-c", cmd]
 
     def submit(self, task):

@@ -283,5 +283,7 @@ def sizes_section(sizes):
            "one, add `size: <name>` to the memento; it holds for that step only. Ask "
            "for a big job only when the next step will build or simulate.", ""]
     for z in sizes:
-        out.append("- `%s`: %s" % (z.name, z.describe()))
+        label = " (%s)" % z.label if z.label and z.label != z.name else ""
+        what = ": " + z.description if z.description else ""
+        out.append("- `%s`%s: %s%s" % (z.name, label, z.describe(), what))
     return "\n".join(out) + "\n\n"

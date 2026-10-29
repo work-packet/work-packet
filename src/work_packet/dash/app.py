@@ -153,9 +153,19 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     def ide_sizes():
         from ..sched import config as sconfig
         try:
-            return list(sconfig.sizes(sconfig.load(home)))
+            return list(sconfig.sizes(sconfig.load(home)).values())
         except registry.ConfigError:
             return []
+
+    def picker_sizes(names):
+        """Size objects for a picker, in ``names`` order; a name the config
+        no longer has is shown bare."""
+        from ..sched import config as sconfig
+        try:
+            known = sconfig.sizes(sconfig.load(home))
+        except registry.ConfigError:
+            known = {}
+        return [known.get(n) or sconfig.Size(name=n, cpus=1) for n in names]
 
     def ide_config():
         from .. import ide
@@ -297,7 +307,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                 if r["project"] == e["name"]:
                     cls[r["wpid"]] = dsched.packet_info(snap, e, r["wpid"])
         return render(request, "packets.html", rows=rows, broken=broken, states=states,
-                      sch=cls, classes=CLASSES, sizes=list((snap or {}).get("sizes", {})),
+                      sch=cls, classes=CLASSES, sizes=picker_sizes((snap or {}).get("sizes", {})),
                       boards=registry.boards(home),
                       side=data.side(home, cols, broken), live=True)
 

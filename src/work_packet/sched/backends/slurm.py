@@ -55,12 +55,14 @@ def utc(v):
         return None
 
 
-def node_command(cfg, path, lost=None):
-    """What a job runs: ``node_env`` and ``wpk step``."""
+def node_command(cfg, path, lost=None, size=None):
+    """What a job runs: ``node_env``, the size's ``env`` lines, and ``wpk step``."""
     cmd = "wpk step %s" % shlex.quote(path)
     if lost:
         cmd += " --lost %s" % shlex.quote(lost)
-    env = (cfg.get("node_env") or "").strip()
+    lines = [(cfg.get("node_env") or "").strip()]
+    lines += (size.env if size is not None else "").splitlines()
+    env = " && ".join(x.strip() for x in lines if x.strip())
     return "%s && exec %s" % (env, cmd) if env else "exec " + cmd
 
 
@@ -108,7 +110,7 @@ class Slurm(Backend):
         argv += self.common["extra"] + list(z.extra)
         argv += ["-o", task.log]
         cmd = " ".join(shlex.quote(a) for a in task.argv) if task.argv else \
-            node_command(self.cfg, task.path, task.lost)
+            node_command(self.cfg, task.path, task.lost, z)
         return argv + ["--wrap", cmd]
 
     def submit(self, task):
