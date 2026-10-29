@@ -45,6 +45,7 @@ def login(args, h):                  # h = the wpk home; None -> exit 0
     ...
 ```
 
+Read the plugin's settings with `work_packet.plugins.table("gateway")`.
 `wpk gateway login` runs `login(args, h)`. A group with no command prints
 its help (rc 2). Plugin groups get their own heading in `wpk --help`.
 
@@ -85,21 +86,30 @@ class Proxy:
 ```
 
 `ctx` (`work_packet.hooks.StepContext`) has `step_dir`, `wpid`, `step`,
-`attempt`, `harness`, `model`, `env` (mutable). A nudged step runs twice:
+`attempt`, `harness`, `model`, `env` (mutable) and `config` (the plugin's
+`[plugins.<name>]` table). A nudged step runs twice:
 `finish` is called after each run. A hook that raises gets
 `ext[name] = {"error": ...}` and is not called again, except `stop`.
 
 ### 1.4 Cost sources (`work_packet.cost`)
 
 ```python
-def cost(meta, step_dir):            # None | a number | {usd, basis?, source?}
-    ...
+class GatewayCost:
+    def cost(self, meta, step_dir):  # None | a number | {usd, basis?, source?}
+        bill = meta.get("ext", {}).get("gateway") or {}
+        return bill.get("usd")
 ```
+
+`meta` is the meta.json about to be written (`tokens`, `model`, `route`,
+`ext`). Plugins are asked in entry-point order; one that raises is skipped
+(a line on stderr).
 
 Called after the hooks' `finish`, so it may read `meta["ext"]` (a gateway's
 own bill for the step, say). The first answer wins and sets
-`meta["cost"] = {usd, basis, source, harness_usd}`; with none, the cost is
-the harness's figure, or priced from the profile's `price` table. `wpk
+`meta["cost"] = {usd, basis, source, harness_usd}` (basis defaults to the
+plugin's name). With no answer the cost is priced from the profile's
+`price` table (basis `priced`) if it has one, else the harness's own
+figure (basis `harness`). `wpk
 stats --by basis` and the dash mark totals that mix bases with `*`.
 
 ### 1.5 Budget providers (`work_packet.budget`)
@@ -200,7 +210,7 @@ and `wpk stats --by route`.
 ## 4. Job sizes
 
 A size in `[sched.sizes.<name>]` (scheduler.md §5.2) may carry, beyond
-cores and memory:
+`cpus`, `mem`, `time`, `partition`/`queue` and `extra`:
 
 | Key | Meaning |
 |---|---|
@@ -211,7 +221,7 @@ cores and memory:
 
 ```toml
 [sched.sizes.xl]
-cores = 16
+cpus = 16
 mem = "64G"
 resources = "select[type==X86_64] rusage[tmp=20000]"
 env = "module load questa/2026.2"
@@ -237,7 +247,7 @@ gateway = "acme_wpk.creds:GatewayToken"
 gateway = "acme_wpk.hooks:Proxy"
 
 [project.entry-points."work_packet.cost"]
-gateway = "acme_wpk.cost:cost"
+gateway = "acme_wpk.cost:GatewayCost"
 
 [project.entry-points."work_packet.budget"]
 portal = "acme_wpk.budget:Portal"
@@ -254,3 +264,21 @@ acme-agent = "acme_wpk.agent:AcmeAgent"
 
 Install it into the same environment as `wpk`, then run `wpk doctor`: each
 plugin should show as loaded.
+
+## 6. Developing and testing a plugin
+
+- Install the package editable into wpk's environment
+  (`pip install -e .`); entry points are read once per process, so restart
+  `wpk dash` and wpkd after a change.
+- `wpk doctor` lists every plugin: `ok`, `disabled`, or the import error /
+  name clash. A broken harness or backend also gets its own row.
+- Try a site config without touching `/etc`: `WPK_SITE_CONFIG=./site.toml
+  wpk doctor`.
+- In tests, patch `importlib.metadata.entry_points` to return your entry
+  points and call `work_packet.plugins._reset()` (also reset by
+  `work_packet.harness._reset()`) so the groups are read again. wpk's own
+  `tests/test_plugins.py` (`fake` fixture) shows the pattern for every group.
+- Keep plugin calls quick and bounded: hooks, cost plugins and budget reads
+  run inline in a step or in the wpkd loop.
+- Never put secrets in config or `meta.json`: use the credential store
+  (§1.2) or an `env_file` with mode 0600.
