@@ -144,7 +144,9 @@ def _load():
 def _reset():
     """Forget the entry points read (tests)."""
     from .. import plugins
+    from ..sched import backends
     plugins._reset()
+    backends._reset()
     _loaded.clear()
     _plugins.clear()
     _broken.clear()

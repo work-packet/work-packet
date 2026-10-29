@@ -693,9 +693,15 @@ def validate_sched(t):
     """``[sched]`` (docs/scheduler.md §10)."""
     if not isinstance(t, dict):
         return [_err("sched", "must be a table")]
-    out = _unknown(t, tuple(SCHED_DEFAULTS), "sched")
-    if t.get("backend", "local") not in SCHED_BACKENDS:
-        out.append(_err("sched.backend", "must be one of %s" % ", ".join(SCHED_BACKENDS)))
+    backend = t.get("backend", "local")
+    known = SCHED_BACKENDS
+    if backend not in SCHED_BACKENDS:
+        from .sched import backends
+        known = tuple(backends.names())
+    # a plugin backend keeps its own settings in [sched.<name>]
+    out = _unknown(t, tuple(SCHED_DEFAULTS) + (() if backend in SCHED_BACKENDS else (backend,)), "sched")
+    if backend not in known:
+        out.append(_err("sched.backend", "must be one of %s" % ", ".join(known)))
     for k in ("cores", "jobs"):
         v = t.get(k, 0)
         if not (is_int(v) and v >= 0):

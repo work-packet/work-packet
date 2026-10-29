@@ -220,6 +220,10 @@ def _tools(need_git=False):
     for name, why in sorted(harness.broken().items()):
         out.append(Check("tools.harness." + name, "tools", "warn",
                          "harness plugin %s not loaded" % name, why))
+    from .sched import backends
+    for name, why in sorted(backends.broken().items()):
+        out.append(Check("tools.sched_backend." + name, "tools", "warn",
+                         "scheduler backend plugin %s not loaded" % name, why))
     from . import plugins
     for p in plugins.everything():
         cid = "tools.plugin.%s.%s" % (p.group.split(".")[-1], p.name)

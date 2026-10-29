@@ -5,6 +5,8 @@ import importlib.metadata
 import pytest
 
 from work_packet import harness, plugins, schema, setup, starters
+from work_packet.sched import backends
+from work_packet.sched import config as sched_config
 
 
 class _Dist:
@@ -28,6 +30,13 @@ class Mine:
     name = "mine"
 
 
+class Farm(backends.Backend):
+    name = "farm"
+
+    def __init__(self, cfg, h=None):
+        self.cfg, self.h = cfg, h
+
+
 def _boom():
     raise ImportError("no module named acme_budget")
 
@@ -37,6 +46,8 @@ def _objs():
     out = {g: [_EP("acme", "acme.%s:Plugin" % g.split(".")[-1],
                    lambda g=g: ("obj", g))] for g in plugins.GROUPS}
     out["work_packet.harnesses"] = [_EP("fake", "acme.harness:Fake", lambda: Fake)]
+    out["work_packet.sched_backends"].append(_EP("farm", "acme.farm:Farm", lambda: Farm))
+    out["work_packet.sched_backends"].append(_EP("lsf", "acme.farm:Lsf", lambda: Farm))
     out["work_packet.starters"].append(_EP("mine", "acme.start:Mine", lambda: Mine))
     out["work_packet.budget"].append(_EP("broke", "acme.budget:Broke", _boom))
     out["work_packet.cost"].append(_EP("other", "other:Cost", lambda: "cost", dist=None))
@@ -73,7 +84,7 @@ def test_every_group_loads(fake):
         assert p.ok and p.obj == ("obj", g)
     assert plugins.loaded("work_packet.cost") == {"acme": ("obj", "work_packet.cost"),
                                                   "other": "cost"}
-    assert len(plugins.everything()) == len(plugins.GROUPS) + 3
+    assert len(plugins.everything()) == len(plugins.GROUPS) + 5
 
 
 def test_loaded_once(fake, monkeypatch):
@@ -148,3 +159,27 @@ def test_doctor_lists_plugins(fake):
     assert "no module named acme_budget" in rows["tools.plugin.budget.broke"].detail
     assert rows["tools.plugin.cost.other"].level == "info"
     assert rows["tools.plugin.cost.other"].title == "plugin other disabled"
+
+
+def test_sched_backend_plugin(fake):
+    assert backends.names() == ["farm", "local", "lsf", "slurm"]
+    raw = {"sched": {"backend": "farm", "farm": {"queue": "big"}}}
+    assert schema.validate_config(raw) == []
+    cfg = sched_config.load(raw=raw)
+    b = backends.get(cfg)
+    assert isinstance(b, Farm) and b.cfg["farm"] == {"queue": "big"}
+    # not a Backend subclass, or a built-in's name: broken, said in doctor
+    assert set(backends.broken()) == {"acme", "lsf"}
+    assert "built-in" in backends.broken()["lsf"]
+    with pytest.raises(ValueError, match="did not load"):
+        backends.get({"backend": "acme"})
+    rows = {c.id: c for c in setup._tools()}
+    assert rows["tools.sched_backend.acme"].level == "warn"
+    assert "not a Backend subclass" in rows["tools.sched_backend.acme"].detail
+
+
+def test_sched_backend_unknown(fake):
+    fields = [p.field for p in schema.validate_config({"sched": {"backend": "nope", "nope": {}}})]
+    assert fields == ["sched.backend"]
+    fields = [p.field for p in schema.validate_config({"sched": {"backend": "lsf", "farm": {}}})]
+    assert fields == ["sched.farm"]
