@@ -105,7 +105,40 @@ SCHED_DEFAULTS = {                    # docs/scheduler.md §10
 SCHED_BACKENDS = ("local", "slurm", "lsf")
 SCHED_CLASSES = ("urgent", "high", "normal", "low", "background")
 SCHED_MODES = ("run", "drain", "stop")
-SIZE_KEYS = ("cpus", "mem", "time", "partition", "queue", "extra")
+LSF_SECTIONS = ("select", "order", "rusage", "span", "same", "cu", "affinity")
+
+
+def lsf_sections(s):
+    """Split an LSF ``-R`` string into ``[(section, body)]``. Text outside
+    ``name[...]`` is a ``select`` expression (``type==X86_64``)."""
+    out, i, n = [], 0, len(s)
+    while i < n:
+        m = _LSF_SECTION.match(s, i)
+        if m and m.group(1) in LSF_SECTIONS:
+            depth, j = 1, m.end()
+            while j < n and depth:
+                depth += {"[": 1, "]": -1}.get(s[j], 0)
+                j += 1
+            if depth:
+                raise ValueError("unclosed %s[" % m.group(1))
+            out.append((m.group(1), s[m.end():j - 1].strip()))
+            i = j
+            continue
+        m = _LSF_FREE.match(s, i)
+        if not m or not m.group(1):
+            if s[i:].strip():
+                raise ValueError("cannot read %r (sections: %s)" % (s[i:], ", ".join(LSF_SECTIONS)))
+            break
+        out.append(("select", m.group(1)))
+        i = m.end()
+    return out
+
+
+_LSF_SECTION = re.compile(r"\s*([a-z]+)\[")
+_LSF_FREE = re.compile(r"\s*([^\[\]]*?)\s*(?=\b(?:%s)\[|$)" % "|".join(LSF_SECTIONS))
+
+
+SIZE_KEYS = ("cpus", "mem", "time", "partition", "queue", "extra", "resources", "constraint")
 SCHED_BUDGET_DEFAULTS = {             # §4; Q2
     "measure": "",                     # usd | tokens | quota; empty: no budget
     "amount": 0.0,
@@ -608,9 +641,14 @@ def validate_size(name, t, where="sched.sizes"):
             parse_duration(t["time"])
         except ValueError as e:
             out.append(_err(f + ".time", str(e)))
-    for k in ("partition", "queue"):
+    for k in ("partition", "queue", "resources", "constraint"):
         if k in t and not isinstance(t[k], str):
             out.append(_err("%s.%s" % (f, k), "must be a string"))
+    if isinstance(t.get("resources"), str):
+        try:
+            lsf_sections(t["resources"])
+        except ValueError as e:
+            out.append(_err(f + ".resources", str(e)))
     if "extra" in t and not _strs(t["extra"]):
         out.append(_err(f + ".extra", "must be a list of strings"))
     return out

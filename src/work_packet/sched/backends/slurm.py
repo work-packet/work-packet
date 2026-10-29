@@ -103,6 +103,8 @@ class Slurm(Backend):
             argv += ["-p", part]
         if self.common["account"]:
             argv += ["--account", self.common["account"]]
+        if z.constraint:
+            argv += ["--constraint", z.constraint]
         argv += self.common["extra"] + list(z.extra)
         argv += ["-o", task.log]
         cmd = " ".join(shlex.quote(a) for a in task.argv) if task.argv else \

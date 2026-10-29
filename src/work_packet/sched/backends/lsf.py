@@ -31,6 +31,27 @@ def hhmm(s):
     return "%d:%02d" % (m // 60, m % 60)
 
 
+def resource_string(z):
+    """The one ``-R`` for a size: its ``resources`` merged with ``rusage[mem]``
+    and ``span[hosts=1]``. Several selects are and-ed; the size's own span
+    replaces the default; its rusage is added after the memory."""
+    parts = {"select": [], "rusage": ["mem=%d" % z.mem_mb] if z.mem_mb else []}
+    order = ["select", "rusage"]
+    for name, body in schema.lsf_sections(z.resources):
+        if name in ("select", "rusage"):
+            parts[name].append(body)
+        else:
+            parts[name] = [body]
+            if name not in order:
+                order.append(name)
+    if "span" not in parts:
+        parts["span"], order = ["hosts=1"], order + ["span"]
+    sel = parts["select"]
+    parts["select"] = [" && ".join("(%s)" % b for b in sel) if len(sel) > 1 else sel[0]] if sel else []
+    parts["rusage"] = [", ".join(parts["rusage"])] if parts["rusage"] else []
+    return " ".join("%s[%s]" % (n, parts[n][0]) for n in order if parts[n])
+
+
 def cpu_seconds(v):
     """bjobs ``cpu_used``: ``HH:MM:SS`` or ``1.5 second(s)``."""
     if not v:
@@ -99,9 +120,8 @@ class Lsf(Backend):
     def submit_argv(self, task):
         z = task.size
         limit = z.time_s or (self.step_timeout_s + MARGIN_S)
-        rusage = "rusage[mem=%d] " % z.mem_mb if z.mem_mb else ""
         argv = ["-J", task.name, "-W", hhmm(limit), "-n", str(z.cpus),
-                "-R", "%sspan[hosts=1]" % rusage]
+                "-R", resource_string(z)]
         q = z.queue or self.common["queue"]
         if q:
             argv += ["-q", q]

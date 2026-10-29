@@ -43,6 +43,8 @@ class Size:
     partition: str = ""
     queue: str = ""
     extra: Tuple[str, ...] = ()
+    resources: str = ""              # LSF: merged into the one -R
+    constraint: str = ""             # SLURM: --constraint
 
     def describe(self):
         out = "%d core%s" % (self.cpus, "" if self.cpus == 1 else "s")
@@ -74,7 +76,8 @@ def _size(name, t):
                 mem_mb=schema.parse_mem(t["mem"]) if t.get("mem") else 0,
                 time_s=schema.parse_duration(t["time"]) if t.get("time") else None,
                 partition=t.get("partition", ""), queue=t.get("queue", ""),
-                extra=tuple(t.get("extra") or ()))
+                extra=tuple(t.get("extra") or ()),
+                resources=t.get("resources", ""), constraint=t.get("constraint", ""))
 
 
 def sizes(cfg):
