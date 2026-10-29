@@ -1,6 +1,5 @@
 """``[sched]``: sizes and pool limits (docs/scheduler.md §5.2, §10)."""
 
-import copy
 import os
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
@@ -13,14 +12,7 @@ def sched_dir(h=None):
     return os.path.join(h or registry.home(), "sched")
 
 
-def _merge(base, over):
-    out = copy.deepcopy(base)
-    for k, v in over.items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _merge(out[k], v)
-        else:
-            out[k] = copy.deepcopy(v)
-    return out
+_merge = registry.merge_tables
 
 
 def load(h=None, raw=None):

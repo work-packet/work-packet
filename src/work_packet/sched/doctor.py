@@ -59,7 +59,15 @@ def run(h=None, probe=True, wait_s=180):
     else:
         out.append(Check("ok", "board listener: %s" % ("unix socket" if listen == "unix"
                                                        else "loopback, single-user host")))
-    be = cfg.get("backend", "local")
+    sp = registry.site_config_path()
+    if sp and os.path.exists(sp):
+        out.append(Check("ok", "site config: %s" % sp))
+        locks = registry.overridden_locks(h)
+        if locks:
+            out.append(Check("warn", "config.toml sets locked keys: %s" % ", ".join(locks),
+                             "the site config locks them; its values are used",
+                             ["remove them from %s" % os.path.join(h, "config.toml")]))
+    be =cfg.get("backend", "local")
     if be == "local":
         out.append(Check("ok", "backend local: steps run on this host"))
         return out

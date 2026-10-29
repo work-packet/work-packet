@@ -1,5 +1,6 @@
 """The runner home: ``$WPK_HOME`` or ``~/.work-packet`` (spec §2)."""
 
+import copy
 import os
 
 from . import clock, fsutil, layout, schema
@@ -24,19 +25,100 @@ def projects_dir(h=None):
     return os.path.join(h or home(), "projects")
 
 
-def load_config_file(h=None):
-    """``config.toml`` as written (validated); ``{}`` if there is none."""
-    path = os.path.join(h or home(), "config.toml")
-    if not os.path.exists(path):
+SITE_CONFIG = "/etc/wpk/config.toml"
+
+
+def site_config_path():
+    """The site's ``config.toml``: ``$WPK_SITE_CONFIG`` (set but empty: none),
+    else ``/etc/wpk/config.toml``."""
+    v = os.environ.get("WPK_SITE_CONFIG")
+    return (v or None) if v is not None else SITE_CONFIG
+
+
+def _check_config(path, d):
+    probs = [p for p in schema.validate_config(d) if p.level == "error"]
+    if probs:
+        raise ConfigError("%s: %s: %s" % (path, probs[0].field, probs[0].msg))
+
+
+def _read_config(path, check=True):
+    if not path or not os.path.exists(path):
         return {}
     try:
         got = load_toml(path)
     except (OSError, ValueError) as e:
         raise ConfigError("%s: %s" % (path, e)) from None
-    probs = [p for p in schema.validate_config(got) if p.level == "error"]
-    if probs:
-        raise ConfigError("%s: %s: %s" % (path, probs[0].field, probs[0].msg))
+    if check:
+        _check_config(path, got)
     return got
+
+
+def merge_tables(base, over):
+    """``over`` on ``base``, sub-tables key by key (copies; neither changes)."""
+    out = copy.deepcopy(base)
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = merge_tables(out[k], v)
+        else:
+            out[k] = copy.deepcopy(v)
+    return out
+
+
+_MISSING = object()
+
+
+def _dotted(d, key):
+    for part in key.split("."):
+        if not isinstance(d, dict) or part not in d:
+            return _MISSING
+        d = d[part]
+    return d
+
+
+def _set_dotted(d, key, v):
+    *parts, last = key.split(".")
+    for part in parts:
+        if not isinstance(d.get(part), dict):
+            d[part] = {}
+        d = d[part]
+    if v is _MISSING:
+        d.pop(last, None)
+    else:
+        d[last] = copy.deepcopy(v)
+
+
+def load_site_config():
+    """The site's ``config.toml`` (validated); ``{}`` if there is none."""
+    return _read_config(site_config_path())
+
+
+def overridden_locks(h=None):
+    """The ``[site] locked`` keys the user's ``config.toml`` sets to
+    something else (the site's value is used)."""
+    site = load_site_config()
+    user = _read_config(os.path.join(h or home(), "config.toml"), check=False)
+    return [k for k in (site.get("site") or {}).get("locked", [])
+            if _dotted(user, k) is not _MISSING and _dotted(user, k) != _dotted(site, k)]
+
+
+def load_config_file(h=None):
+    """``config.toml`` as written (validated) over the site config (design
+    E8.1), key by key; ``[site] locked`` keys keep the site's value (or stay
+    unset). ``{}`` if there is neither."""
+    site = load_site_config()
+    path = os.path.join(h or home(), "config.toml")
+    if not site:
+        return _read_config(path)
+    # The user's file is checked merged: it may set one key of a site's size.
+    out = merge_tables(site, _read_config(path, check=False))
+    for k in (site.get("site") or {}).get("locked", []):
+        _set_dotted(out, k, _dotted(site, k))
+    if "site" in site:
+        out["site"] = copy.deepcopy(site["site"])
+    else:
+        out.pop("site", None)
+    _check_config(path, out)
+    return out
 
 
 def load_config(h=None):

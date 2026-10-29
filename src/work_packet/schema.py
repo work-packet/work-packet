@@ -779,12 +779,27 @@ def _validate_plugins(d):
     return out
 
 
+def _validate_site(d):
+    """``[site]``: ``locked``, dotted keys of the site config a user's
+    ``config.toml`` may not override (design E8.1)."""
+    t = d.get("site")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("site", "must be a table")]
+    out = _unknown(t, ("locked",), "site")
+    v = t.get("locked", [])
+    if not (isinstance(v, list) and all(isinstance(x, str) and x for x in v)):
+        out.append(_err("site.locked", "must be a list of dotted keys"))
+    return out
+
+
 def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
-                                                "console", "harnesses", "plugins")) \
+                                                "console", "harnesses", "plugins", "site")) \
         + _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d) \
         + _validate_console(d) + _validate_forges(d.get("forge")) + _validate_harness(d) \
-        + _validate_plugins(d)
+        + _validate_plugins(d) + _validate_site(d)
     v = d.get("max_step_budget_usd", 1)
     if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
         out.append(_err("max_step_budget_usd", "must be a number > 0"))
