@@ -740,11 +740,32 @@ def _validate_console(d):
     return out
 
 
+HARNESS_KEYS = ("env", "env_file")     # [harnesses.<name>] (docs/harness.md)
+
+
+def _validate_harness(d):
+    t = d.get("harnesses")
+    if t is None:
+        return []
+    if not (isinstance(t, dict) and all(isinstance(v, dict) for v in t.values())):
+        return [_err("harnesses", "must be a table of [harnesses.<name>] tables")]
+    out = []
+    for name, h in t.items():
+        k = "harnesses." + name
+        out += _unknown(h, HARNESS_KEYS, k)
+        env = h.get("env", {})
+        if not (isinstance(env, dict) and all(isinstance(v, str) for v in env.values())):
+            out.append(_err(k + ".env", "must be a table of strings"))
+        if "env_file" in h and not (isinstance(h["env_file"], str) and h["env_file"]):
+            out.append(_err(k + ".env_file", "must be a path"))
+    return out
+
+
 def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
-                                                "console")) \
+                                                "console", "harnesses")) \
         + _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d) \
-        + _validate_console(d) + _validate_forges(d.get("forge"))
+        + _validate_console(d) + _validate_forges(d.get("forge")) + _validate_harness(d)
     v = d.get("max_step_budget_usd", 1)
     if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
         out.append(_err("max_step_budget_usd", "must be a number > 0"))

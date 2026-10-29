@@ -5,7 +5,7 @@ import os
 import shlex
 import sys
 
-from . import Caps, Harness
+from . import Caps, Harness, home_env
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOK = os.path.join(PKG, "ctxhook.py")
@@ -151,8 +151,10 @@ class Claude(Harness):
 
     def env(self, spec):
         # Steps already get the 1-hour cache; pin it, since carry-over relies on it.
-        return {"CLAUDE_CODE_PROMPT_CACHE_TTL": os.environ.get(
+        out = {"CLAUDE_CODE_PROMPT_CACHE_TTL": os.environ.get(
             "CLAUDE_CODE_PROMPT_CACHE_TTL", "1h")}
+        out.update(home_env(self.name))
+        return out
 
     def parse(self, transcript_path, res):
         """Fill ``res`` from a stream-json transcript.

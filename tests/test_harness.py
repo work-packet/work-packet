@@ -114,3 +114,87 @@ def test_no_quota_without_rate_limit_events(tmp_path):
     p = tmp_path / "t.jsonl"
     p.write_text(json.dumps({"type": "result", "total_cost_usd": 0.1}) + "\n")
     assert claude.Claude().parse(str(p), model.StepResult()).quota == {}
+
+
+# --- [harnesses.<name>] env and env_file (docs/harness.md) ---------------------
+
+def _home(tmp_path, monkeypatch, config):
+    h = tmp_path / "home-env"
+    h.mkdir()
+    (h / "config.toml").write_text(config)
+    monkeypatch.setenv("WPK_HOME", str(h))
+    return h
+
+
+def _secret(path, text, mode=0o600):
+    path.write_text(text)
+    os.chmod(path, mode)
+
+
+def test_no_harness_table_keeps_todays_env(tmp_path, monkeypatch):
+    _home(tmp_path, monkeypatch, "")
+    monkeypatch.delenv("CLAUDE_CODE_PROMPT_CACHE_TTL", raising=False)
+    assert claude.Claude().env(None) == {"CLAUDE_CODE_PROMPT_CACHE_TTL": "1h"}
+
+
+def test_env_then_env_file_over_it(tmp_path, monkeypatch):
+    h = _home(tmp_path, monkeypatch,
+              '[harnesses.claude]\nenv_file = "claude.env"\n'
+              '[harnesses.claude.env]\nANTHROPIC_BASE_URL = "https://gw.example/v1"\n'
+              'A = "from-env"\nCLAUDE_CODE_PROMPT_CACHE_TTL = "5m"\n')
+    _secret(h / "claude.env", '# key\nexport A="from-file"\nANTHROPIC_API_KEY=sk-x\n\n')
+    got = claude.Claude().env(None)
+    assert got == {"CLAUDE_CODE_PROMPT_CACHE_TTL": "5m", "A": "from-file",
+                   "ANTHROPIC_BASE_URL": "https://gw.example/v1", "ANTHROPIC_API_KEY": "sk-x"}
+
+
+def test_env_is_per_harness(tmp_path, monkeypatch):
+    _home(tmp_path, monkeypatch, '[harnesses.codex.env]\nOPENAI_BASE_URL = "x"\n')
+    assert "OPENAI_BASE_URL" not in claude.Claude().env(None)
+    assert harness.home_env("codex") == {"OPENAI_BASE_URL": "x"}
+
+
+def test_env_file_readable_by_others_is_refused(tmp_path, monkeypatch):
+    h = _home(tmp_path, monkeypatch, '[harnesses.claude]\nenv_file = "claude.env"\n')
+    _secret(h / "claude.env", "ANTHROPIC_API_KEY=sk-x\n", 0o644)
+    said = []
+    assert harness.home_env("claude", warn=said.append) == {}
+    assert "must be 0600" in said[0] and "sk-x" not in said[0]
+
+
+def test_env_file_missing_or_bad_is_warned(tmp_path, monkeypatch):
+    h = _home(tmp_path, monkeypatch, '[harnesses.claude]\nenv_file = "~nobody-here/x.env"\n'
+              '[harnesses.claude.env]\nB = "1"\n')
+    said = []
+    assert harness.home_env("claude", warn=said.append) == {"B": "1"}
+    assert "not used" in said[0]
+    _secret(h / "bad.env", "no equals sign\n")
+    cfg = {"harnesses": {"claude": {"env_file": str(h / "bad.env")}}}
+    said = []
+    assert harness.home_env("claude", cfg=cfg, warn=said.append) == {}
+    assert "line 1" in said[0]
+
+
+def test_harness_table_validated():
+    from work_packet import schema
+    ok = {"harnesses": {"claude": {"env": {"A": "1"}, "env_file": "x"}}}
+    assert schema.validate_config(ok) == []
+    bad = [p.field for p in schema.validate_config(
+        {"harnesses": {"claude": {"env": {"A": 1}, "env_file": "", "other": 1}}})]
+    assert bad == ["harnesses.claude.other", "harnesses.claude.env", "harnesses.claude.env_file"]
+    assert [p.field for p in schema.validate_config({"harnesses": {"claude": 1}})] == ["harnesses"]
+
+
+def test_step_gets_home_env(fresh, monkeypatch, tmp_path):
+    proj, root, argv = fresh
+    with open(tmp_path / "wpk-home" / "config.toml", "a") as f:
+        f.write('[harnesses.claude.env]\nWPK_TEST_ROUTE = "gateway"\n')
+    seen = {}
+    real = executor._model
+
+    def spy(pkt, st, h, spec, env, *a, **kw):
+        seen.update(env)
+        return real(pkt, st, h, spec, env, *a, **kw)
+    monkeypatch.setattr(executor, "_model", spy)
+    executor.step(proj)
+    assert seen.get("WPK_TEST_ROUTE") == "gateway"

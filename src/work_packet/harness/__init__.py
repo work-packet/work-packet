@@ -5,6 +5,8 @@ environment, reading the transcript, and the features it has (``Caps``).
 The executor and the packet format do not depend on the harness.
 """
 
+import os
+import sys
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -44,7 +46,9 @@ class Harness:
         raise NotImplementedError
 
     def env(self, spec):
-        return {}
+        """Extra environment for the run, over the executor's. An adapter that
+        overrides this should apply ``home_env(self.name)`` last."""
+        return home_env(self.name)
 
     def parse(self, transcript_path, res):
         """Fill ``res`` (a ``model.StepResult``) from the run's transcript."""
@@ -54,6 +58,60 @@ class Harness:
         """``[(model, label)]`` to offer when choosing one. Not a limit: the
         harness may take others (none of them can list what an account may use)."""
         return []
+
+
+def read_env_file(path):
+    """``KEY=VALUE`` lines of an ``env_file``; blank lines and ``#`` comments
+    are skipped, and one pair of quotes round a value is taken off."""
+    out = {}
+    with open(path) as f:
+        for i, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            k, eq, v = line.partition("=")
+            k, v = k.strip(), v.strip()
+            if not eq or not k:
+                raise ValueError("line %d: not KEY=VALUE" % i)
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            out[k] = v
+    return out
+
+
+def home_env(name, cfg=None, home=None, warn=None):
+    """The environment ``[harnesses.<name>]`` in the home's ``config.toml`` sets
+    (docs/harness.md): ``env``, then ``env_file`` over it. ``cfg`` is the
+    config as written (read if None). An ``env_file`` that others can read,
+    or that cannot be read, is left out and ``warn`` (stderr by default) is
+    told why: it holds secrets, and its name is all that is said about it."""
+    from .. import registry
+    if warn is None:
+        def warn(msg):
+            sys.stderr.write("wpk: %s\n" % msg)
+    h = home or registry.home()
+    if cfg is None:
+        try:
+            cfg = registry.load_config_file(h)
+        except registry.ConfigError:
+            return {}
+    t = (cfg.get("harnesses") or {}).get(name) or {}
+    out = dict(t.get("env") or {})
+    path = t.get("env_file")
+    if path:
+        path = os.path.join(h, os.path.expanduser(path))
+        try:
+            mode = os.stat(path).st_mode
+            if mode & 0o077:
+                warn("[harnesses.%s] env_file %s is mode %o; it must be 0600 (not used)"
+                     % (name, path, mode & 0o777))
+            else:
+                out.update(read_env_file(path))
+        except (OSError, ValueError) as e:
+            warn("[harnesses.%s] env_file %s: %s (not used)" % (name, path, e))
+    return out
 
 
 def names():
