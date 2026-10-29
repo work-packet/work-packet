@@ -68,7 +68,7 @@ def plugin_harnesses(monkeypatch):
 
 
 def test_plugin_harness_from_entry_point(plugin_harnesses):
-    assert harness.names() == ["claude", "fake"]
+    assert harness.names() == ["claude", "codex", "fake"]
     assert isinstance(harness.get("fake"), Fake)
     assert isinstance(harness.get("claude"), claude.Claude)    # a built-in keeps its name
 
@@ -267,3 +267,78 @@ def test_route_account_from_init_event(tmp_path):
     assert res.account == "key"
     h = claude.Claude()
     assert executor._route(h, {}, model.StepResult()) == {"account": "unknown", "host": "default"}
+
+
+# --- Codex (UNVERIFIED event names; see harness/codex.py) --------------------------
+
+CODEX_TRANSCRIPT = [
+    {"type": "thread.started", "thread_id": "0199-thread"},
+    {"type": "turn.started"},
+    {"type": "item.completed", "item": {"id": "i0", "type": "reasoning", "text": "thinking"}},
+    {"type": "item.completed", "item": {"id": "i1", "type": "command_execution",
+                                        "command": "ls", "exit_code": 0}},
+    {"type": "item.completed", "item": {"id": "i2", "type": "agent_message", "text": "Done."}},
+    {"type": "turn.completed", "usage": {"input_tokens": 12000, "cached_input_tokens": 9000,
+                                         "output_tokens": 800, "reasoning_output_tokens": 300}},
+]
+
+
+def _codex_parse(tmp_path, events, account=None):
+    from work_packet.harness import codex
+    t = tmp_path / "t.jsonl"
+    t.write_text("".join(json.dumps(e) + "\n" for e in events) + "not json\n")
+    h = codex.Codex()
+    h.account = account
+    return h.parse(str(t), model.StepResult(exit_code=0))
+
+
+def test_codex_registered():
+    h = harness.get("codex")
+    assert h.base_url_var == "OPENAI_BASE_URL"
+    assert not h.caps.system_slot and not h.caps.resume and not h.caps.reports_cost
+
+
+def test_codex_command(monkeypatch):
+    monkeypatch.delenv("WPK_CODEX", raising=False)
+    spec = harness.StepSpec(model="gpt-5-codex", session_id="s", permission_mode="acceptEdits",
+                            allowed_tools=["Read"], budget_usd=1.0, add_dirs=["/w"])
+    argv = harness.get("codex").command(spec)
+    assert argv[:3] == ["codex", "exec", "--json"] and argv[-1] == "-"
+    assert argv[argv.index("--model") + 1] == "gpt-5-codex"
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert argv[argv.index("--add-dir") + 1] == "/w"
+    spec.permission_mode = "bypassPermissions"
+    assert "--dangerously-bypass-approvals-and-sandbox" in harness.get("codex").command(spec)
+
+
+def test_codex_parse(tmp_path):
+    res = _codex_parse(tmp_path, CODEX_TRANSCRIPT, account="subscription")
+    assert res.failure() is None
+    assert res.session_id == "0199-thread" and res.text == "Done."
+    assert res.tokens == {"input_tokens": 3000, "cache_read_input_tokens": 9000,
+                          "output_tokens": 800, "thinking_tokens": 300}
+    assert res.context == [12000] and res.cost_usd is None
+    assert res.account == "subscription"
+
+
+def test_codex_failed_turn(tmp_path):
+    res = _codex_parse(tmp_path, CODEX_TRANSCRIPT[:2] + [
+        {"type": "turn.failed", "error": {"message": "stream disconnected"}}])
+    assert res.is_error and "stream disconnected" in res.failure()
+    res = _codex_parse(tmp_path, CODEX_TRANSCRIPT[:2])
+    assert res.failure() == "transcript has no result event"
+
+
+def test_codex_account_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("WPK_HOME", str(tmp_path))
+    for v in ("CODEX_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(v, raising=False)
+    h = harness.get("codex")
+    h.env(None)
+    assert h.account == "subscription"
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    h.env(None)
+    assert h.account == "key"
+    assert executor._route(h, {"OPENAI_BASE_URL": "https://gw.example/v1"},
+                           model.StepResult(account=h.account)) == {"account": "key",
+                                                                     "host": "gw.example"}

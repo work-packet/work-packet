@@ -177,7 +177,8 @@ def broken():
 
 
 from .claude import Claude  # noqa: E402  (needs Harness above)
+from .codex import Codex    # noqa: E402
 
-_REGISTRY = {"claude": Claude}
+_REGISTRY = {"claude": Claude, "codex": Codex}
 
-__all__ = ["Caps", "StepSpec", "Harness", "Claude", "get", "names", "broken"]
+__all__ = ["Caps", "StepSpec", "Harness", "Claude", "Codex", "get", "names", "broken"]
