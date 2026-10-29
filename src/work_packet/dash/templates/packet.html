@@ -127,7 +127,7 @@
     <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span></td>
     <td style="white-space:nowrap">{{ s.start|when }}</td>
     <td class="num">{{ s.duration_s|secs }}</td>
-    <td class="num">{{ s.cost_usd|money }}</td>
+    <td class="num"{% if s.cost_basis %} title="cost basis: {{ s.cost_basis }}"{% endif %}>{{ s.cost_usd|money }}{% if s.cost_basis and s.cost_basis != "harness" %} <span class="muted">{{ s.cost_basis }}</span>{% endif %}</td>
     <td class="num">{{ s.context_tokens|tok if s.context_tokens is not none }}</td>
     <td class="num">{{ s.output_tokens|tok if s.output_tokens is not none }}</td>
     {% if items %}<td>{{ s.item or "" }}</td>{% endif %}

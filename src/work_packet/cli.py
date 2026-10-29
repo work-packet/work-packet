@@ -1566,11 +1566,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--since", help="only steps that ended in this long, e.g. 7d or 12h")
     p.add_argument("--json", action="store_true", help="print JSON")
     p.add_argument("--min", type=int, default=30, help="steps a group needs for advice")
-    p.add_argument("--by", choices=("project", "packet", "item", "model", "route", "day",
-                                    "step"),
+    p.add_argument("--by", choices=("project", "packet", "item", "model", "route", "basis",
+                                    "day", "step"),
                    help="instead, a table of token use and cost per project, packet, "
                         "plan item (the memento's item), model, route (account@host), "
-                        "day or step")
+                        "cost basis (harness, priced, plugin), day or step")
     p.add_argument("--tools", nargs="?", const="tool", choices=("tool", "kind", "target"),
                    help="instead, what used up context inside steps: by tool (default), "
                         "by kind (a shell command's program) or by target (file or command)")

@@ -183,3 +183,18 @@ def test_rollup_by_route():
           step(3, route="key@gw.example"), step(4)]
     rows = {k: n for k, n, _ in stats.rollup(ss, "route")}
     assert rows == {"subscription@default": 1, "key@gw.example": 2, "(not recorded)": 1}
+
+
+def test_cost_basis_and_mixed_mark():
+    assert stats.basis_of({"cost": {"basis": "gateway"}, "cost_usd": 1}) == "gateway"
+    assert stats.basis_of({"cost_usd": 0.5}) == "harness"            # before meta.cost
+    assert stats.basis_of({"cost_usd": None}) is None
+    ss = [step(1, cost=1.0, basis="harness"), step(2, cost=2.0, basis="priced"),
+          step(3, cost=0.5, basis="priced")]
+    assert stats.bases(ss) == ["harness", "priced"]
+    rows = stats.rollup(ss, "basis")
+    assert [(k, n) for k, n, _ in rows] == [("harness", 1), ("priced", 2)]
+    lines = stats.rollup_report(rows)
+    assert "priced" in lines[2] and "*" not in lines[2]
+    lines = stats.rollup_report(stats.rollup(ss, "model"))
+    assert "$3.50*" in lines[1] and "mixed" in lines[1] and lines[-1].startswith("* adds")

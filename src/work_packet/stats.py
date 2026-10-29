@@ -52,6 +52,7 @@ class Step:
     quota: Optional[dict] = None  # {window: {first, last, resets_at}}, subscriptions only
     tools: Optional[dict] = None  # tool-cost attribution, when read from the history store
     route: Optional[str] = None   # "account@host" from meta.json, when it was recorded
+    basis: Optional[str] = None   # where cost came from: harness, priced, or a plugin's name
 
     @property
     def key(self):
@@ -182,7 +183,8 @@ def packet_steps(project, pkt):
             hook=tuple(fired.split()) if fired else (),
             resume=None if m.group(2) else _resume(mm), item=schema.memento_item(mm),
             diff_lines=_diff_lines(_read(os.path.join(d, "state.diff"))),
-            end=meta.get("end"), dir=d, quota=quota or None, route=_route(meta)))
+            end=meta.get("end"), dir=d, quota=quota or None, route=_route(meta),
+            basis=basis_of(meta)))
     # A failed attempt that left no item belongs to the item its step committed.
     done = {s.step: s.item for s in out if not s.failed}
     for s in out:
@@ -352,6 +354,7 @@ def token_figures(steps):
         "cache_read": _sum([s.cache_read for s in steps]),
         "output_tokens": out, "thinking_tokens": _sum([s.thinking_tokens for s in steps]),
         "cost_usd": _sum([s.cost for s in steps]),
+        "cost_bases": bases(steps),
         "cache_hit": _share(_sum([s.cache_read for s in steps]), ctx),
         "thinking_share": _share(_sum([s.thinking_tokens for s in steps]), out),
         "failed_share": _share(failed or 0, ctx),
@@ -377,6 +380,23 @@ def latest_quota(steps, now=None):
     return out
 
 
+def basis_of(meta):
+    """meta.cost's basis; ``harness`` for a cost recorded before there was one."""
+    c = meta.get("cost")
+    if isinstance(c, dict) and c.get("basis"):
+        return str(c["basis"])
+    return "harness" if meta.get("cost_usd") is not None else None
+
+
+def bases(steps):
+    """The sorted cost bases of ``steps`` (those with a cost)."""
+    return sorted({s.basis for s in steps if s.cost is not None and s.basis})
+
+
+def _basis_label(bs):
+    return "-" if not bs else bs[0] if len(bs) == 1 else "mixed"
+
+
 def _route(meta):
     r = meta.get("route")
     if not isinstance(r, dict):
@@ -389,6 +409,7 @@ ROLLUPS = {
     "packet": lambda s: "%s/%s" % (s.project, s.wpid[:8]),
     "model": lambda s: s.model,
     "route": lambda s: s.route or "(not recorded)",
+    "basis": lambda s: s.basis or "(no cost)",
     "item": lambda s: "%s/%s %s" % (s.project, s.wpid[:8], s.item or "(no item)"),
     "day": lambda s: (s.end or "?")[:10],
     "step": lambda s: "%s/%s/%04d%s" % (s.project, s.wpid[:8], s.step,
@@ -408,16 +429,23 @@ def rollup(steps, by):
 
 def rollup_report(rows):
     w = max([28] + [len(k) for k, _, _ in rows])
-    head = ("%-*s %5s %9s %6s %8s %7s %7s %6s %6s %6s %5s"
-            % (w, "", "steps", "cost", "week", "context", "write", "output", "think", "hit",
-               "failed", "brk"))
+    head = ("%-*s %5s %9s %-8s %6s %8s %7s %7s %6s %6s %6s %5s"
+            % (w, "", "steps", "cost", "basis", "week", "context", "write", "output", "think",
+               "hit", "failed", "brk"))
     lines = [head]
+    mixed = False
     for label, n, f in rows:
-        lines.append("%-*s %5d %9s %6s %8s %7s %7s %6s %6s %6s %5s" % (
-            w, label, n, _usd2(f["cost_usd"]), _pc(f["quota_week"]), _k(f["context_tokens"]),
+        b = _basis_label(f["cost_bases"])
+        mixed = mixed or b == "mixed"
+        cost = _usd2(f["cost_usd"]) + ("*" if b == "mixed" else "")
+        lines.append("%-*s %5d %9s %-8s %6s %8s %7s %7s %6s %6s %6s %5s" % (
+            w, label, n, cost, b, _pc(f["quota_week"]), _k(f["context_tokens"]),
             _k(f["cache_write"]), _k(f["output_tokens"]), _pc(f["thinking_share"]),
             _pc(f["cache_hit"]), _pc(f["failed_share"]),
             "-" if f["cache_breaks"] is None else f["cache_breaks"]))
+    if mixed:
+        lines.append("* adds costs of more than one basis (harness, priced, plugin); "
+                     "see --by basis")
     return lines
 
 
@@ -478,10 +506,13 @@ def report(gs, min_steps=MIN_STEPS):
         lines.append("  short steps %.0f%%; context hook soft %.0f%%, hard %d"
                      % (100 * f["short_rate"], 100 * f["hook_soft_rate"], f["hook_hard"]))
         be = f["break_even_factor"]
-        lines.append("  cost/step fresh %s (n=%d), carried %s (n=%d)%s"
+        bs = f["cost_bases"]
+        lines.append("  cost/step fresh %s (n=%d), carried %s (n=%d)%s%s"
                      % (_usd(f["cost_fresh_median"]), f["fresh_n"],
                         _usd(f["cost_carried_median"]), f["carried_n"],
-                        "; break-even carry_factor about %.1f" % be if be else ""))
+                        "; break-even carry_factor about %.1f" % be if be else "",
+                        "; basis %s" % bs[0] if len(bs) == 1 and bs[0] != "harness" else
+                        "; mixed basis: %s" % ", ".join(bs) if len(bs) > 1 else ""))
         if f["finished"]:
             lines.append("  finished packets %d: median %s steps, %s"
                          % (f["finished"], _k(f["finished_steps_median"]),
