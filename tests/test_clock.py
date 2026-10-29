@@ -35,7 +35,10 @@ def test_parse_resume(expr, want):
     ("at tomorrow", "not an ISO 8601"),
     ("on 10 Jan", "Stage 2"),
     ("every monday 08:00", "Stage 2"),
-    ("wait: child", "Stage 3"),
+    ("wait", "expected 'wait"),
+    ("wait foo bar", "expected 'wait"),
+    ("wait children, x", "list names instead"),
+    ("wait x, at most in 0 hours", "positive"),
     ("ask", "not a resume value"),
     (5, "must be a string"),
     (None, "must be a string"),
@@ -141,9 +144,24 @@ def test_resolve_local_zone(monkeypatch):
 def test_resolve_rejects():
     with pytest.raises(ResumeError, match="Stage 2"):
         clock.resolve("every monday", at("2026-10-21T18:00:00Z"), "UTC")
-    with pytest.raises(ResumeError, match="Stage 3"):
-        clock.resolve("wait: child", at("2026-10-21T18:00:00Z"), "UTC")
     with pytest.raises(ResumeError, match="unknown time zone"):
         clock.resolve("in 1 day", at("2026-10-21T18:00:00Z"), "Mars/Olympus")
     with pytest.raises(ValueError, match="aware"):
         clock.resolve("in 1 day", datetime(2026, 10, 21), "UTC")
+
+
+@pytest.mark.parametrize("expr,mode,targets,fallback", [
+    ("wait children", "all", ("children",), (1, "days")),
+    ("wait: any children, at most in 4 hours", "any", ("children",), (4, "hours")),
+    ("wait v3-import, arch-sched", "all", ("v3-import", "arch-sched"), (1, "days")),
+    ("wait request fw-hdl", "all", ("request:fw-hdl",), (1, "days")),
+    ("wait any a, request b", "any", ("a", "request:b"), (1, "days")),
+])
+def test_parse_wait(expr, mode, targets, fallback):
+    r = clock.parse_resume(expr)
+    assert (r.kind, r.mode, r.targets, (r.count, r.unit)) == ("wait", mode, targets, fallback)
+
+
+def test_wait_sleeps_until_its_fallback():
+    assert clock.resolve("wait children, at most in 3 hours", at("2026-10-21T18:00:00Z"),
+                         "UTC") == ("SLEEPING", at("2026-10-21T21:00:00Z"))

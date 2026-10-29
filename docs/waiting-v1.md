@@ -185,12 +185,12 @@ owner's yes is enough to start a request.
 
 | # | Step | State |
 |---|---|---|
-| 1 | Child stop wakes parent + `due` backstop | done (uncommitted): `waiting.py`, `executor.py` (`_wake_parent`, `children_seen`, `_due`), `scheduler.due`, `schema.py`, spec §4.1, protocol text; `tests/test_waiting.py` |
-| 2 | Delegate live state in "## Requests" | done (uncommitted): `requests.delegate_state`/`_live`; `test_requests.py::test_the_prompt_shows_the_delegates_live_state` |
-| 3 | `resume: wait …` | todo |
-| 4 | Answering yes starts the delegate | done (uncommitted): `requests._start` runs safe setup fixes, resumes, or leaves PAUSED naming what's missing; new delegate projects go beside the requester's folder (they went inside it); 2 tests + updated send test |
-| 5 | `Agent` default + budget rule + protocol | done (uncommitted): `Agent` in `PERMISSION_DEFAULTS` (new projects only; existing ones `wpk allow <p> Agent`); `AGENT_BUDGET_USD = 3.00` unless `step_budget_usd` is set; protocol: sub-agents, choice order, request wake/stall text. fw-aes-demo has `Agent` and `step_budget_usd = 4` |
-| 6 | Dashboard: stalled requests, stuck sleepers | todo |
-| 7 | `wpk request cancel` | todo |
+| 1 | Child stop wakes parent + `due` backstop | done (53526b9): `waiting.py`, `executor.py` (`_wake_parent`, `children_seen`, `_due`), `scheduler.due`, `schema.py`, spec §4.1, protocol text; `tests/test_waiting.py` |
+| 2 | Delegate live state in "## Requests" | done (53526b9): `requests.delegate_state`/`_live`; `test_requests.py::test_the_prompt_shows_the_delegates_live_state` |
+| 3 | `resume: wait …` | done: `clock._wait` (`wait [all\|any] children`, `wait <names>`, `wait request <id>`, each with an optional `, at most in N unit`; fallback 1 day); `waiting.resolve/satisfied/wake_due`; `waiting_on`/`wait_mode` in status.md; deliver wakes a wait-all requester only when all are back; spec §4.1, §5; protocol; tests in `test_waiting.py`, `test_clock.py`, `test_requests.py` |
+| 4 | Answering yes starts the delegate | done (53526b9): `requests._start` runs safe setup fixes, resumes, or leaves PAUSED naming what's missing; new delegate projects go beside the requester's folder (they went inside it); 2 tests + updated send test |
+| 5 | `Agent` default + budget rule + protocol | done (53526b9): `Agent` in `PERMISSION_DEFAULTS` (new projects only; existing ones `wpk allow <p> Agent`); `AGENT_BUDGET_USD = 3.00` unless `step_budget_usd` is set; protocol: sub-agents, choice order, request wake/stall text. fw-aes-demo has `Agent` and `step_budget_usd = 4` |
+| 6 | Dashboard: stalled requests, stuck sleepers | done: `data.waits` on each card; Overview → Needs attention rows REQUEST (Hand off / Answer / Open) and ASLEEP (Wake); `/act` takes `wake` and `back=overview`; `test_waiting.py::test_overview_lists_stalled_requests_and_stuck_sleepers` |
+| 7 | `wpk request cancel` | done (53526b9) |
 
-`wpk serve` must be restarted to pick up steps 1–2.
+`wpk serve` must be restarted to pick these up. All seven steps are done.

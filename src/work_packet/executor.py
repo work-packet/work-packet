@@ -186,6 +186,11 @@ def _apply(pkt, st, rec):
                     reason=d["reason"], updated=_ts())
         if "children_seen" in d:    # what this step's prompt showed (docs/waiting-v1.md §4)
             meta["children_seen"] = d["children_seen"]
+        if "waiting_on" in d:       # resume: wait ...
+            meta.update(waiting_on=d["waiting_on"], wait_mode=d["wait_mode"])
+        else:
+            meta.pop("waiting_on", None)
+            meta.pop("wait_mode", None)
         if d["state"] == "COMPLETED":   # the run stopped; unread until seen (mark_seen)
             meta["stopped"] = rec["t"]
         else:
@@ -410,7 +415,7 @@ def _due(pkt, meta, now):
         return True
     if meta["state"] == "SLEEPING" and meta.get("wake_at"):
         return (schema.parse_timestamp(meta["wake_at"]) <= now
-                or bool(waiting.unseen_stops(pkt, meta)))
+                or waiting.wake_due(pkt, meta))
     return False
 
 
@@ -827,6 +832,12 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
         "model": meta["model"], "summary": summary,
         "spawn": spawn.decision_entries(meta["wpid"], n, mm.get("spawn")),
     }
+    rs = clock.parse_resume(mm["resume"])
+    if rs.kind == "wait" and state == "SLEEPING":
+        on, why = waiting.resolve(pkt, meta, rs.targets, decision["spawn"], pend_state)
+        if why is not None:
+            return _fail(pkt, st, n, a, "resume: %s" % why)
+        decision.update(waiting_on=on, wait_mode=rs.mode)
     try:                            # the children this step's prompt showed
         with open(os.path.join(sd, "children.json")) as fp:
             decision["children_seen"] = json.load(fp)

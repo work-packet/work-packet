@@ -63,8 +63,8 @@ def due(entries, now=None):
                     late = schema.parse_timestamp(meta["wake_at"]) > now
                 except ValueError:
                     continue
-                if late and not waiting.unseen_stops(pkt, meta):
-                    continue        # a stopped child it has not seen wakes it (waiting-v1 §4)
+                if late and not waiting.wake_due(pkt, meta):
+                    continue        # what it waits on wakes it early (waiting-v1 §4)
                 when = meta["updated"] if late else meta["wake_at"]
             else:
                 continue

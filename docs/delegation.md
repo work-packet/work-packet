@@ -128,9 +128,8 @@ its state, so a step knows what is still out.
 
 ## 7. Not in this round
 
-- `wait: request <id>` (sleep until it comes back). For now the step goes on
-  with its workaround, or sleeps with `resume: in N hours`, and the note
-  wakes it early.
+- ~~`wait: request <id>`~~ Built 2026-10-29 as `resume: wait request <id>`
+  (docs/waiting-v1.md §4, spec.md §5).
 - The board: requests on the packet page, and a **Send** button. `wpk answer`
   with a yes covers it from the board's Answer panel, since that calls
   `actions.answer`.

@@ -263,6 +263,37 @@ def tasks(entry, nodes):
     return out
 
 
+def waits(nodes):
+    """What a project's packets wait on that nobody is working on (docs/waiting-v1.md
+    §5.3): ``stalled``, requests out whose delegate is paused, failed or asking;
+    ``stuck``, sleeping packets with a stopped child they have not been woken for."""
+    from .. import requests, waiting
+    ids = {n["wpid"] for n in nodes}
+    stalled = []
+    for e in requests.entries():
+        if e["state"] != "open" or e["from"]["wpid"] not in ids:
+            continue
+        d = requests.delegate_state(e)
+        if d and d[0] in requests.STALLED:
+            stalled.append({"id": e["id"], "title": e["title"], "project": e["to"]["project"],
+                            "wpid": e["to"]["wpid"], "state": d[0], "step": d[1],
+                            "reason": d[2]})
+    stuck = []
+    for n in nodes:
+        if n["state"] != "SLEEPING":
+            continue
+        pkt = Packet(n["path"])
+        try:
+            meta, _ = pkt.load_status()
+        except (OSError, frontmatter.FrontMatterError):
+            continue
+        kids = waiting.unseen_stops(pkt, meta) if meta.get("children") else []
+        if kids:
+            stuck.append({"wpid": n["wpid"], "short": n["short"], "name": n["name"],
+                          "children": [{"short": w[:8], "state": st} for w, st in kids]})
+    return stalled, stuck
+
+
 def card(entry, now=None, nodes=None):
     """One project's card on the board. ``nodes``: its ``tree()``, if already read."""
     now = now or clock.now()
@@ -300,6 +331,7 @@ def card(entry, now=None, nodes=None):
                     "%s: %s" % (ev["name"], ev["label"])
         except (TypeError, ValueError):
             pass
+    stalled, stuck = waits(nodes)
     held = None
     if root and root["state"] == "PAUSED" and root.get("reason") == "setup" and not live:
         held = setup_summary(entry)
@@ -315,6 +347,7 @@ def card(entry, now=None, nodes=None):
         "setup": held,
         "counts": sorted(counts.items(), key=lambda kv: str(kv[0])),
         "packets": len(nodes), "trouble": len(trouble),
+        "stalled": stalled, "stuck": stuck,
         "spend_total": sum(n["cost_usd"] for n in nodes), "spend_today": spend_today,
         "last_step": relative(-(now - last).total_seconds()) if last else "never",
         "last_end": last,
@@ -437,6 +470,10 @@ def overview(cols, broken, side, burn, now=None, coming=8):
     attention += [{"kind": "trouble", "card": c} for c in cards
                   if c["trouble"] and c["column"] != "Failed"]
     attention += [{"kind": "setup", "card": c} for c in cards if c["setup"]]
+    attention += [{"kind": "stalled", "card": c, "req": r} for c in cards
+                  for r in c.get("stalled") or ()]
+    attention += [{"kind": "stuck", "card": c, "pkt": k} for c in cards
+                  for k in c.get("stuck") or ()]
     unread = sorted((c for c in cards if c["unread"]), key=lambda c: c["unread"]["at"],
                     reverse=True)
     attention += [{"kind": c["unread"]["kind"], "card": c} for c in unread]

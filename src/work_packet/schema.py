@@ -20,11 +20,11 @@ RESERVED_STATES = {"WAITING": "Stage 3"}
 STATUS_FIELDS = (
     "wpk", "wpid", "project", "state", "step", "attempts", "parent",
     "spawn_key", "children", "resume_expr", "wake_at", "model", "reason",
-    "updated", "next_size", "stopped", "seen", "children_seen",
+    "updated", "next_size", "stopped", "seen", "children_seen", "waiting_on", "wait_mode",
 )
 # next_size: docs/scheduler-plan.md decision 4; stopped, seen: docs/overview-recent.md §2;
-# children_seen: docs/waiting-v1.md §4
-STATUS_OPTIONAL = ("next_size", "stopped", "seen", "children_seen")
+# children_seen, waiting_on, wait_mode: docs/waiting-v1.md §4
+STATUS_OPTIONAL = ("next_size", "stopped", "seen", "children_seen", "waiting_on", "wait_mode")
 
 MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item", "size")
 ITEM_MAX = 80
@@ -305,6 +305,15 @@ def validate_status(meta, body=""):
     if "children_seen" in meta and not (isinstance(seen, dict) and all(
             is_wpid(k) and v in STATES for k, v in seen.items())):
         out.append(_err("children_seen", "must map child WPIDs to states"))
+    on = meta.get("waiting_on")
+    if "waiting_on" in meta and not (isinstance(on, list) and on and all(
+            isinstance(t, str) and (is_wpid(t) or t.startswith("request:")) for t in on)):
+        out.append(_err("waiting_on", "must be a non-empty list of child WPIDs and "
+                        "request:<id>"))
+    if ("waiting_on" in meta) != ("wait_mode" in meta):
+        out.append(_err("wait_mode", "set exactly when waiting_on is"))
+    elif "wait_mode" in meta and meta["wait_mode"] not in ("all", "any"):
+        out.append(_err("wait_mode", "must be all or any"))
     out += _opt_str(meta, "resume_expr")
     wake = meta.get("wake_at")
     if wake is not None and not is_timestamp(wake):

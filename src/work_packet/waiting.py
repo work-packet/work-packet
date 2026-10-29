@@ -3,6 +3,10 @@
 A parent's ``children_seen`` maps each child to the state its last step's
 prompt showed. A child the parent has not seen stop since then is news,
 and a ``SLEEPING`` parent with news is due now, whatever its ``wake_at``.
+
+A parent that slept with ``resume: wait ...`` has ``waiting_on`` (child
+WPIDs and ``request:<id>``) and ``wait_mode`` instead: it is due when all
+(or any) of those have stopped or come back, and news alone does not wake it.
 """
 import os
 
@@ -46,6 +50,64 @@ def unseen_stops(pkt, meta):
     return out
 
 
+def resolve(pkt, meta, targets, spawn_entries, pending_state):
+    """``resume: wait`` targets as ``waiting_on``: (list, None), or (None, why)."""
+    names = {}
+    for r in pkt.journal().records:
+        if r.get("type") == "commit-begin":
+            for e in (r.get("decision") or {}).get("spawn") or ():
+                names[e["name"]] = e["wpid"]
+    for e in spawn_entries:
+        names[e["name"]] = e["wpid"]
+    kids = list(meta.get("children") or ()) + [
+        e["wpid"] for e in spawn_entries if e["wpid"] not in (meta.get("children") or ())]
+    out = []
+    for t in targets:
+        if t == "children":
+            if not kids:
+                return None, "wait children, but this packet has no children"
+            out += kids
+        elif t.startswith("request:"):
+            from . import requests
+            rid = t[len("request:"):]
+            if requests.get(pkt.wpid, rid) is None and not os.path.isfile(
+                    requests.brief_path(pending_state, rid)):
+                return None, "wait request %s: no such request (state/requests/%s.md)" % (
+                    rid, rid)
+            out.append(t)
+        elif t in names:
+            out.append(names[t])
+        else:
+            return None, "wait %s: no child spawned with that name (known: %s)" % (
+                t, ", ".join(sorted(names)) or "none")
+    return list(dict.fromkeys(out)), None
+
+
+def _done(pkt, target):
+    if target.startswith("request:"):
+        from . import requests
+        e = requests.get(pkt.wpid, target[len("request:"):])
+        return e is not None and e["state"] in ("delivering", "delivered", "cancelled")
+    try:
+        m, _ = _sibling(pkt, target).load_status()
+    except (OSError, frontmatter.FrontMatterError):
+        return True                 # gone: nothing left to wait for
+    return m.get("state") in STOPPED
+
+
+def satisfied(pkt, meta):
+    """True when a ``resume: wait`` has what it waits on."""
+    done = [_done(pkt, t) for t in meta.get("waiting_on") or ()]
+    return any(done) if meta.get("wait_mode") == "any" else all(done)
+
+
+def wake_due(pkt, meta):
+    """A SLEEPING packet that should run before its ``wake_at``."""
+    if meta.get("waiting_on") is not None:
+        return satisfied(pkt, meta)
+    return bool(unseen_stops(pkt, meta))
+
+
 def wake_parent(child):
     """Wake the child's parent if it sleeps and the child's stop is news to it.
     Returns the admin Outcome, or None when there was nothing to do. A parent
@@ -59,7 +121,7 @@ def wake_parent(child):
         pm, _ = parent.load_status()
     except (OSError, frontmatter.FrontMatterError):
         return None
-    if pm.get("state") != "SLEEPING" or not unseen_stops(parent, pm):
+    if pm.get("state") != "SLEEPING" or not wake_due(parent, pm):
         return None
     from . import executor
     return executor.admin(parent, "wake", by="child %s %s" % (child.wpid[:8], cm["state"]))

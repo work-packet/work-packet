@@ -152,6 +152,24 @@ def test_a_sleeping_requester_wakes(req):
     assert "FAILED" in notes.queued(req)[0]["text"]
 
 
+def test_a_requester_waiting_on_all_sleeps_until_the_last(req):
+    """resume: wait request a, request b: one result back is not enough (waiting-v1 §4)."""
+    requests.send(req, "reg")
+    meta, body = req.load_status()
+    meta.update(state="SLEEPING", wake_at="2026-10-30T00:00:00Z",
+                waiting_on=["request:reg", "request:other"], wait_mode="all")
+    req.save_status(meta, body)
+    _finish(Packet(registry.resolve("worker")))
+    requests.sync()
+    assert requests.get(req.wpid, "reg")["state"] == "delivered"
+    assert req.load_status()[0]["state"] == "SLEEPING" and len(notes.queued(req)) == 1
+    meta, body = req.load_status()
+    meta.update(wait_mode="any")
+    req.save_status(meta, body)
+    from work_packet import executor as ex
+    assert ex._due(req, req.load_status()[0], ex.clock.now())
+
+
 def test_a_running_step_holds_the_record_not_the_note(req):
     requests.send(req, "reg")
     _finish(Packet(registry.resolve("worker")))

@@ -118,6 +118,8 @@ ul.list button.x:hover { color: var(--FAILED); }
   <li>
     {% if a.kind == "needs" %}<a class="state NEEDS_INPUT" href="/p/{{ c.name|urlencode }}#answer" title="Answer its questions">ASKS</a>
     {% elif a.kind == "setup" %}<span class="state PAUSED">SETUP</span>
+    {% elif a.kind == "stalled" %}<span class="state {{ a.req.state }}" title="A request this project sent: nobody is working on it">REQUEST</span>
+    {% elif a.kind == "stuck" %}<span class="state SLEEPING" title="It sleeps although a child stopped">ASLEEP</span>
     {% elif a.kind == "done" %}<input type="checkbox" name="project" value="{{ c.name }}" aria-label="tick {{ c.name }}"><span class="state COMPLETED">DONE</span>
     {% elif a.kind == "stopped" %}<input type="checkbox" name="project" value="{{ c.name }}" aria-label="tick {{ c.name }}"><span class="state PAUSED">STOPPED</span>
     {% else %}<span class="state FAILED">FAILED</span>{% endif %}
@@ -128,6 +130,11 @@ ul.list button.x:hover { color: var(--FAILED); }
       <span class="muted">· <code>wpk answer {{ c.name }}</code></span>
     {% elif a.kind == "failed" %}<span class="ell err" title="{{ c.root.reason or '' }}">{{ (c.root.reason if c.root else "") or "failed" }}</span>
     {% elif a.kind == "trouble" %}{{ c.trouble }} packet{{ "s" if c.trouble != 1 }} below the root failed
+    {% elif a.kind == "stalled" %}{% set r = a.req %}request <code>{{ r.id }}</code> to <a href="/p/{{ r.project|urlencode }}">{{ r.project }}</a> is {{ r.state }} at step {{ r.step }}:
+      <span class="ell" title="{{ r.reason or '' }}">{{ r.reason or "no reason" }}</span>
+      <span class="muted">· nobody is working on it</span>
+    {% elif a.kind == "stuck" %}{% set k = a.pkt %}<code>{{ k.name or k.short }}</code> sleeps, but
+      {% for ch in k.children %}<code>{{ ch.short }}</code> is {{ ch.state }}{{ ", " if not loop.last }}{% endfor %}
     {% elif a.kind in ("done", "stopped") %}{% set u = c.unread %}<span class="ell" title="{{ u.outcome }}">{{ u.outcome or ("finished" if a.kind == "done" else "stopped") }}</span>
       <span class="muted">· {{ u.ago }}{% if u.task > 1 %} · task {{ u.task }}{% endif %}{% if u.cost_usd %} · {{ u.cost_usd|money }}{% endif %}</span>
       {% if u.pr %}<a href="{{ u.pr.url }}">PR #{{ u.pr.number }}</a>{% endif %}
@@ -135,6 +142,9 @@ ul.list button.x:hover { color: var(--FAILED); }
     {% endif %}</span>
     {% if a.kind == "needs" %}<a class="mini" href="/p/{{ c.name|urlencode }}#answer">Answer</a>
     {% elif a.kind == "setup" %}<a class="mini" href="/p/{{ c.name|urlencode }}/compose">Set up</a>
+    {% elif a.kind == "stalled" %}{% if a.req.state != "NEEDS_INPUT" %}<button class="mini" form="act-{{ loop.index }}" title="Start the delegate: it becomes RUNNABLE">Hand off</button>{% endif %}
+      <a class="mini" href="/p/{{ a.req.project|urlencode }}{{ '#answer' if a.req.state == 'NEEDS_INPUT' }}">{{ "Answer" if a.req.state == "NEEDS_INPUT" else "Open" }}</a>
+    {% elif a.kind == "stuck" %}<button class="mini" form="act-{{ loop.index }}" title="Run it now">Wake</button>
     {% elif a.kind in ("done", "stopped") %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>
       <button class="x" form="seen-one" name="project" value="{{ c.name }}" title="Take it off the list without opening it" aria-label="dismiss {{ c.name }}">×</button>
     {% else %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>{% endif %}
@@ -143,6 +153,15 @@ ul.list button.x:hover { color: var(--FAILED); }
 </ul>
 {% if fin|length > fin_max %}</details>{% endif %}
 </form>
+{% for a in ov.attention %}{% if a.kind == "stalled" and a.req.state != "NEEDS_INPUT" %}
+<form id="act-{{ loop.index }}" method="post" action="/p/{{ a.req.project|urlencode }}/{{ a.req.wpid }}/act">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="action" value="handoff">
+  <input type="hidden" name="back" value="overview"></form>
+{% elif a.kind == "stuck" %}
+<form id="act-{{ loop.index }}" method="post" action="/p/{{ a.card.name|urlencode }}/{{ a.pkt.wpid }}/act">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="action" value="wake">
+  <input type="hidden" name="back" value="overview"></form>
+{% endif %}{% endfor %}
 {% else %}
 <p class="muted">Nothing needs you.</p>
 {% endif %}

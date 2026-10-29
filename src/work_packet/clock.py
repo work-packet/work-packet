@@ -23,10 +23,11 @@ UNITS = {
 LATER = {
     "on": "Stage 2",
     "every": "Stage 2",
-    "wait": "Stage 3",
 }
 
 _IN_RX = re.compile(r"^in\s+(\d+)\s+([a-z]+)$")
+_NAME_RX = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
+WAIT_FALLBACK = (1, "days")         # docs/waiting-v1.md §4: a lost child still wakes it
 _FRAC_RX = re.compile(r"(\d{2}:\d{2}:\d{2})\.(\d+)")
 
 
@@ -36,10 +37,12 @@ class ResumeError(ValueError):
 
 @dataclass(frozen=True)
 class Resume:
-    kind: str                       # now | done | fail | in | at
-    count: Optional[int] = None     # for "in"
+    kind: str                       # now | done | fail | in | at | wait
+    count: Optional[int] = None     # for "in", and "wait"'s fallback
     unit: Optional[str] = None      # for "in": minutes | hours | days | weeks
     at: Optional[datetime] = None   # for "at"; naive means project zone
+    mode: Optional[str] = None      # for "wait": all | any
+    targets: tuple = ()             # for "wait": "children", spawn names, "request:<id>"
 
 
 def parse_iso(s):
@@ -83,15 +86,10 @@ def parse_resume(expr):
     if head in LATER:
         raise ResumeError("'%s' is not supported yet: %s adds it" % (e, LATER[head]))
     if head == "in":
-        m = _IN_RX.match(low)
-        if not m:
-            raise ResumeError("expected 'in <N> <unit>', got '%s'" % e)
-        n, unit = int(m.group(1)), m.group(2)
-        if unit not in UNITS:
-            raise ResumeError("unknown unit '%s' (use minutes, hours, days or weeks)" % unit)
-        if n <= 0:
-            raise ResumeError("'in' needs a positive count, got %d" % n)
-        return Resume("in", count=n, unit=UNITS[unit])
+        n, unit = _in(low, e)
+        return Resume("in", count=n, unit=unit)
+    if head == "wait":
+        return _wait(low, e)
     if head == "at":
         rest = e[2:].strip()
         if not rest:
@@ -101,7 +99,49 @@ def parse_resume(expr):
         except ValueError:
             raise ResumeError("'%s' is not an ISO 8601 date or time" % rest) from None
     raise ResumeError("unknown resume expression '%s' "
-                      "(use now, done, fail, 'in <N> <unit>' or 'at <time>')" % e)
+                      "(use now, done, fail, 'in <N> <unit>', 'at <time>' or 'wait ...')" % e)
+
+
+def _in(low, e):
+    m = _IN_RX.match(low)
+    if not m:
+        raise ResumeError("expected 'in <N> <unit>', got '%s'" % e)
+    n, unit = int(m.group(1)), m.group(2)
+    if unit not in UNITS:
+        raise ResumeError("unknown unit '%s' (use minutes, hours, days or weeks)" % unit)
+    if n <= 0:
+        raise ResumeError("'in' needs a positive count, got %d" % n)
+    return n, UNITS[unit]
+
+
+def _wait(low, e):
+    """``wait [all|any] <what>[, <what>...][, at most in <N> <unit>]``, where <what> is
+    ``children``, a spawn name, or ``request <id>`` (docs/waiting-v1.md §4)."""
+    usage = ("expected 'wait [any] children', 'wait [any] <spawn name>, ...' or "
+             "'wait request <id>', with an optional ', at most in <N> <unit>'")
+    body = low[4:].lstrip(" :")
+    parts = [p.strip() for p in body.split(",")]
+    count, unit = WAIT_FALLBACK
+    if parts and parts[-1].startswith("at most "):
+        count, unit = _in(parts.pop()[len("at most "):].strip(), e)
+    mode = "all"
+    if parts and parts[0].split(" ", 1)[0] in ("any", "all"):
+        mode, _, rest = parts[0].partition(" ")
+        parts[0] = rest.strip()
+    targets = []
+    for p in parts:
+        words = p.split()
+        if len(words) == 2 and words[0] == "request" and _NAME_RX.match(words[1]):
+            targets.append("request:" + words[1])
+        elif len(words) == 1 and _NAME_RX.match(words[0]):
+            targets.append(words[0])
+        else:
+            raise ResumeError("%s; got '%s'" % (usage, e))
+    if not targets:
+        raise ResumeError("%s; got '%s'" % (usage, e))
+    if "children" in targets and len(targets) > 1:
+        raise ResumeError("'wait children' names every child; list names instead, got '%s'" % e)
+    return Resume("wait", count=count, unit=unit, mode=mode, targets=tuple(targets))
 
 
 # Expression kind -> state after commit.
@@ -111,6 +151,7 @@ STATE_AFTER = {
     "fail": "FAILED",
     "in": "SLEEPING",
     "at": "SLEEPING",
+    "wait": "SLEEPING",             # until what it waits on stops, or the fallback
 }
 
 
@@ -164,7 +205,7 @@ def resolve(resume, committed, tz=None):
     if tz is None or isinstance(tz, str):
         tz = zone(tz)
     state = STATE_AFTER[resume.kind]
-    if resume.kind == "in":
+    if resume.kind in ("in", "wait"):
         if resume.unit in ("minutes", "hours"):
             wake = committed + timedelta(**{resume.unit: resume.count})
         else:

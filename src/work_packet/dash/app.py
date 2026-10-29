@@ -831,7 +831,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             out = await run_in_threadpool(actions.note, pkt, note, by, one("wake") == "1")
         elif op == "keep":              # take back a pause that has not happened yet
             out = await run_in_threadpool(executor.withdraw_pause, pkt)
-        elif op in ("handoff", "pause", "resume"):
+        elif op in ("handoff", "pause", "resume", "wake"):
             out = await run_in_threadpool(executor.admin, pkt, op, note or None, None, by)
             if op == "pause" and out.code == 0:
                 from ..sched import authz, control
@@ -842,6 +842,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         url = "/p/%s/%s" % (urllib.parse.quote(e["name"]), wpid)
         if one("back") == "project":
             url = "/p/%s" % urllib.parse.quote(e["name"])
+        elif one("back") == "overview":
+            url = "/#attention"
         return back(url + "/live" if one("back") == "live" else url, out)
 
     async def project_run(request):

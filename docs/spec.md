@@ -266,6 +266,8 @@ present, unknown keys are errors.
 | `stopped` | timestamp | optional: when the packet's run stopped without anyone: set by the commit that makes it `COMPLETED`, or by a pause the scheduler makes for a budget or limit; only while `COMPLETED` or `PAUSED`; removed when it runs again (docs/overview-recent.md) |
 | `seen` | timestamp | optional: when someone last looked at it after it stopped (`wpk seen`, or opening it on the board); with a `seen` journal record. Does not change `updated` |
 | `children_seen` | map | optional: each child's WPID and the state the last step's prompt showed it in. A child now `COMPLETED`, `FAILED`, `NEEDS_INPUT` or `PAUSED` in a different state wakes a `SLEEPING` parent, at the child's commit or the next scheduler pass (docs/waiting-v1.md §4) |
+| `waiting_on` | list | optional: set by a commit with `resume: wait ...` (§5): the child WPIDs and `request:<id>` it waits on. With it, the packet wakes when all of them (or any, per `wait_mode`) have stopped or come back, not on other news. The next commit replaces or removes it |
+| `wait_mode` | `all` \| `any` | set exactly when `waiting_on` is |
 
 `NEEDS_INPUT` means the last step asked a question (`ask:`, §4.2) and the
 packet waits for a hand-off (`wpk handoff`); nothing runs it until then.
@@ -481,6 +483,7 @@ the parent, since a parent often finishes in the step that spawns them.
 | `fail` | `FAILED` (`reason` required) | null |
 | `in <N> <unit>` | `SLEEPING` | commit time + N units |
 | `at <ISO 8601>` | `SLEEPING` | that instant; without an offset it is read in the project zone |
+| `wait [all\|any] <what>, ...[, at most in <N> <unit>]` | `SLEEPING` | the fallback: commit time + N units, default 1 day. It wakes before then when what it waits on has stopped (docs/waiting-v1.md §4) |
 
 `N` is a positive integer; `unit` is `minute(s)`, `hour(s)`, `day(s)` or
 `week(s)`. `in` days and weeks are calendar days in the project zone, so
@@ -489,6 +492,14 @@ the parent, since a parent often finishes in the step that spawns them.
 suffix; a date alone means midnight. An `at` in the past is accepted and
 means "due now". `minute(s)` and `hour(s)` are elapsed time, so `in 24
 hours` is always 24 hours.
+
+In `wait`, each `<what>` is `children` (every child, including this
+step's spawns), a spawn name (this step's or an earlier one's), or
+`request <id>`. With `all`, the default, the packet waits for every one of
+them; with `any`, for the first. A child counts once it is `COMPLETED`,
+`FAILED`, `NEEDS_INPUT` or `PAUSED`. A request counts once its result is
+back or it was cancelled. A name that matches nothing fails the attempt.
+The targets go in `status.md` as `waiting_on` and `wait_mode` (§4.1).
 
 A wall time that a DST change skips moves forward by the size of the gap
 (`at 2027-03-28 01:30` in `Europe/London` is 02:30 BST). A wall time that

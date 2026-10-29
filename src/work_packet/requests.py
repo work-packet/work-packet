@@ -13,7 +13,8 @@ requester's ``request`` record is not), ``delivered``.
 import json
 import os
 
-from . import clock, executor, frontmatter, fsutil, journal, layout, notes, registry, schema
+from . import (clock, executor, frontmatter, fsutil, journal, layout, notes, registry, schema,
+               waiting)
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, load_project, project_of
@@ -317,7 +318,9 @@ def deliver(e, text, outcome, by, h=None):
             not _consumed(pkt, nid):
         notes.add(pkt, e.get("result") or text, by, nid=nid)
     try:
-        if pkt.load_status()[0]["state"] == "SLEEPING":
+        m = pkt.load_status()[0]
+        if m["state"] == "SLEEPING" and (m.get("waiting_on") is None or "request:%s" % e["id"]
+                                         not in m["waiting_on"] or waiting.satisfied(pkt, m)):
             executor.admin(pkt, "wake", by=by)
     except (OSError, frontmatter.FrontMatterError):
         pass

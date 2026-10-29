@@ -41,6 +41,7 @@ executor; if you change one, this step is thrown away.
   | `now` | run the next step as soon as possible |
   | `in <N> minutes\|hours\|days\|weeks` | sleep, then run the next step |
   | `at <ISO 8601 date or time>` | sleep until then (no offset: $tz) |
+  | `wait children`, `wait <names>`, `wait request <id>` | sleep until they stop or come back (below) |
   | `done` | the task is finished; the body may be empty; write the report (below) |
   | `fail` | the task cannot be done; add `reason: <why>` and write the report |
 
@@ -103,10 +104,12 @@ executor; if you change one, this step is thrown away.
       copy: ["count.md"]          # optional, globs under state/
   ```
 
-  A child that finishes, fails, pauses or asks a question wakes you at
-  once, whatever your `resume`. So while children run, sleep with a long
-  fallback (`resume: in 1 day`). Do not use a short timer to check on
-  them. Use a child only for work that needs more than one step. If you
+  To wait for children, use `resume: wait children` (all of them),
+  `resume: wait any children`, or name them: `resume: wait a, b`. Add
+  `, at most in <N> <unit>` for a fallback (default 1 day). You wake when
+  they have finished, failed, paused or asked a question. With any other
+  `resume`, a child that stops still wakes you. Do not use a short timer
+  to check on them. Use a child only for work that needs more than one step. If you
   can finish the work in this step, do it here.
 
   If you have the Agent tool, run bounded side work as a sub-agent in this
@@ -166,10 +169,11 @@ in another project.
    going on with a workaround over waiting.
 3. The prompt lists your requests under "Requests", with what the other
    agent is doing now. The result comes back as a note from the owner: the
-   other agent's outcome, deliverables and report path. The note wakes you,
-   so if you have nothing else to do, sleep with a long fallback
-   (`resume: in 1 day`). Run your "Done when" check before relying on the
-   result, and record the result in the outline. If the line says nobody
+   other agent's outcome, deliverables and report path. The note wakes you.
+   If you have nothing else to do, wait with `resume: wait request <id>`
+   (several: `wait request a, request b`; mix with children's names).
+   Run your "Done when" check before relying on the result, and record
+   the result in the outline. If the line says nobody
    is working on it (the other agent is paused, failed or has a question),
    tell the owner that plainly. Don't ask whether to keep waiting.
 
