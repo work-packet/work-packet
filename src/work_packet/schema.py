@@ -846,12 +846,31 @@ def _validate_project_sched(d):
     return out
 
 
+def _validate_docs(t):
+    """``[docs]``: Sphinx docs on the board (docs/sphinx-docs-v1.md)."""
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("docs", "must be a table")]
+    out = _unknown(t, ("source", "python", "enabled", "auto"), "docs")
+    src = t.get("source")
+    if src is not None and not (isinstance(src, str) or (
+            isinstance(src, list) and all(isinstance(x, str) for x in src))):
+        out.append(_err("docs.source", "must be a path or a list of paths"))
+    if "python" in t and not isinstance(t["python"], str):
+        out.append(_err("docs.python", "must be a path"))
+    for k in ("enabled", "auto"):
+        if k in t and not isinstance(t[k], bool):
+            out.append(_err("docs." + k, "must be true or false"))
+    return out
+
+
 def validate_project(d):
     known = ("name", "root", "created", "template", "tz", "model", "harness", "profile",
              "step_timeout", "max_attempts", "step_budget_usd", "step_context_tokens",
              "carry_session", "carry_ttl", "carry_factor", "permissions", "setup",
              "budget_usd_per_day", "budget_quota_per_week", "max_steps_per_hour",
-             "origin", "pr") + PROJECT_SCHED_KEYS
+             "origin", "pr", "docs") + PROJECT_SCHED_KEYS
     out = _unknown(d, known) + _validate_setup(d.get("setup")) + _validate_project_sched(d)
     if "origin" in d and not (isinstance(d["origin"], dict) and all(
             isinstance(v, (str, int)) for v in d["origin"].values())):
@@ -859,6 +878,7 @@ def validate_project(d):
     if "pr" in d and not (isinstance(d["pr"], dict) and all(
             isinstance(v, (str, int)) for v in d["pr"].values())):
         out.append(_err("pr", "must be a table of strings and numbers (docs/starters-v1.md)"))
+    out += _validate_docs(d.get("docs"))
     if not is_name(d.get("name")):
         out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
     if not is_wpid(d.get("root")):

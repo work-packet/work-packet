@@ -37,6 +37,35 @@ nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(-
     {% else %}<button class="btn{{ ' hi' if card.root.state == 'COMPLETED' }}" title="Push its branch and open a pull request from its report">Open PR</button><button class="btn" name="draft" value="1" title="The same, as a draft">Draft PR</button>{% endif %}
   </form>
   {% endif %}
+  {% set dsets = docs|default([]) %}{% if dsets %}{% set d0 = dsets|selectattr("has_html")|first %}
+  {% if d0 %}<a class="btn" href="{{ base }}/docs/{{ d0.entry|urlencode }}/{{ d0.name|urlencode }}/" target="_blank" rel="noopener" title="The newest build of {{ d0.rel }}{% if d0.built %}, {{ d0.built.end|epoch }}{% endif %}">Docs{% if d0.stale %} <span class="muted">(stale)</span>{% endif %}</a>{% endif %}
+  <details class="menu" id="docs"><summary class="btn">{{ "▾" if d0 else "Docs ▾" }}</summary>
+  <div class="panel">
+  <table>
+  {% for d in dsets %}{% set b = d.built %}
+  <tr><td><code>{{ d.rel }}</code>{% if d.wpid %}<br><span class="muted" style="font-size:12px">from run {{ d.wpid }}</span>{% endif %}</td>
+  <td style="font-size:13px">
+    {% if d.building %}<span class="state running pulse">BUILDING</span>
+    {% elif b %}<span class="state {{ 'COMPLETED' if b.result == 'ok' else ('NEEDS_INPUT' if b.result == 'warnings' else 'FAILED') }}">{{ b.result|upper }}</span>{% endif %}
+    {% if d.stale and not d.building %}<span class="muted">stale</span>{% endif %}
+    {% if b %}<br><span class="muted">built {{ b.end|epoch }}{% if b.end and b.start %} in {{ (b.end - b.start)|secs }}{% endif %}{% if b.warnings %} · {{ b.warnings }} warning{{ "s" if b.warnings != 1 }}{% endif %}{% if b.why %} · {{ b.why }}{% endif %}</span>{% endif %}
+  </td>
+  <td><form class="act row" method="post" action="{{ base }}/docs">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <input type="hidden" name="entry" value="{{ d.entry }}"><input type="hidden" name="name" value="{{ d.name }}">
+    <input type="hidden" name="back" value="{{ base }}">
+    {% if d.has_html %}<a class="go" href="{{ base }}/docs/{{ d.entry|urlencode }}/{{ d.name|urlencode }}/" target="_blank" rel="noopener">Open</a>{% endif %}
+    <button class="go"{% if d.building %} disabled{% endif %}>{{ "Rebuild" if b else "Build" }}</button>
+    {% if b %}<a class="go" href="{{ base }}/docslog/{{ d.entry|urlencode }}/{{ d.name|urlencode }}" target="_blank">Log</a>{% endif %}
+  </form></td></tr>
+  {% if d.history|length > 1 %}<tr><td colspan="3" class="muted" style="font-size:12px">Earlier:
+    {% for h in d.history[1:] %}{{ h.end|epoch }} {{ h.result }}{% if h.warnings %} ({{ h.warnings }}w){% endif %}{% if h.wpid %} · run {{ h.wpid }}{% endif %}{% if h.by %} · {{ h.by }}{% endif %}{{ "; " if not loop.last }}{% endfor %}</td></tr>{% endif %}
+  {% endfor %}
+  </table>
+  <p class="muted" style="font-size:12px;margin:6px 0 0">Built from the newest edits (a running packet's worktree first) into the runner home; rebuilt after each step when stale. Set <code>[docs]</code> in project.toml to change it.</p>
+  </div>
+  </details>
+  {% endif %}
   {% if ide.desktop %}
   <details class="menu" id="vscode"><summary class="btn">Open in VS Code ▾</summary>
   <div class="panel">

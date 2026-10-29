@@ -12,9 +12,9 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from . import (clock, faults, frontmatter, fsutil, harness, journal, livecard, model, notes,
-               procs, profiles, prompt, questions, registry, report, schema, spawn, waiting,
-               workspace)
+from . import (clock, docs, faults, frontmatter, fsutil, harness, journal, livecard, model,
+               notes, procs, profiles, prompt, questions, registry, report, schema, spawn,
+               waiting, workspace)
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, project_of, settings
@@ -593,7 +593,9 @@ def step(target, force=False, lost=None):
             prof = profiles.select(st.profiles, st.harness, meta["model"], st.profile)
         except profiles.ProfileError as e:
             return Outcome(USAGE, str(e))
-        return _run(pkt, st, meta, body, n, a, lease, now, prof)
+        out = _run(pkt, st, meta, body, n, a, lease, now, prof)
+        docs.after_step(pkt.path)       # stale Sphinx docs rebuild in the background
+        return out
     finally:
         lease.release()
         _ide_owner(pkt)

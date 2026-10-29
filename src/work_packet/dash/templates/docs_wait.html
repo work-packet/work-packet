@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Docs · {{ e.name }}{% endblock %}
+{% block head %}{% if building %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block crumbs %}<a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / docs / {{ ds.entry }}/{{ ds.name }}{% endblock %}
+{% block main %}
+<h1>Docs in <code>{{ ds.entry }}</code></h1>
+{% if building %}
+<p><span class="state running pulse">BUILDING</span> Sphinx is building <code>{{ ds.src }}</code>. This page opens the docs when they are ready.</p>
+{% else %}
+<p><span class="state FAILED">FAILED</span> The last build made no pages{% if rec and rec.why %}: {{ rec.why }}{% endif %}.
+<a href="/p/{{ e.name|urlencode }}/docslog/{{ ds.entry|urlencode }}/{{ ds.name|urlencode }}">Its log</a>.</p>
+<form class="act" method="post" action="/p/{{ e.name|urlencode }}/docs">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="entry" value="{{ ds.entry }}"><input type="hidden" name="name" value="{{ ds.name }}">
+  <input type="hidden" name="back" value="/p/{{ e.name|urlencode }}/docs/{{ ds.entry|urlencode }}/{{ ds.name|urlencode }}/">
+  <button class="btn">Build again</button>
+</form>
+{% endif %}
+{% endblock %}

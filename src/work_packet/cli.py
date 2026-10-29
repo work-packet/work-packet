@@ -274,6 +274,51 @@ def cmd_pr(args) -> int:
     return 0
 
 
+def cmd_docs(args) -> int:
+    """Sphinx docs in the project's work: list them, build them, open the newest
+    (docs/sphinx-docs-v1.md)."""
+    import datetime
+    import webbrowser
+    from . import docs, setup
+    try:
+        tg = setup.target(args.project or os.getcwd())
+    except setup.SetupError as e:
+        return _err(str(e))
+    cfg = docs.settings(tg.proj)
+    sets = docs.detect(tg.proj, cfg=cfg)
+    if not sets:
+        print("no Sphinx docs found in %s's work (set [docs] source in project.toml "
+              "if they are somewhere unusual)" % tg.name)
+        return 0
+    code = 0
+    for ds in sets:
+        if args.build and (args.force or docs.is_stale(ds)):
+            print("%s/%s: building %s ..." % (ds.entry, ds.name, ds.src), flush=True)
+            rec = docs.build(ds, cfg, by="cli")
+            if rec is None:
+                print("  a build of it is under way already")
+            elif rec["result"] == "failed":
+                code = 1
+        st = docs.state(ds)
+        b = st["built"]
+        when = datetime.datetime.fromtimestamp(b["end"]).strftime("%Y-%m-%d %H:%M") \
+            if b else ""
+        what = "building" if st["building"] else (
+            "never built" if not b else "%s %s%s%s" % (
+                b["result"], when, " (%d warnings)" % b["warnings"] if b["warnings"] else "",
+                ": " + b["why"] if b.get("why") else ""))
+        print("%s/%s  %s  %s%s" % (ds.entry, ds.name, st["rel"], what,
+                                   ", stale" if st["stale"] and not st["building"] else ""))
+        index = os.path.join(ds.html, "index.html")
+        if st["has_html"]:
+            print("  %s\n  board: /p/%s/docs/%s/%s/" % (index, tg.name, ds.entry, ds.name))
+            if args.open:
+                webbrowser.open("file://" + index)
+        elif b:
+            print("  log: %s" % os.path.join(ds.out, "build.log"))
+    return code
+
+
 def cmd_seen(args) -> int:
     """Finished projects no one has looked at (docs/overview-recent.md): list them,
     or mark them seen, as opening them on the board does."""
@@ -1489,6 +1534,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("projects", nargs="*")
     p.add_argument("--all", action="store_true", help="mark every one listed seen")
     p.set_defaults(func=cmd_seen)
+
+    p = sub.add_parser("docs", help="the project's Sphinx docs: list, build, open",
+                       description="Find Sphinx docs in the project's work, say whether "
+                       "their newest build is stale, and build them (into the runner home, "
+                       "not the work) or open them (docs/sphinx-docs-v1.md).")
+    p.add_argument("project", nargs="?", help="a project name or directory (default: here)")
+    p.add_argument("--build", action="store_true", help="build the stale ones now")
+    p.add_argument("--force", action="store_true", help="with --build: build even if fresh")
+    p.add_argument("--open", action="store_true", help="open the built docs in a browser")
+    p.set_defaults(func=cmd_docs)
 
     p = sub.add_parser("pr", help="hand a packet back to its forge: push, open a pull request",
                        description="Push the packet's branch and open a pull request into "

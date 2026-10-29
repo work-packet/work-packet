@@ -19,6 +19,10 @@
   <a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live"><strong>Live view</strong></a> · <a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live#procs">processes</a>{% if p.steps and p.steps[0].outcome == "running" %} · <a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/{{ p.steps[0].dir }}">full transcript</a>{% endif %}.</div>
 {% endif %}
 
+{% for d in docs_built|default([]) %}{% set b = d.rec %}{% set dbase = "/p/" ~ (e.name|urlencode) ~ "/docs/" ~ (d.entry|urlencode) ~ "/" ~ (d.name|urlencode) %}
+<p class="muted" style="margin:0 0 8px;font-size:13px">Docs <code>{{ d.entry }}/{{ d.name }}</code> {{ "rebuilt after a step" if b.by == "step" else "built" }} from this run, {{ b.end|epoch }}: {{ b.result }}{% if b.warnings %}, {{ b.warnings }} warning{{ "s" if b.warnings != 1 }}{% endif %}{% if b.why %} ({{ b.why }}){% endif %} ·
+{% if d.newest and b.result != "failed" %}<a href="{{ dbase }}/" target="_blank" rel="noopener">Open</a> · {% elif not d.newest %}a newer build has replaced it · {% endif %}<a href="/p/{{ e.name|urlencode }}/docslog/{{ d.entry|urlencode }}/{{ d.name|urlencode }}" target="_blank">log</a></p>
+{% endfor %}
 {% set st = p.meta.state %}
 {{ rpm.panel(e, p) }}
 {% if p.wpid == e.root and not p.running and st in ("COMPLETED", "NEEDS_INPUT", "PAUSED", "FAILED") %}

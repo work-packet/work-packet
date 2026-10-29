@@ -16,8 +16,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
-                                 RedirectResponse, Response)
+from starlette.responses import (FileResponse, HTMLResponse, JSONResponse,
+                                 PlainTextResponse, RedirectResponse, Response)
 from starlette.middleware import Middleware
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
@@ -383,6 +383,105 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         return back(url, executor.Outcome(executor.OK, "%s %s" % (
             "opened" if r["new"] else "pushed; already open:", r["url"])), poke_runner=False)
 
+    # --- built Sphinx docs (docs/sphinx-docs-v1.md) ----------------------------------
+
+    def docs_rows(e, card):
+        """The project's docsets as the Docs menu shows them; [] if it has none."""
+        from .. import docs
+        run = card.get("running") or {}
+        try:
+            return [docs.state(ds) for ds in docs.detect(e["path"], run.get("wpid"), home=home)]
+        except OSError:
+            return []
+
+    def docs_of_run(e, wpid):
+        """The newest docs build from run ``wpid``'s tree, per docset, for its page."""
+        from .. import docs
+        out = []
+        for ds in docs.detect(e["path"], wpid, home=home):
+            rec = next((h for h in docs.history(ds, 50) if h.get("wpid") == wpid), None)
+            if rec:
+                out.append({"entry": ds.entry, "name": ds.name, "rec": rec,
+                            "newest": rec.get("end") == (docs.last(ds) or {}).get("end")})
+        return out
+
+    def docs_out(e, request):
+        """The build folder the URL names, or None for a name that is not one."""
+        from .. import docs
+        ent, name = request.path_params["entry"], request.path_params["docset"]
+        if any(x in ("", ".", "..") or "/" in x or "\0" in x for x in (ent, name)):
+            return None
+        return docs.out_dir(docs.project_name(e["path"]), ent, name, home)
+
+    async def docs_file(request):
+        """A file of the newest build; the folder itself is its ``index.html``. The
+        page is shown as Sphinx built it: its own scripts and styles, no sandbox
+        (D-Q4)."""
+        from .. import docs
+        e = entry(request)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        out = docs_out(e, request)
+        if out is None:
+            return not_found(request, "docs %s" % request.path_params["docset"])
+        rel = request.path_params.get("path")
+        if rel is None:     # relative links need the trailing slash
+            return RedirectResponse(request.url.path + "/", status_code=307)
+        root = os.path.realpath(os.path.join(out, "html"))
+        if not os.path.isfile(os.path.join(root, "index.html")):
+            return await docs_wait(request, e, out)
+        p = os.path.realpath(os.path.join(root, rel))
+        if os.path.isdir(p):
+            p = os.path.join(p, "index.html")
+        if not (p.startswith(root + os.sep)) or not os.path.isfile(p):
+            return not_found(request, "page %s in these docs" % rel)
+        return FileResponse(p, headers={"content-security-policy": docs.CSP,
+                                        "cache-control": "no-cache"})
+
+    async def docs_wait(request, e, out):
+        """No build yet: start one, and say so until it is there."""
+        from .. import docs
+        ent, name = request.path_params["entry"], request.path_params["docset"]
+        sets = await run_in_threadpool(docs.detect, e["path"], None, None, home)
+        ds = next((d for d in sets if (d.entry, d.name) == (ent, name)), None)
+        if ds is None:
+            return not_found(request, "docs %s/%s" % (ent, name))
+        rec = docs.last(ds)
+        if docs.building(ds) is None and rec is None:
+            await run_in_threadpool(docs.kick, e["path"], None, False, (ent, name),
+                                    who(request), home, 2)
+        return render(request, "docs_wait.html", e=e, ds=ds, rec=rec,
+                      building=docs.building(ds) is not None or rec is None)
+
+    async def docs_log(request):
+        e = entry(request)
+        out = docs_out(e, request) if e is not None else None
+        p = os.path.join(out, "build.log") if out else None
+        if not p or not os.path.isfile(p):
+            return not_found(request, "build log")
+        with open(p, encoding="utf-8", errors="replace") as f:
+            return PlainTextResponse(f.read()[-FILE_MAX:])
+
+    async def docs_build(request):
+        """Build (or rebuild) one docset now, in the background."""
+        from .. import docs, executor
+        e = entry(request)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0]
+        url = local(one("back"), "/p/%s" % urllib.parse.quote(e["name"]))
+        card = packet_top(e, clock.now(), data.tree(e, clock.now()))[0]
+        wpid = (card.get("running") or {}).get("wpid")
+        got = await run_in_threadpool(docs.kick, e["path"], wpid, False,
+                                      (one("entry"), one("name")), who(request), home, 2)
+        if not got:
+            return back(url, executor.Outcome(executor.USAGE, "no docs %s/%s to build, or a "
+                                              "build of them is under way"
+                                              % (one("entry"), one("name"))), poke_runner=False)
+        return back(url, executor.Outcome(executor.OK, "building the docs in %s/%s"
+                                          % (got[0].entry, got[0].name)), poke_runner=False)
+
     # --- the scheduler (docs/scheduler.md §9) ------------------------------------
 
     async def sched_page(request):
@@ -590,7 +689,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             card, ts = packet_top(e, now, nodes)
             if card["unread"]:
                 await run_in_threadpool(mark_seen, request, e, nodes)
-            kw = dict(e=e, card=card, nodes=nodes, tasks=ts, work=work_rows(e))
+            kw = dict(e=e, card=card, nodes=nodes, tasks=ts, work=work_rows(e),
+                      docs=await run_in_threadpool(docs_rows, e, card))
             return await tab(request, e, now, kw)
         return handle
 
@@ -668,8 +768,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         dfm = await run_in_threadpool(dfmrun.runs, dfm_home(), wpid=request.path_params["wpid"])
         convs = await run_in_threadpool(conv_rows, lambda m: m.get("project") == e["name"] and
                                         m.get("wpid") == request.path_params["wpid"])
+        built = await run_in_threadpool(docs_of_run, e, request.path_params["wpid"])
         return render(request, "packet.html", e=e, p=p, live=True, classes=CLASSES, dfm=dfm,
-                      convs=convs,
+                      convs=convs, docs_built=built,
                       sch=dsched.packet_info(snap, e, request.path_params["wpid"]),
                       tk=tokens.packet(e, request.path_params["wpid"]))
 
@@ -1551,6 +1652,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/p/{project}/settings", configure, methods=["POST"]),
         Route("/p/{project}/ide", ide_open, methods=["POST"]),
         Route("/p/{project}/doc", doc),
+        Route("/p/{project}/docs", docs_build, methods=["POST"]),
+        Route("/p/{project}/docs/{entry}/{docset}", docs_file),
+        Route("/p/{project}/docs/{entry}/{docset}/{path:path}", docs_file),
+        Route("/p/{project}/docslog/{entry}/{docset}", docs_log),
         Route("/p/{project}/markup", markup_post, methods=["POST"]),
         Route("/p/{project}/{wpid}/act", act, methods=["POST"]),
         Route("/p/{project}/{wpid}/live", live_view),
