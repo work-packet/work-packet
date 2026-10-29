@@ -157,3 +157,56 @@ def test_gate_for_needs_a_provider_name(home):
     Ctx.cfg = pcfg()
     assert budget.gate_for(Ctx, [], home, entries=[]) is not None
 
+
+
+# --- wpkd's cadence (Poller) -----------------------------------------------------------
+
+class Counting(Portal):
+    def __init__(self):
+        super().__init__()
+        self.reads, self.checks, self.says = 0, 0, False
+
+    def changed(self):
+        self.checks += 1
+        return self.says
+
+    def read(self):
+        self.reads += 1
+        return super().read()
+
+
+def test_poller_cadence(home, monkeypatch):
+    from work_packet import plugins
+    p = Counting()
+    monkeypatch.setattr(plugins, "loaded", lambda g: {"portal": p} if g == budget.GROUP else {})
+    cfg, t = pcfg(), NOON
+    assert budget.Poller(home).poll(pcfg(measure="usd", amount=1.0), t) is False
+    pl = budget.Poller(home)
+    assert pl.poll(cfg, t) is True and p.reads == 1           # first: read at once
+    assert pl.poll(cfg, t + timedelta(minutes=1)) is False and p.checks == 0
+    assert pl.poll(cfg, t + timedelta(minutes=6)) is False and p.checks == 1
+    p.says = True
+    assert pl.poll(cfg, t + timedelta(minutes=12)) is True and p.reads == 2
+    p.says = False
+    # a restarted wpkd reads the cache's tried_at: no read at once
+    assert budget.Poller(home).poll(cfg, t + timedelta(minutes=13)) is False
+    assert pl.poll(cfg, t + timedelta(minutes=73)) is True and p.reads == 3   # hourly
+    # after an error, retry at the changed() cadence without asking changed()
+    p.raise_ = budget.Unavailable("down")
+    assert pl.poll(cfg, t + timedelta(minutes=140)) is True
+    n = p.checks
+    assert pl.poll(cfg, t + timedelta(minutes=146)) is True and p.checks == n
+    assert budget.load_reading(home)["error"] == "down"
+
+
+def test_wpkd_reads_the_provider(home, monkeypatch):
+    import threading
+    from work_packet.sched.dispatcher import Dispatcher
+    from work_packet import plugins
+    p = Counting()
+    monkeypatch.setattr(plugins, "loaded", lambda g: {"portal": p} if g == budget.GROUP else {})
+    d = Dispatcher(home, cfg=pcfg())
+    stop, poke = threading.Event(), threading.Event()
+    monkeypatch.setattr(d, "fill", lambda *a, **k: stop.set())
+    d.run(stop, poke, max_wait=0.1)
+    assert p.reads == 1 and budget.load_reading(home)["provider"] == "portal"

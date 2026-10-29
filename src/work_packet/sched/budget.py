@@ -6,6 +6,7 @@ is still running holds a reservation, its estimate, until its figures land.
 
 import fnmatch
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,7 @@ MEASURES = ("usd", "tokens", "quota", "provider")
 DEFAULT_STEP = {"usd": 0.50, "tokens": 2_000_000.0, "quota": 0.005}
 HIGH_SHARE = 0.95
 PACKET_HISTORY, PROJECT_HISTORY = 10, 20
+log = logging.getLogger(__name__)
 QUOTA_WINDOWS = {"seven_day": timedelta(days=7), "five_hour": timedelta(hours=5)}
 
 
@@ -187,14 +189,15 @@ def load_reading(h):
         return None
 
 
-def refresh(h, name, now):
-    """Ask provider ``name`` for a reading and cache it. A failure keeps the last
-    reading and records why (``error``; ``needs_login`` for NeedsLogin)."""
+def refresh(h, name, now, p=None):
+    """Ask provider ``name`` (or the instance ``p``) for a reading and cache it. A
+    failure keeps the last reading and records why (``error``; ``needs_login``)."""
     old = load_reading(h) or {}
     d = {"provider": name, "reading": old.get("reading") if old.get("provider") == name else None,
          "read_at": old.get("read_at"), "tried_at": schema.format_timestamp(now),
          "error": None, "needs_login": False}
-    p = provider(name)
+    if p is None:
+        p = provider(name)
     try:
         if p is None:
             raise Unavailable("budget provider %r is not loaded (wpk doctor)" % name)
@@ -210,6 +213,46 @@ def refresh(h, name, now):
     os.makedirs(sched_dir(h), exist_ok=True)
     fsutil.atomic_write(os.path.join(sched_dir(h), READING), json.dumps(out, indent=1) + "\n")
     return d
+
+
+CHANGED_EVERY = timedelta(minutes=5)    # how often wpkd asks changed()
+READ_EVERY = timedelta(hours=1)         # read at least this often
+
+
+class Poller:
+    """wpkd's cadence for the provider (design E6): ``changed()`` every few minutes,
+    ``read()`` when it says so, after an error, or at least hourly. The last try
+    is in the cache, so a restarted wpkd does not read again at once."""
+
+    def __init__(self, h):
+        self.h = h
+        self.name, self.p, self.checked = None, None, None
+
+    def poll(self, cfg, now):
+        """True when a reading was tried (the gates may have changed)."""
+        b = cfg.get("budget") or {}
+        name = b.get("provider") if b.get("measure") == "provider" else None
+        if not name:
+            return False
+        if name != self.name:
+            self.name, self.p, self.checked = name, provider(name), None
+        c = load_reading(self.h)
+        tried = c.get("tried_at") if c and c.get("provider") == name else None
+        if tried is not None and now - schema.parse_timestamp(tried) < READ_EVERY:
+            if self.checked is not None and now - self.checked < CHANGED_EVERY:
+                return False
+            self.checked = now
+            if not c.get("error"):
+                try:
+                    if self.p is not None and not self.p.changed():
+                        return False
+                except Exception as e:     # read() will record the failure
+                    log.warning("budget provider %s: changed() failed: %s", name, e)
+        self.checked = now
+        d = refresh(self.h, name, now, self.p)
+        if d["error"]:
+            log.warning("budget provider %s: %s", name, d["error"])
+        return True
 
 
 # --- periods and pace --------------------------------------------------------------

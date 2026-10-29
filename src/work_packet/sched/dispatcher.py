@@ -501,11 +501,15 @@ class Dispatcher:
         want_fill = True
         self.creds = credentials.Watcher(self.h)
         self.creds.add(self._creds_changed)
+        from . import budget
+        self.budget_poll = budget.Poller(self.h)
         while not stopping.is_set():
             poked = poke.is_set()
             poke.clear()
             try:
                 self.creds.poll()
+                if self.budget_poll.poll(self.cfg(), self.now()):
+                    want_fill = True           # a new reading may open or close gates
                 ended = self.reap()
                 if poked or ended or want_fill or time.monotonic() - last_fill > FALLBACK_S:
                     scheduler._sync_requests(self.h)
