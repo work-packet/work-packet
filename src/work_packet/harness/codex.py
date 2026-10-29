@@ -1,9 +1,10 @@
 """OpenAI Codex CLI (``codex exec``), or ``$WPK_CODEX`` in its place.
 
-UNVERIFIED: written from what was known of Codex CLI 0.4x without a copy to
-run (no network when it was written). The command line is all in
-``command()`` and the event names all in ``parse()``; check both against
-``codex exec --help`` and a real ``--json`` transcript before relying on it.
+UNVERIFIED: written from docs/harness.md §7 (Codex 0.147.0 ``--help`` and
+docs, no model run); ``--skip-git-repo-check``, ``--add-dir`` and the
+``usage`` field names are from memory. The command line is all in
+``command()`` and the event names all in ``parse()``; check both against a
+real ``--json`` transcript before relying on it.
 
 What Codex lacks next to Claude Code, and so what the executor does without
 (``Caps``): no system prompt slot (the protocol leads the prompt), no
