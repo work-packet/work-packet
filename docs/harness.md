@@ -58,6 +58,34 @@ The protocol has a harness-neutral part (`prompts/protocol.md`) and a short
 harness part (`prompts/harness-<name>.md`): Claude Code's "Read before
 Write" rule and tool names live there.
 
+### Per-home environment
+
+A home can give a harness's runs extra environment, such as a gateway URL
+and its key, in `config.toml`. The table is `[harnesses.<name>]` (plural:
+the top-level `harness` key names the default harness):
+
+```toml
+[harnesses.claude]
+env_file = "claude.env"          # relative to the home; ~ expanded
+
+[harnesses.claude.env]
+ANTHROPIC_BASE_URL = "https://gateway.example/v1"
+```
+
+The order is: wpk's own environment, then `env`, then `env_file`. The file
+holds `KEY=VALUE` lines (`#` comments, `export ` and quotes allowed) and
+must be mode 0600: if group or others can read it, wpk warns and skips the
+file (the `env` table still applies). Keys belong in the file, not in
+`config.toml`.
+
+Each step's `meta.json` records its route, never the key:
+`"route": {"account": "subscription", "host": "gateway.example"}`. The
+account comes from the transcript (Claude Code's `apiKeySource`: `none` is
+a subscription login, anything else is `key`; `unknown` if not reported);
+the host from the adapter's `base_url_var` (`ANTHROPIC_BASE_URL` for
+Claude), or `default`. `wpk stats --by route` gives token use and cost per
+`account@host`.
+
 ## 4. Profiles (H2)
 
 Built in at `work_packet/profiles.toml`, overridable in the runner's

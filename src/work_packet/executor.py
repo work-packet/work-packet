@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 
@@ -625,7 +626,14 @@ def _model(pkt, st, h, spec, env, sd, lease, text, timeout_s, append=False):
         lease.stop_refresher()
 
 
-def _meta(n, a, now, end, h, prof, meta, session, carried, res, prev):
+def _route(h, env, res):
+    """Which account and API host the run used (docs/harness.md): never the key."""
+    url = env.get(h.base_url_var) if h.base_url_var else None
+    return {"account": res.account or "unknown",
+            "host": (urllib.parse.urlparse(url).hostname if url else None) or "default"}
+
+
+def _meta(n, a, now, end, h, prof, meta, session, carried, res, prev, env):
     return {
         "step": n, "attempt": a, "start": _ts(now), "end": _ts(end), "harness": h.name,
         "profile": prof.id, "model": meta["model"],
@@ -635,7 +643,8 @@ def _meta(n, a, now, end, h, prof, meta, session, carried, res, prev):
         "cost_usd": _step_cost(res, prev, h.caps.cost_is_chain_total),
         "session_cost_usd": res.cost_usd,
         "tokens": res.tokens, "context": _context_meta(res, prev),
-        "duration_s": res.duration_s, "api_s": res.api_s, "quota": res.quota or None}
+        "duration_s": res.duration_s, "api_s": res.api_s, "quota": res.quota or None,
+        "route": _route(h, env, res)}
 
 
 def allowed_sizes(st):
@@ -768,7 +777,7 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
     res = run(text, st.step_timeout_s)
     end = clock.now()
     faults.point("after-model")
-    meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev)
+    meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev, env)
     fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(meta_out, indent=2) + "\n")
     why, mm = _check(pkt, st, snap, res)
     if why is not None and _nudgeable(h, res, why):
@@ -793,7 +802,7 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
             res.cost_usd += first.cost_usd
         res.duration_s = round(first.duration_s + res.duration_s, 3)
         end = clock.now()
-        meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev)
+        meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev, env)
         meta_out["nudged"] = why
         fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(meta_out, indent=2) + "\n")
         why, mm = _check(pkt, st, snap, res)

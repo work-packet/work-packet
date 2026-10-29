@@ -51,6 +51,7 @@ class Step:
     dir: Optional[str] = None    # the step folder
     quota: Optional[dict] = None  # {window: {first, last, resets_at}}, subscriptions only
     tools: Optional[dict] = None  # tool-cost attribution, when read from the history store
+    route: Optional[str] = None   # "account@host" from meta.json, when it was recorded
 
     @property
     def key(self):
@@ -181,7 +182,7 @@ def packet_steps(project, pkt):
             hook=tuple(fired.split()) if fired else (),
             resume=None if m.group(2) else _resume(mm), item=schema.memento_item(mm),
             diff_lines=_diff_lines(_read(os.path.join(d, "state.diff"))),
-            end=meta.get("end"), dir=d, quota=quota or None))
+            end=meta.get("end"), dir=d, quota=quota or None, route=_route(meta)))
     # A failed attempt that left no item belongs to the item its step committed.
     done = {s.step: s.item for s in out if not s.failed}
     for s in out:
@@ -376,10 +377,18 @@ def latest_quota(steps, now=None):
     return out
 
 
+def _route(meta):
+    r = meta.get("route")
+    if not isinstance(r, dict):
+        return None
+    return "%s@%s" % (r.get("account") or "unknown", r.get("host") or "default")
+
+
 ROLLUPS = {
     "project": lambda s: s.project,
     "packet": lambda s: "%s/%s" % (s.project, s.wpid[:8]),
     "model": lambda s: s.model,
+    "route": lambda s: s.route or "(not recorded)",
     "item": lambda s: "%s/%s %s" % (s.project, s.wpid[:8], s.item or "(no item)"),
     "day": lambda s: (s.end or "?")[:10],
     "step": lambda s: "%s/%s/%04d%s" % (s.project, s.wpid[:8], s.step,

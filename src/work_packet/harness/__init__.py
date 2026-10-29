@@ -41,6 +41,7 @@ class StepSpec:
 class Harness:
     name = "?"
     caps = Caps()
+    base_url_var = None     # the environment variable that points the CLI at another API host
 
     def command(self, spec):
         raise NotImplementedError

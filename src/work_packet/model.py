@@ -55,6 +55,7 @@ class StepResult:
     quota: dict = field(default_factory=dict)     # {window: {first, last, resets_at}}
     duration_s: float = 0.0
     text: Optional[str] = None
+    account: Optional[str] = None    # how the run paid: "subscription", "key", ...; never the key
 
     def failure(self):
         """Why the run failed, or None if it succeeded."""

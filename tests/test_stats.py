@@ -174,3 +174,12 @@ def test_quota_used_and_latest():
     assert latest == {"used": 0.01, "resets_at": 3000, "at": b.end, "reset": False}
     assert stats.latest_quota([a], now=2500)["seven_day"]["reset"] is True
     assert stats.latest_quota([c]) == {}
+
+
+def test_rollup_by_route():
+    assert stats._route({"route": {"account": "key", "host": "gw.example"}}) == "key@gw.example"
+    assert stats._route({}) is None
+    ss = [step(1, route="subscription@default"), step(2, route="key@gw.example"),
+          step(3, route="key@gw.example"), step(4)]
+    rows = {k: n for k, n, _ in stats.rollup(ss, "route")}
+    assert rows == {"subscription@default": 1, "key@gw.example": 2, "(not recorded)": 1}

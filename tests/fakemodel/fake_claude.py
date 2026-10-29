@@ -63,7 +63,7 @@ def main():
     prompt = sys.stdin.read()
     fault = os.environ.get("WPK_FAKE_FAULT", "")
     emit({"type": "system", "subtype": "init", "session_id": args.session_id,
-          "model": args.model, "cwd": os.getcwd()})
+          "model": args.model, "cwd": os.getcwd(), "apiKeySource": "none"})
     if fault == "crash":
         sys.stderr.write("fake: crashing\n")
         return 1

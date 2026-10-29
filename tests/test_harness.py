@@ -8,7 +8,7 @@ import pytest
 from conftest import make_project
 from test_context import calls, meta
 from test_executor import set_project
-from work_packet import executor, harness, prompt
+from work_packet import executor, harness, model, prompt
 from work_packet.harness import claude
 
 
@@ -198,3 +198,24 @@ def test_step_gets_home_env(fresh, monkeypatch, tmp_path):
     monkeypatch.setattr(executor, "_model", spy)
     executor.step(proj)
     assert seen.get("WPK_TEST_ROUTE") == "gateway"
+
+
+def test_meta_records_route_not_key(fresh, tmp_path):
+    proj, root, argv = fresh
+    with open(tmp_path / "wpk-home" / "config.toml", "a") as f:
+        f.write('[harnesses.claude.env]\nANTHROPIC_BASE_URL = "https://gw.example:8443/v1"\n'
+                'ANTHROPIC_API_KEY = "sk-secret"\n')
+    executor.step(proj)
+    text = open(os.path.join(root.step_dir(1), "meta.json")).read()
+    assert json.loads(text)["route"] == {"account": "subscription", "host": "gw.example"}
+    assert "sk-secret" not in text
+
+
+def test_route_account_from_init_event(tmp_path):
+    t = tmp_path / "t.jsonl"
+    t.write_text(json.dumps({"type": "system", "subtype": "init", "session_id": "s",
+                             "apiKeySource": "ANTHROPIC_API_KEY"}) + "\n")
+    res = claude.Claude().parse(str(t), model.StepResult())
+    assert res.account == "key"
+    h = claude.Claude()
+    assert executor._route(h, {}, model.StepResult()) == {"account": "unknown", "host": "default"}

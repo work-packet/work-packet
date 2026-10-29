@@ -111,6 +111,7 @@ class Claude(Harness):
     name = "claude"
     caps = Caps(system_slot=True, inject=True, resume=True, fork=True, set_session_id=True,
                 reports_cost=True, cost_is_chain_total=True)
+    base_url_var = "ANTHROPIC_BASE_URL"
 
     def models(self):
         return list(MODELS)
@@ -192,6 +193,10 @@ class Claude(Harness):
                 continue
             if ev.get("session_id") and not res.session_id:
                 res.session_id = ev["session_id"]
+            if ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("apiKeySource"):
+                # "none" is a subscription login; anything else names where a key came from
+                src = ev["apiKeySource"]
+                res.account = "subscription" if src == "none" else "key"
             if ev.get("type") == "assistant" and isinstance((ev.get("message") or {}).get("usage"), dict):
                 msg = ev["message"]
                 tail[msg.get("id") or len(tail)] = msg["usage"]
