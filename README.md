@@ -82,6 +82,8 @@ for setup (docs/setup.md), `path`, `shell`, `add-input`,
 - `docs/work-data-design.md`: cards, the history store and run binding (v1
   data design); `docs/implementation-v1.md`, `docs/migration-v1.md`,
   `docs/dash-history-v1.md` and `docs/run-binding-v1.md` track building it.
+- `docs/sites.md`: site packages: plugin entry points, the site config
+  layer, `[plugins]`, job sizes.
 - `docs/harness.md`: harness adapters (Claude Code now; Codex and OpenCode
   surveyed), model profiles, and `wpk stats` with advice.
 - `slides/work-packet.pptx`: overview deck (built from `slides/*.js`).

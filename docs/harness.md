@@ -243,7 +243,7 @@ command line is all in `Codex.command()` and the event names all in
 
 ### Writing a harness
 
-A site package can add a harness without changing wpk. Subclass
+A site package (docs/sites.md) can add a harness without changing wpk. Subclass
 `work_packet.harness.Harness` and name it in the package's entry points:
 
 ```toml
