@@ -261,8 +261,11 @@ def test_pause_waits_for_lease(home):
     with open(pkt.lease_path, "w") as fp:
         json.dump({"host": socket.gethostname(), "pid": os.getpid(), "step": 1,
                    "attempt": 1, "expires": "2999-01-01T00:00:00Z"}, fp)
-    assert executor.admin(pkt, "pause").code == 3
-    assert pkt.load_status()[0]["state"] == "RUNNABLE"
+    # A step holds the lease: the pause waits for it (docs/pause-v1.md).
+    out = executor.admin(pkt, "pause")
+    assert out.code == 0 and "pause requested" in out.msg
+    assert pkt.load_status()[0]["state"] == "RUNNABLE" and executor.pause_request(pkt)
+    assert executor.admin(pkt, "resume").code == 3
 
 
 def test_cli_new_prints_permissions(home, capsys, tmp_path):

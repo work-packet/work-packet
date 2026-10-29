@@ -412,6 +412,16 @@ JSON: `{"host", "pid", "step", "attempt", "expires"}`. Created with
 on this host and the PID no longer exists. The checker warns about a stale
 lease; it does not remove it.
 
+### 4.5a `.pause`
+
+A pause asked for while a step holds the lease (docs/pause-v1.md). JSON:
+`{"by", "t"}`, optional `"reason"`. Written without the lease; a second
+request keeps the first. The commit of the running step turns a decided
+`RUNNABLE` or `SLEEPING` into `PAUSED` (reason `paused by <by> after step
+<n>`, an `admin` record with `requested`), and removes the file whatever
+it decided; a step that finds it at its start pauses instead of running.
+`wpk resume`, a hand-off or `withdraw_pause` remove it. Not archived.
+
 ### 4.6 `.pending/`
 
 Created by the executor at the start of a step. The model writes:

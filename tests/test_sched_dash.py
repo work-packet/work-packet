@@ -195,8 +195,9 @@ def test_bulk_over_three_packets_one_leased(home):
     r = c.post("/packets/bulk", data={"op": "pause", "pick": picks}, follow_redirects=False)
     msg, ok = flash(r)
     lines = msg.splitlines()
-    assert len(lines) == 3 and not ok
-    assert "RUNNABLE -> PAUSED" in lines[0] and "lease held" in lines[1]
+    assert len(lines) == 3 and ok
+    # bbb's step runs: it pauses when that step ends (docs/pause-v1.md).
+    assert "RUNNABLE -> PAUSED" in lines[0] and "pause requested" in lines[1]
     assert a.load_status()[0]["state"] == "PAUSED" and b.load_status()[0]["state"] == "RUNNABLE"
     r = c.post("/packets/bulk", data={"op": "prio", "value": "low", "pick": picks},
                follow_redirects=False)

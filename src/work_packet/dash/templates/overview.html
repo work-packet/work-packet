@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "_side.html" as sidem with context %}
 {% import "_tokens.html" as tkm %}
+{% import "_pause.html" as pz with context %}
 {#- How every board is doing, what needs you, and token use (docs/overview.md). -#}
 {% block title %}Overview{% endblock %}
 {% block head %}
@@ -34,6 +35,7 @@ table.bt th.c::before, .split i { display: inline-block; width: 8px; height: 8px
 .split i { display: block; width: auto; height: 100%; border-radius: 0; margin: 0; }
 .h2bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 22px 0 8px; }
 .h2bar h2 { margin: 0; }
+ul.list form.pz { display: inline-flex; gap: 6px; margin: 0; }
 .seenbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 6px; font-size: 13px; }
 ul.list li input[type=checkbox] { margin: 0; align-self: center; }
 ul.list button.x { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 2px; cursor: pointer; }
@@ -171,10 +173,11 @@ ul.list button.x:hover { color: var(--FAILED); }
 <ul class="list">
 {% for c in ov.running %}
   <li><span class="state running pulse">RUNNING</span>
-    <a href="/p/{{ c.name|urlencode }}/{{ c.running.wpid }}/live"><strong>{{ c.name }}</strong></a>
+    {{ pz.badge(c) }}<a href="/p/{{ c.name|urlencode }}/{{ c.running.wpid }}/live"><strong>{{ c.name }}</strong></a>
     <span class="what">{{ c.running.name or c.running.short }} step {{ c.running.step }}{% if c.running.for %}, {{ c.running.for }}{% endif %}
       {% if c.running.now %}<br><span class="muted ell">{{ c.running.now }}</span>{% endif %}</span>
-    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}</li>
+    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
+    {{ pz.button(c, "/#running") }}</li>
 {% endfor %}
 </ul>
 {% else %}<p class="muted">Nothing is running.</p>{% endif %}
@@ -184,10 +187,11 @@ ul.list button.x:hover { color: var(--FAILED); }
 {% if ov.coming %}
 <ul class="list">
 {% for c in ov.coming %}
-  <li>{% if c.column == "Ready" %}<span class="state RUNNABLE">READY</span>{% else %}<span class="state SLEEPING">WAKES</span>{% endif %}
+  <li>{% if c.column == "Ready" %}<span class="state RUNNABLE">READY</span>{% else %}<span class="state SLEEPING">WAKES</span>{% endif %}{{ pz.badge(c) }}
     <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
     <span class="what muted">{% if c.column == "Ready" %}due now{% if not runner %}: runner off, start the dash with --run or use <code>wpk tick</code>{% endif %}{% else %}{{ c.root.next if c.root }}{% endif %}</span>
-    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}</li>
+    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
+    {{ pz.button(c, "/#running") }}</li>
 {% endfor %}
 {% if ov.more_coming %}<li class="muted">and {{ ov.more_coming }} more</li>{% endif %}
 </ul>

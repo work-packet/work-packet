@@ -26,6 +26,7 @@ class Packet:
     journal_path = property(lambda s: s._p("journal.jsonl"))
     steps_dir = property(lambda s: s._p("steps"))
     lease_path = property(lambda s: s._p(".lease"))
+    pause_path = property(lambda s: s._p(".pause"))   # a pause asked for while a step runs
     pending_dir = property(lambda s: s._p(".pending"))
     state_old_dir = property(lambda s: s._p(".state.old"))
 

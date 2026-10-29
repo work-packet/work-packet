@@ -1,7 +1,7 @@
 # Pausing work to re-prioritise (plan and status)
 
-Started 2026-10-29. Status: **proposed**, waiting for a go and answers to
-P-Q1 and P-Q2.
+Started 2026-10-29. Status: **built** 2026-10-29 (P1–P5); P-Q1 and P-Q2
+answered yes.
 
 ## Why
 
@@ -108,19 +108,47 @@ take a packet; a project name will mean its tree.
 
 ## Steps
 
-- [ ] P1. `executor.request_pause` and `withdraw_pause`; honour a request
+- [x] P1. `executor.request_pause` and `withdraw_pause`; honour a request
   in `_apply` and at `step` start; `admin(pause)` requests while a step
   runs; tests.
-- [ ] P2. Project-level pause and resume (`actions.pause_project`,
+- [x] P2. Project-level pause and resume (`actions.pause_project`,
   `resume_project`); `wpk pause|resume <project>`; tests.
-- [ ] P3. Stop now for one project (`control.cancel_jobs` filtered to the
+- [x] P3. Stop now for one project (`control.cancel_jobs` filtered to the
   project, plus the request); tests with the local backend.
-- [ ] P4. Dashboard: Pause / Resume / Stop now on the project header; Pause
+- [x] P4. Dashboard: Pause / Resume / Stop now on the project header; Pause
   on the Overview's Running and Coming up rows and on board cards; the
   packet page and the All packets bar on running packets; PAUSING shown.
-- [ ] P5. Docs (`docs/interaction.md` §4 actions, `docs/spec.md` for
+- [x] P5. Docs (`docs/interaction.md` §4 actions, `docs/spec.md` for
   `pause.request`); check in the browser.
 
 ## Status
 
 - 2026-10-29: proposal written.
+- 2026-10-29: P-Q1 yes (Pause lets the running step finish; Stop now is
+  separate, behind a confirmation). P-Q2 yes (a real pause, not a hold).
+- 2026-10-29: built.
+  - Executor: `.pause` (spec §4.5a); `request_pause`, `pause_request`,
+    `withdraw_pause`, `pause_reason`; `admin(pause)` requests while the
+    lease is held (other ops still refuse with LEASED); `_apply` turns a
+    decided RUNNABLE/SLEEPING into PAUSED and journals it after saving the
+    status; `step` pauses at its start; a pause, resume, hand-off or
+    continue drops a request. The dispatcher pauses a requested packet
+    instead of submitting it (`Dispatcher._pauses`). `.pause` is a known
+    packet entry, and the history store skips it.
+  - `actions.pause_project`, `resume_project` (only `resumable`: PAUSED,
+    not for setup, not by a limit; also withdraws requests),
+    `stop_project` (pause, then `control.cancel_jobs` on the project's
+    steps, `lost`: not counted). `wpk pause|resume <project>` already
+    covered the tree, and its pause now requests on running packets.
+  - Board: `_pause.html` (Pause, Stop now, Don't pause, Resume; the
+    PAUSING badge) on the project header (every tab), the Overview's
+    Running now and Coming up rows, and under board cards;
+    `POST /p/<project>/run` (`op` pause, resume, stop; `back` a local path;
+    stop needs the `cancel` right); the packet page shows "Pause after this
+    step" while running, PAUSING and "Don't pause" (`act` op `keep`). Cards
+    carry `pausable`, `pausing`, `resumable`.
+  - Tests: `tests/test_pause.py` (8); `test_pause_waits_for_lease` and
+    `test_bulk_over_three_packets_one_leased` now expect a request.
+    Rendered in headless Chrome (project header, board, Overview).
+  - Not tried against a real running step on the live board yet: needs
+    the dashboard restarted.

@@ -298,6 +298,22 @@ class Dispatcher:
             ctx.ledger = budget.ledger([p.entry for p in ctx.projs.values()])
         ctx.budget = budget.gate_for(ctx, recs, self.h, recs=ctx.ledger)
 
+    def _pauses(self, items):
+        """A pause asked for while a step ran (docs/pause-v1.md) is done here,
+        rather than by starting a job only for the step to refuse. Returns the rest."""
+        from .. import executor
+        out = []
+        for it in items:
+            pkt = Packet(it.path)
+            req = executor.pause_request(pkt)
+            if req is None:
+                out.append(it)
+                continue
+            got = executor.admin(pkt, "pause", by=req.get("by"), reason=executor.pause_reason(req))
+            if got.code != 0:
+                out.append(it)          # the step will do it
+        return out
+
     def _caps(self, items, ctx):
         """Hold packets over their project's caps (§4.5): paused with the figures
         until L1's HELD/limit, so they show under Needs you. Returns the rest."""
@@ -329,6 +345,7 @@ class Dispatcher:
         if only is not None:
             items = [it for it in items if it.key in only]
         items = self._caps(items, ctx)
+        items = self._pauses(items)
         out_ide = self._ides(ctx, now) if only is None else []
         start, reasons = gates.plan(items, ctx, queue.order, limit)
         if ctx.budget is not None:

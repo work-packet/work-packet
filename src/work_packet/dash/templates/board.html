@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_side.html" as sidem with context %}
+{% import "_pause.html" as pz with context %}
 {% block title %}{{ here.name }}{% endblock %}
 {% block crumbs %}/ <a href="/b/{{ here.name|urlencode }}">{{ here.name }}</a>{% endblock %}
 {% block head %}
@@ -21,6 +22,8 @@
 .card.Running { border-left-color: var(--running); } .card.Ready { border-left-color: var(--RUNNABLE); }
 .card.Needs { border-left-color: var(--NEEDS_INPUT); } .card.Sleeping { border-left-color: var(--SLEEPING); } .card.Paused { border-left-color: var(--PAUSED); }
 .card.Failed { border-left-color: var(--FAILED); } .card.Done { border-left-color: var(--COMPLETED); }
+.cardpz { display: flex; gap: 6px; align-items: center; justify-content: flex-end; margin: -6px 0 8px; }
+.cardpz form.pz { display: inline-flex; gap: 6px; margin: 0; }
 .card .name { font-weight: 700; display: flex; justify-content: space-between; gap: 6px; }
 .card .line { font-size: 12.5px; margin-top: 3px; }
 .card .sum { font-size: 12.5px; margin-top: 4px; color: var(--muted);
@@ -91,6 +94,7 @@
       </div>
       <div class="line muted">step {{ c.root.step if c.root else "?" }} · last step {{ c.last_step }}</div>
     </a>
+    {% if c.pausable or c.pausing or c.resumable %}<div class="cardpz">{{ pz.badge(c) }}{{ pz.button(c, "/b/" ~ (here.name|urlencode)) }}</div>{% endif %}
     {% endfor %}
   </section>
 {% endfor %}

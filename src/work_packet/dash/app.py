@@ -659,6 +659,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
                                           op == "recommend", by)
         elif op == "note":
             out = await run_in_threadpool(actions.note, pkt, note, by, one("wake") == "1")
+        elif op == "keep":              # take back a pause that has not happened yet
+            out = await run_in_threadpool(executor.withdraw_pause, pkt)
         elif op in ("handoff", "pause", "resume"):
             out = await run_in_threadpool(executor.admin, pkt, op, note or None, None, by)
             if op == "pause" and out.code == 0:
@@ -671,6 +673,37 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         if one("back") == "project":
             url = "/p/%s" % urllib.parse.quote(e["name"])
         return back(url + "/live" if one("back") == "live" else url, out)
+
+    async def project_run(request):
+        """Pause, Resume or Stop now a whole project (docs/pause-v1.md): from its
+        page, the Overview and the boards. ``back``: the page to return to."""
+        from .. import actions, executor
+        from ..sched import authz
+        e = entry(request)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        if archived.is_archived(e):
+            return back("/p/%s" % urllib.parse.quote(e["name"]),
+                        executor.Outcome(executor.USAGE, "%s is archived" % e["name"]))
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        op, by = one("op"), who(request)
+        if op == "pause":
+            out = await run_in_threadpool(actions.pause_project, e, by)
+        elif op == "resume":
+            out = await run_in_threadpool(actions.resume_project, e, by)
+        elif op == "stop":
+            no = denied(request, "cancel")
+            if no:
+                return no
+            out = await run_in_threadpool(actions.stop_project, e, authz.principal_of(request),
+                                          home)
+        else:
+            out = executor.Outcome(executor.USAGE, "unknown action %r" % op)
+        to = one("back")
+        if not to.startswith("/") or to.startswith("//"):
+            to = "/p/%s" % urllib.parse.quote(e["name"])
+        return back(to, out, poke_runner=op == "resume")
 
     async def ide_open(request):
         """Open a packet or a work folder in VS Code (docs/vscode-plan.md V2).
@@ -1296,6 +1329,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None):
         Route("/b/{board}/watch/{name}/poll", watch_poll, methods=["POST"]),
         Route("/p/{project}/board", board_move, methods=["POST"]),
         Route("/p/{project}/pr", pr_open, methods=["POST"]),
+        Route("/p/{project}/run", project_run, methods=["POST"]),
         Route("/healthz", health),
         Route("/static/live.js", live_js),
         Route("/static/pane.js", pane_js),

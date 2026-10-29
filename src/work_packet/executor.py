@@ -190,6 +190,9 @@ def _apply(pkt, st, rec):
             meta["stopped"] = rec["t"]
         else:
             meta.pop("stopped", None)
+        req = pause_request(pkt)
+        paused = _pause_for(pkt, meta, req, n) if req is not None and d["state"] in (
+            "RUNNABLE", "SLEEPING") else None       # asked for while this step ran
         if d.get("size"):           # for the next step only (docs/scheduler.md §5.2)
             meta["next_size"] = d["size"]
         else:
@@ -198,8 +201,11 @@ def _apply(pkt, st, rec):
         if d.get("report"):         # the outcome leads, so ps and the board show it
             body = "%s\n\n%s" % (d["report"]["outcome"], body)
         pkt.save_status(meta, body)
+        if paused:
+            journal.append(pkt.journal_path, paused)
     if d.get("report"):
         shutil.copyfile(os.path.join(pkt.step_dir(n), report.NAME), pkt.report_path)
+    _drop_pause_request(pkt)        # done with: paused, or nothing left to pause
     faults.point("after-status")
 
     end = {"type": "commit-end", "t": _ts(), "step": n}
@@ -562,6 +568,15 @@ def step(target, force=False, lost=None):
         if rec and rec.startswith("rolled forward"):
             return Outcome(OK, rec)
         meta, body = pkt.load_status()
+        req = pause_request(pkt)
+        if req is not None:             # asked for while the last attempt ran
+            if meta["state"] in ("RUNNABLE", "SLEEPING"):
+                paused = _pause_for(pkt, meta, req, meta["step"])
+                pkt.save_status(meta, body)
+                journal.append(pkt.journal_path, paused)
+                _drop_pause_request(pkt)
+                return Outcome(NOT_RUNNABLE, "paused, as %s asked" % req.get("by", "someone"))
+            _drop_pause_request(pkt)
         n, a = meta["step"] + 1, meta["attempts"] + 1
         lease.refresh(n, a)
         faults.at_step(n)
@@ -925,10 +940,14 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
     try:
         lease = Lease(pkt.lease_path, meta["step"] + 1, 0, 60).acquire()
     except LeaseHeld as e:
+        if op == "pause" and meta["state"] in ("RUNNABLE", "SLEEPING"):
+            return request_pause(pkt, by, reason)   # a step runs: pause after it
         return Outcome(LEASED, str(e))
     try:
         meta, body = pkt.load_status()
         old = meta["state"]
+        if op in ("pause", "resume", "handoff", "continue"):
+            _drop_pause_request(pkt)    # done now, or no longer wanted
         if op == "pause":
             if old not in ("RUNNABLE", "SLEEPING"):
                 return Outcome(NOT_RUNNABLE, "%s is %s; nothing to pause" % (pkt.wpid[:8], old))
@@ -1005,6 +1024,60 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
         lease.release()
         _ide_owner(pkt)
         livecard.flush()
+
+
+def request_pause(pkt, by=None, reason=None):
+    """Pause ``pkt`` once its running step ends (docs/pause-v1.md): the commit
+    makes it PAUSED instead of RUNNABLE or SLEEPING, and a step that would
+    start pauses it instead. Needs no lease; asking twice keeps the first."""
+    req = pause_request(pkt)
+    if req is None:
+        req = {"by": by or _who(), "t": _ts()}
+        if reason and reason.strip():
+            req["reason"] = reason.strip()
+        fsutil.atomic_write(pkt.pause_path, json.dumps(req) + "\n")
+    return Outcome(OK, "%s: pause requested: after the running step" % pkt.wpid[:8])
+
+
+def pause_request(pkt):
+    """The pending pause request of ``pkt`` ({by, t, reason?}), or None."""
+    try:
+        with open(pkt.pause_path) as fp:
+            req = json.load(fp)
+    except (OSError, ValueError):
+        return None
+    return req if isinstance(req, dict) else {}
+
+
+def withdraw_pause(pkt):
+    """Take back a pause request that has not happened yet."""
+    if pause_request(pkt) is None:
+        return Outcome(NOT_RUNNABLE, "%s: no pause was requested" % pkt.wpid[:8])
+    _drop_pause_request(pkt)
+    return Outcome(OK, "%s: will not pause" % pkt.wpid[:8])
+
+
+def _drop_pause_request(pkt):
+    try:
+        os.unlink(pkt.pause_path)
+    except FileNotFoundError:
+        pass
+
+
+def pause_reason(req, n=None):
+    """The PAUSED reason for a pause request."""
+    why = "paused by %s%s" % (req.get("by") or "someone",
+                              " after step %d" % n if n is not None else "")
+    return why + (": " + req["reason"] if req.get("reason") else "")
+
+
+def _pause_for(pkt, meta, req, n):
+    """Apply a pause request to ``meta``. Returns its ``admin`` record, which the
+    caller appends once ``meta`` is saved."""
+    old = meta["state"]
+    meta.update(state="PAUSED", reason=pause_reason(req, n), wake_at=None, updated=_ts())
+    return {"type": "admin", "t": _ts(), "op": "pause", "by": req.get("by") or _who(),
+            "from": old, "to": "PAUSED", "requested": req.get("t")}
 
 
 def mark_seen(pkt, by=None):

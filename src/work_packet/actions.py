@@ -151,3 +151,90 @@ def continue_(pkt, instruction, note=None, archive_outline=None, carry_session=F
         n = executor.batch_of(executor.journal.read(pkt.journal_path).records)
         out = executor.Outcome(executor.OK, "batch %d handed off; %s" % (n, out.msg))
     return out
+
+
+# --- a whole project: pause to re-prioritise (docs/pause-v1.md) ----------------------
+
+def resumable(meta):
+    """PAUSED by hand (or by a pause request), not for setup and not by a limit:
+    what Resume on a project gives back to the runner."""
+    from .project import SETUP_REASON
+    return meta.get("state") == "PAUSED" and meta.get("reason") != SETUP_REASON and \
+        not meta.get("stopped")
+
+
+def _tree(entry):
+    from .views import packets
+    return [(p, m) for _, p, m, _ in packets(entry["path"], entry["root"]) if m is not None]
+
+
+def pause_project(entry, by=None, reason=None):
+    """Pause every packet of ``entry`` that the runner would run: at once, or,
+    while its step runs, after that step."""
+    now, later, bad = 0, 0, []
+    for pkt, meta in _tree(entry):
+        if meta["state"] not in ("RUNNABLE", "SLEEPING"):
+            continue
+        out = executor.admin(pkt, "pause", by=by, reason=reason)
+        if out.code:
+            bad.append(out.msg)
+        elif executor.pause_request(pkt) is not None:
+            later += 1
+        else:
+            now += 1
+            _withdraw_job(pkt, by)
+    return _summary(entry, "paused", now, later, bad)
+
+
+def resume_project(entry, by=None):
+    """Give back to the runner what was paused by hand, and take back pauses
+    that have not happened yet. Setup, limits and questions are left alone."""
+    n, kept, bad = 0, 0, []
+    for pkt, meta in _tree(entry):
+        if executor.pause_request(pkt) is not None:
+            executor.withdraw_pause(pkt)
+            kept += 1
+        elif resumable(meta):
+            out = executor.admin(pkt, "resume", by=by)
+            if out.code:
+                bad.append(out.msg)
+            else:
+                n += 1
+    if not (n or kept or bad):
+        return executor.Outcome(executor.NOT_RUNNABLE, "%s: nothing paused by hand" % entry["name"])
+    msg = "%s: resumed %d packet%s" % (entry["name"], n, "" if n == 1 else "s")
+    if kept:
+        msg += "; %d will not pause after all" % kept
+    return executor.Outcome(1 if bad else 0, "; ".join([msg] + bad))
+
+
+def stop_project(entry, by=None, h=None):
+    """Pause the project, and end its running steps now: they are not counted as
+    failed attempts, and what they had not committed is redone later."""
+    from .sched import control
+    out = pause_project(entry, by=by, reason="stopped now")
+    gone = control.cancel_jobs(lambda r: r.project == entry["name"] and r.kind == "step",
+                               by or executor._who(), "stopped by %s" % (by or "hand"), h=h)
+    if not gone:
+        return out
+    return executor.Outcome(out.code, "%s; ended %d running step%s" % (
+        out.msg, len(gone), "" if len(gone) == 1 else "s"))
+
+
+def _withdraw_job(pkt, by):
+    from .sched import control
+    try:
+        control.cancel_pending(pkt.wpid, by or executor._who())
+    except Exception:               # noqa: BLE001: the dispatcher drops it at its next pass
+        pass
+
+
+def _summary(entry, verb, now, later, bad):
+    if not (now or later or bad):
+        return executor.Outcome(executor.NOT_RUNNABLE, "%s: nothing to pause" % entry["name"])
+    parts = []
+    if now:
+        parts.append("%s %d packet%s" % (verb, now, "" if now == 1 else "s"))
+    if later:
+        parts.append("%d after the running step" % later)
+    return executor.Outcome(1 if bad else 0, "%s: %s" % (entry["name"], "; ".join(parts + bad)))

@@ -1,0 +1,18 @@
+{#- Pause / Resume a whole project, wherever its work shows (docs/pause-v1.md).
+    Import "with context" (csrf). ``c``: a card; ``back``: the page to come back to. -#}
+{% macro button(c, back, cls="mini", stop=False) -%}
+{% if c.pausable or c.pausing or c.resumable %}
+<form class="act pz" method="post" action="/p/{{ c.name|urlencode }}/run"{% if stop %} data-confirm="Stop {{ c.name }} now? Its running step ends at once; what it had not committed is redone when you resume. It is not counted as a failure."{% endif %}>
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="back" value="{{ back }}">
+  {% if c.pausable %}<button class="{{ cls }}" name="op" value="pause" title="{{ 'Pause it: what is waiting stops now, a running step finishes first' if c.running else 'Pause it: the runner leaves it until you resume or hand it off' }}">Pause</button>{% endif %}
+  {% if stop and c.running %}<button class="{{ cls }}" name="op" value="stop" title="End the running step now and pause">Stop now</button>{% endif %}
+  {% if c.pausing %}<button class="{{ cls }}" name="op" value="resume" title="It pauses when its running step ends: take that back">Don't pause</button>
+  {% elif c.resumable %}<button class="{{ cls }}" name="op" value="resume" title="Give what you paused back to the runner">Resume</button>{% endif %}
+</form>
+{% endif %}
+{%- endmacro %}
+
+{% macro badge(c) -%}
+{% if c.pausing %}<span class="state PAUSED" title="pauses when the running step ends">PAUSING</span>{% endif %}
+{%- endmacro %}

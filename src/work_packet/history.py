@@ -36,7 +36,7 @@ ARCHIVE_VERSION = 1
 TIERS = ("metrics", "narrative", "changes", "transcripts", "logs", "deliverables")
 SKIP_TOP = {"work"}                  # the workspaces: not part of the record
 SKIP_DIRS = {".git", "__pycache__"}  # at any depth
-SKIP_FILES = {".lease"}
+SKIP_FILES = {".lease", ".pause"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);

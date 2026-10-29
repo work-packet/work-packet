@@ -83,7 +83,8 @@ over a packet or a project:
 |---|---|---|
 | `answer(pkt, answers, note, take_recommendations)` | grants, then `handoff` with answers | `wpk answer <target> [id=text…] [-r] [-m NOTE]` |
 | `handoff(pkt, note)` | `executor.admin(…, "handoff")` | `wpk handoff` |
-| `pause(pkt)` / `resume(pkt)` | `executor.admin` | `wpk pause` / `wpk resume` |
+| `pause(pkt)` / `resume(pkt)` | `executor.admin`; while a step runs, a pause is a request honoured when it ends (docs/pause-v1.md) | `wpk pause` / `wpk resume` |
+| `pause_project(e)` / `resume_project(e)` / `stop_project(e)` | the project's whole tree; resume only what was paused by hand; stop also ends running steps (not counted) | `wpk pause` / `wpk resume <project>`; the board |
 | `allow`, `deny`, `set` | `project.*` | `wpk allow` / `deny` / `set` |
 | `questions(pkt)` | the open questions, normalised | `wpk show` prints them |
 

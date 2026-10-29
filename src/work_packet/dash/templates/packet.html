@@ -40,7 +40,10 @@
 {% elif st in ("RUNNABLE", "SLEEPING") %}
 <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:12px">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
-  <button class="go" name="action" value="pause">Pause</button>
+  {% if p.pausing %}<span class="state PAUSED">PAUSING</span>
+  <span class="muted">pauses when the running step ends (asked by {{ p.pausing.by or "someone" }})</span>
+  <button class="go" name="action" value="keep">Don't pause</button>
+  {% else %}<button class="go" name="action" value="pause" title="{{ 'A step is running: it pauses when that step ends' if p.running else 'The runner leaves it until you resume or hand it off' }}">Pause{{ " after this step" if p.running }}</button>{% endif %}
 </form>
 {% endif %}
 
