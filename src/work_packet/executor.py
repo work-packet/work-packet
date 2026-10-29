@@ -316,6 +316,24 @@ def _move_failed(pkt, n):
     return r
 
 
+def _failed_meta(sd, n, a, why, start=None):
+    """Mark the failed attempt's meta.json with why; write one if the run left
+    none (it did not finish, or never ran), so stats can count every attempt."""
+    path = os.path.join(sd, "meta.json")
+    try:
+        with open(path, encoding="utf-8") as fp:
+            m = json.load(fp)
+    except (OSError, ValueError):
+        if not os.path.isdir(sd):
+            return
+        start = start or {}
+        m = {"step": n, "attempt": a, "start": start.get("t"), "end": _ts(),
+             "model": start.get("model"),
+             "session_id": start.get("session_id"), "cost_usd": None, "tokens": {}}
+    m["failed"] = why
+    fsutil.atomic_write(path, json.dumps(m, indent=2) + "\n")
+
+
 def _recover(pkt, st, lost=None):
     """Finish or clean up a crashed step. Returns a message, or None if there was nothing.
 
@@ -340,6 +358,7 @@ def _recover(pkt, st, lost=None):
                "why": "attempt did not finish"}
         if lost:
             rec.update(why="attempt did not finish: %s" % lost, counted=False)
+        _failed_meta(pkt.step_dir(n, r), n, a, rec["why"], start)
         journal.append(pkt.journal_path, rec)
         msg = "recorded step %d attempt %d as failed (it did not finish)" % (n, a)
         if lost:
@@ -392,6 +411,7 @@ def _fail(pkt, st, n, a, why):
     The ``.pending/`` files it left are kept there for the retry's prompt."""
     r = _move_failed(pkt, n)
     _keep_pending(pkt, pkt.step_dir(n, r))
+    _failed_meta(pkt.step_dir(n, r), n, a, why)
     meta, body = pkt.load_status()
     meta.update(attempts=a, updated=_ts())
     if a >= st.max_attempts:
