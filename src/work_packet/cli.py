@@ -1942,7 +1942,70 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("recover", help="finish or clean up a crashed step; run no model")
     p.add_argument("target", help="WPID (or unique prefix), project name, or a packet or project directory")
     p.set_defaults(func=cmd_recover)
+    groups = add_plugin_groups(sub, set(sub.choices))
+    if groups:
+        w = max(len(n) for n, _ in groups)
+        parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        parser.epilog = "plugin commands:\n" + "\n".join(
+            "  %-*s  %s" % (w, n, h) for n, h in groups)
     return parser
+
+
+CLI_GROUP = "work_packet.cli"
+
+
+def add_plugin_groups(sub, core):
+    """``wpk <group> <command>`` from the ``work_packet.cli`` entry points
+    (design E2). The object (or class, made with no arguments) has ``name``
+    (default: the entry point's name), ``help`` and ``add_commands(parser)``,
+    which adds the group's commands to ``parser``; a command sets
+    ``run=fn`` and is called as ``fn(args, h)`` with the runner home. A name
+    of a core command or of an earlier group is refused (``wpk doctor``
+    says why). Returns [(name, help)] of the groups added."""
+    from . import plugins
+    out = []
+    for p in plugins.load(CLI_GROUP):
+        if not p.ok:
+            continue
+        obj = p.obj
+        try:
+            if isinstance(obj, type):
+                obj = obj()
+            name = getattr(obj, "name", "") or p.name
+            add = obj.add_commands
+        except Exception as e:        # noqa: BLE001  a plugin must not stop wpk
+            p.error = "%s: %s" % (type(e).__name__, e)
+            continue
+        if name in core:
+            p.error = "the group name %r is a wpk command (%s not used)" % (name, p.value)
+            continue
+        help_ = getattr(obj, "help", "") or ""
+        g = sub.add_parser(name, description=help_ or None)
+        g.set_defaults(func=_run_plugin, group_parser=g)
+        try:
+            add(g)
+        except Exception as e:        # noqa: BLE001
+            p.error = "%s: %s" % (type(e).__name__, e)
+            g.set_defaults(func=_broken_plugin, plugin_error=p.error)
+        core.add(name)
+        out.append((name, help_))
+    return out
+
+
+def _run_plugin(args):
+    run = getattr(args, "run", None)
+    if run is None:
+        args.group_parser.print_help(sys.stderr)
+        return 2
+    from . import registry
+    rc = run(args, registry.home())
+    return 0 if rc is None else int(rc)
+
+
+def _broken_plugin(args):
+    print("wpk %s: the plugin did not load: %s" % (args.cmd, args.plugin_error),
+          file=sys.stderr)
+    return 2
 
 
 def main(argv=None) -> int:

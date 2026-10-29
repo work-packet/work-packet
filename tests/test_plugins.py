@@ -30,6 +30,23 @@ class Mine:
     name = "mine"
 
 
+class Gateway:
+    help = "sign in to the gateway"
+
+    def add_commands(self, parser):
+        sub = parser.add_subparsers(dest="op", metavar="<op>")
+        p = sub.add_parser("status", help="is the session good")
+        p.add_argument("--json", action="store_true")
+        p.set_defaults(run=lambda args, h: print("status", args.json, h) or 3)
+
+
+class Clash:
+    name = "check"
+
+    def add_commands(self, parser):
+        raise AssertionError("not called")
+
+
 class Farm(backends.Backend):
     name = "farm"
 
@@ -46,6 +63,8 @@ def _objs():
     out = {g: [_EP("acme", "acme.%s:Plugin" % g.split(".")[-1],
                    lambda g=g: ("obj", g))] for g in plugins.GROUPS}
     out["work_packet.harnesses"] = [_EP("fake", "acme.harness:Fake", lambda: Fake)]
+    out["work_packet.cli"] += [_EP("gateway", "acme.gw:Gateway", lambda: Gateway),
+                               _EP("clash", "acme.gw:Clash", lambda: Clash())]
     out["work_packet.sched_backends"].append(_EP("farm", "acme.farm:Farm", lambda: Farm))
     out["work_packet.sched_backends"].append(_EP("lsf", "acme.farm:Lsf", lambda: Farm))
     out["work_packet.starters"].append(_EP("mine", "acme.start:Mine", lambda: Mine))
@@ -84,7 +103,7 @@ def test_every_group_loads(fake):
         assert p.ok and p.obj == ("obj", g)
     assert plugins.loaded("work_packet.cost") == {"acme": ("obj", "work_packet.cost"),
                                                   "other": "cost"}
-    assert len(plugins.everything()) == len(plugins.GROUPS) + 5
+    assert len(plugins.everything()) == len(plugins.GROUPS) + 7
 
 
 def test_loaded_once(fake, monkeypatch):
@@ -152,8 +171,11 @@ def test_harness_plugin_goes_through_plugins(fake):
 def test_doctor_lists_plugins(fake):
     fake('[plugins]\ndisable = ["other"]\n')
     rows = {c.id: c for c in setup._tools() if c.id.startswith("tools.plugin.")}
-    assert rows["tools.plugin.cli.acme"].level == "ok"
-    assert "acme.cli:Plugin (acme-wpk 1.2)" in rows["tools.plugin.cli.acme"].detail
+    assert rows["tools.plugin.credentials.acme"].level == "ok"
+    assert "acme.credentials:Plugin (acme-wpk 1.2)" in rows["tools.plugin.credentials.acme"].detail
+    assert rows["tools.plugin.cli.gateway"].level == "ok"
+    assert rows["tools.plugin.cli.acme"].level == "warn"      # no add_commands
+    assert "is a wpk command" in rows["tools.plugin.cli.clash"].detail
     assert rows["tools.plugin.harnesses.fake"].level == "ok"
     assert rows["tools.plugin.budget.broke"].level == "warn"
     assert "no module named acme_budget" in rows["tools.plugin.budget.broke"].detail
@@ -183,3 +205,17 @@ def test_sched_backend_unknown(fake):
     assert fields == ["sched.backend"]
     fields = [p.field for p in schema.validate_config({"sched": {"backend": "lsf", "farm": {}}})]
     assert fields == ["sched.farm"]
+
+
+def test_cli_group(fake, capsys, tmp_path):
+    from work_packet import cli
+    assert cli.main(["gateway", "status", "--json"]) == 3
+    assert capsys.readouterr().out.strip() == "status True %s" % tmp_path
+    assert cli.main(["gateway"]) == 2                       # no command: the group's help
+    assert "status" in capsys.readouterr().err
+    text = cli.build_parser().format_help()
+    head, plug = text.split("plugin commands:")
+    assert "gateway" not in head and "sign in to the gateway" in plug
+    assert "check" in head and "clash" not in text
+    with pytest.raises(SystemExit):
+        cli.main(["acme"])
