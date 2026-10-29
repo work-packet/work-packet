@@ -264,6 +264,7 @@ present, unknown keys are errors.
 | `next_size` | name | optional: the job size the last committed memento asked for with `size:` (§4.2), for the next step only; the next commit replaces or removes it |
 | `stopped` | timestamp | optional: when the packet's run stopped without anyone: set by the commit that makes it `COMPLETED`, or by a pause the scheduler makes for a budget or limit; only while `COMPLETED` or `PAUSED`; removed when it runs again (docs/overview-recent.md) |
 | `seen` | timestamp | optional: when someone last looked at it after it stopped (`wpk seen`, or opening it on the board); with a `seen` journal record. Does not change `updated` |
+| `children_seen` | map | optional: each child's WPID and the state the last step's prompt showed it in. A child now `COMPLETED`, `FAILED`, `NEEDS_INPUT` or `PAUSED` in a different state wakes a `SLEEPING` parent, at the child's commit or the next scheduler pass (docs/waiting-v1.md §4) |
 
 `NEEDS_INPUT` means the last step asked a question (`ask:`, §4.2) and the
 packet waits for a hand-off (`wpk handoff`); nothing runs it until then.

@@ -13,7 +13,8 @@ import uuid
 from dataclasses import dataclass
 
 from . import (clock, faults, frontmatter, fsutil, harness, journal, livecard, model, notes,
-               procs, profiles, prompt, questions, registry, report, schema, spawn, workspace)
+               procs, profiles, prompt, questions, registry, report, schema, spawn, waiting,
+               workspace)
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, project_of, settings
@@ -183,6 +184,8 @@ def _apply(pkt, st, rec):
         meta.update(state=d["state"], step=n, attempts=0, children=kids,
                     resume_expr=d["resume_expr"], wake_at=d["wake_at"], model=d["model"],
                     reason=d["reason"], updated=_ts())
+        if "children_seen" in d:    # what this step's prompt showed (docs/waiting-v1.md §4)
+            meta["children_seen"] = d["children_seen"]
         if d["state"] == "COMPLETED":   # the run stopped; unread until seen (mark_seen)
             meta["stopped"] = rec["t"]
         else:
@@ -211,6 +214,19 @@ def _apply(pkt, st, rec):
     journal.append(pkt.journal_path, end)
     faults.point("before-cleanup")
     _cleanup(pkt)
+    _wake_parent(pkt)
+
+
+def _wake_parent(pkt):
+    """A stopped child wakes its sleeping parent (docs/waiting-v1.md §4). Never
+    fails the child's commit: ``scheduler.due`` finds a missed wake."""
+    try:
+        r = waiting.wake_parent(pkt)
+    except Exception:           # noqa: BLE001 - the commit is done; a wake is best-effort
+        log.exception("waking the parent of %s", pkt.wpid[:8])
+        return
+    if r is not None and r.code != OK:
+        log.info("parent of %s not woken: %s", pkt.wpid[:8], r.msg)
 
 
 def _cleanup(pkt):
@@ -360,6 +376,7 @@ def recover(target):
 def _set_failed(pkt, meta, body, reason):
     meta.update(state="FAILED", reason=reason, wake_at=None, updated=_ts())
     pkt.save_status(meta, body)
+    _wake_parent(pkt)
 
 
 def _fail(pkt, st, n, a, why):
@@ -376,15 +393,18 @@ def _fail(pkt, st, n, a, why):
     journal.append(pkt.journal_path, {"type": "step-failed", "t": _ts(), "step": n,
                                       "attempt": a, "run": r, "why": why})
     _rmtree(pkt.pending_dir)
+    if a >= st.max_attempts:
+        _wake_parent(pkt)
     tail = "; packet is now FAILED" if a >= st.max_attempts else ""
     return Outcome(FAILED, "step %d attempt %d failed: %s%s" % (n, a, why, tail))
 
 
-def _due(meta, now):
+def _due(pkt, meta, now):
     if meta["state"] == "RUNNABLE":
         return True
     if meta["state"] == "SLEEPING" and meta.get("wake_at"):
-        return schema.parse_timestamp(meta["wake_at"]) <= now
+        return (schema.parse_timestamp(meta["wake_at"]) <= now
+                or bool(waiting.unseen_stops(pkt, meta)))
     return False
 
 
@@ -549,7 +569,7 @@ def step(target, force=False, lost=None):
             _set_failed(pkt, meta, body, "%d failed attempts at step %d" % (meta["attempts"], n))
             return Outcome(NOT_RUNNABLE, "packet is FAILED after %d attempts" % meta["attempts"])
         now = clock.now()
-        if not force and not _due(meta, now):
+        if not force and not _due(pkt, meta, now):
             when = " until %s" % meta["wake_at"] if meta["state"] == "SLEEPING" else ""
             if meta["state"] == "NEEDS_INPUT":
                 when = " (%s); answer with `wpk handoff -m`" % meta.get("reason")
@@ -677,9 +697,12 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
         notes.mark(sd, queued, "prompt", _ts(now))
     agent = fsutil.read_text(st.agent_md) if st.agent_md else None
     handoffs = journal.handoffs_since_commit(journal.read(pkt.journal_path).records)
+    kids = _children(pkt, meta)
+    if kids:
+        fsutil.atomic_write(os.path.join(sd, "children.json"), json.dumps(waiting.snapshot(kids)))
     text = prompt.build(status=meta, last_summary=body, instruction=instruction, step=n,
                         attempt=a, max_attempts=st.max_attempts, now=now, tz=tz,
-                        children=_children(pkt, meta), agent_md=agent,
+                        children=kids, agent_md=agent,
                         state_dir=pkt.state_dir,
                         handoffs=handoffs,
                         last_attempt=_last_attempt(pkt, n), notes=queued,
@@ -787,6 +810,11 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
         "model": meta["model"], "summary": summary,
         "spawn": spawn.decision_entries(meta["wpid"], n, mm.get("spawn")),
     }
+    try:                            # the children this step's prompt showed
+        with open(os.path.join(sd, "children.json")) as fp:
+            decision["children_seen"] = json.load(fp)
+    except (OSError, ValueError):
+        pass
     if mm.get("size"):
         decision["size"] = mm["size"]
     seen = notes.committed(sd, pkt)

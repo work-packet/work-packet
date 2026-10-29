@@ -157,6 +157,11 @@ its state, so a step knows what is still out.
 - A new delegate project is created `PAUSED`, with the reason "a request from
   <project>: check the brief and the setup, then hand it off". Nothing runs in
   the other repo until you hand it off.
+  **Changed 2026-10-29 (docs/waiting-v1.md §5.1):** your yes starts it. Send runs
+  the safe setup fixes (the clones `wpk doctor --fix` runs) and makes the
+  delegate `RUNNABLE`. It stays `PAUSED` only when something is still missing,
+  and its reason names what that is. The project goes beside the requester's
+  folder, no longer inside it.
 - Delivery is only for the batch the request started (`to.batch`), so an
   existing project's earlier `COMPLETED` doesn't count.
 - The result note has a fixed id (`<time>-req-<id>`), so a retried delivery

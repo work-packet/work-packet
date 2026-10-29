@@ -85,11 +85,15 @@ def settings(proj, config=None):
             cfg[k] = d[k]
     perms = dict(schema.PERMISSION_DEFAULTS)
     perms.update(d.get("permissions", {}))
+    budget = float(cfg["step_budget_usd"])
+    if ("Agent" in perms["allowed_tools"] and "step_budget_usd" not in raw
+            and "step_budget_usd" not in d):     # sub-agents need room (waiting-v1 §3.2)
+        budget = max(budget, schema.AGENT_BUDGET_USD)
     agent = os.path.join(proj, "agent.md")
     return Settings(
         project_dir=proj, name=d["name"], root=d["root"], tz=d.get("tz"),
         model=cfg["model"], step_timeout_s=schema.parse_duration(cfg["step_timeout"]),
-        max_attempts=cfg["max_attempts"], step_budget_usd=float(cfg["step_budget_usd"]),
+        max_attempts=cfg["max_attempts"], step_budget_usd=budget,
         step_context_tokens=cfg["step_context_tokens"], carry_session=cfg["carry_session"],
         carry_ttl_s=schema.parse_duration(cfg["carry_ttl"]),
         carry_factor=float(cfg["carry_factor"]), harness=cfg["harness"],

@@ -92,6 +92,23 @@ executor; if you change one, this step is thrown away.
       copy: ["count.md"]          # optional, globs under state/
   ```
 
+  A child that finishes, fails, pauses or asks a question wakes you at
+  once, whatever your `resume`. So while children run, sleep with a long
+  fallback (`resume: in 1 day`). Do not use a short timer to check on
+  them. Use a child only for work that needs more than one step. If you
+  can finish the work in this step, do it here.
+
+  If you have the Agent tool, run bounded side work as a sub-agent in this
+  step and wait for its result: a survey of the code, a contained change
+  in this task's own work, a long build and its diagnosis. Give it the files, the checks,
+  and the limits from these rules (no push, no network, logs to files).
+  Write what it found and changed in your notes: its transcript is not
+  kept. Its cost counts against this step's budget.
+
+  Choose in this order: do it yourself or with a sub-agent in this step;
+  a child (`spawn`) for work that needs several steps; a request (below)
+  for work in a repo this task can't change.
+
 Do not sleep, wait, count steps or create packets yourself: the executor
 does all of that from what you write in `.pending/memento.md`.
 
@@ -136,10 +153,14 @@ in another project.
 
    Write the body as usual: what to do while the request is out. Prefer
    going on with a workaround over waiting.
-3. The prompt lists your requests under "Requests". The result comes back
-   as a note from the owner: the other agent's outcome, deliverables and
-   report path. Run your "Done when" check before relying on it, and record
-   the result in the outline.
+3. The prompt lists your requests under "Requests", with what the other
+   agent is doing now. The result comes back as a note from the owner: the
+   other agent's outcome, deliverables and report path. The note wakes you,
+   so if you have nothing else to do, sleep with a long fallback
+   (`resume: in 1 day`). Run your "Done when" check before relying on the
+   result, and record the result in the outline. If the line says nobody
+   is working on it (the other agent is paused, failed or has a question),
+   tell the owner that plainly. Don't ask whether to keep waiting.
 
 ## Finishing: the report
 

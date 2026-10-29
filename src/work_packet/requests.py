@@ -201,7 +201,9 @@ def send(pkt, rid, to=None, path=None, external=None, by=None, h=None):
                 raise RequestError("project %s: %s" % (to, out.msg))
             created = False
         else:
-            dest = os.path.abspath(path) if path else os.path.join(os.path.dirname(proj), to)
+            # beside the requester's folder, never inside it (its repo, for a packet folder)
+            dest = os.path.abspath(path) if path else os.path.join(
+                os.path.dirname(layout.packet_folder(proj)), to)
             extra = {"setup": {"repo": [dict(r) for r in meta["repo"]]}} if meta.get("repo") \
                 else None
             try:
@@ -209,10 +211,7 @@ def send(pkt, rid, to=None, path=None, external=None, by=None, h=None):
             except (ProjectError, OSError) as ex:
                 raise RequestError("new project %s: %s" % (to, ex)) from None
             root = Packet(layout.run_dir(plan.path, plan.root))
-            st, sbody = root.load_status()
-            st["reason"] = "a request from %s: check the brief and the setup, then hand it " \
-                "off" % pname
-            root.save_status(st, sbody)
+            _start(plan.path, root, pname, by)
             created = True
         batch = executor.batch_of(journal.read(root.journal_path).records)
         e["to"].update(wpid=root.wpid, path=root.path, batch=batch, created=created)
@@ -227,6 +226,37 @@ def send(pkt, rid, to=None, path=None, external=None, by=None, h=None):
     e["state"] = "open"
     _save(e, h)
     return e
+
+
+def _start(proj, root, pname, by):
+    """Set up a new delegate project and start it (docs/waiting-v1.md §5.1): the
+    owner read the brief to say yes. Runs the safe setup fixes (the clones
+    ``wpk doctor --fix`` would run); it stays PAUSED, naming what is missing,
+    only when they leave something missing."""
+    from . import setup
+    name = proj
+    try:
+        tg = setup.target(proj)
+        name = tg.name
+        checks = setup.readiness(tg, tools=False)
+        for c in setup.missing(checks):
+            if c.safe:
+                for f in c.fix:
+                    if setup.run_fix(f).returncode:
+                        break
+        left = setup.missing(setup.readiness(tg, tools=False))
+    except setup.SetupError as ex:
+        left = [setup.Check("setup", "project", "missing", str(ex))]
+    st, sbody = root.load_status()
+    if left:
+        st["reason"] = "a request from %s, not started: %s; fix with `wpk doctor %s " \
+            "--fix`, then hand it off" % (pname, "; ".join(c.title for c in left), name)
+        root.save_status(st, sbody)
+        return False
+    st["reason"] = "a request from %s" % pname    # PAUSED needs one until the resume
+    root.save_status(st, sbody)
+    out = executor.admin(root, "resume", by=by)
+    return out.code == executor.OK
 
 
 def _where(e):
@@ -360,12 +390,87 @@ def done(pkt, rid, text, by=None, h=None):
         rid, e["title"], _where(e), by, text), "by hand", by, h)
 
 
+def cancel(pkt, rid, reason=None, by=None, h=None):
+    """Withdraw request ``rid`` (docs/waiting-v1.md §5.4): the entry becomes
+    ``cancelled``. A delegate that never ran a step is paused with the reason, so
+    it never starts; one that has run is left to its owner. Returns
+    (entry, what happened to the delegate)."""
+    by = by or executor._who()
+    e = get(pkt.wpid, rid, h)
+    if e is None:
+        raise RequestError("%s has no request %s" % (pkt.wpid[:8], rid))
+    if e["state"] not in ("sending", "open"):
+        raise RequestError("request %s is %s; nothing to cancel" % (rid, e["state"]))
+    why = (reason or "").strip() or "no reason given"
+    if not _record_locked(pkt, {"type": "request", "t": _ts(), "op": "cancelled", "id": rid,
+                                "by": by, "reason": why}):
+        raise RequestError("a step of %s is running; cancel when it ends" % pkt.wpid[:8])
+    e.update(state="cancelled", cancelled=_ts(), reason=why)
+    _save(e, h)
+    t = e["to"]
+    if "path" not in t:
+        return e, "no delegate packet"
+    dpkt = Packet(t["path"])
+    try:
+        dm, dbody = dpkt.load_status()
+    except (OSError, frontmatter.FrontMatterError) as ex:
+        return e, "delegate unreadable: %s" % ex
+    if t.get("batch", 1) != executor.batch_of(journal.read(dpkt.journal_path).records):
+        return e, "delegate has moved on to other work; left alone"
+    _record_locked(dpkt, {"type": "request", "t": _ts(), "op": "cancelled", "id": rid,
+                          "by": by, "reason": why,
+                          "from": {"project": e["from"]["project"], "wpid": pkt.wpid}})
+    if dm["step"] > 0 or dm["state"] not in ("RUNNABLE", "PAUSED"):
+        return e, "delegate %s is %s at step %s; left alone (`wpk pause` stops it)" % (
+            dpkt.wpid[:8], dm["state"], dm["step"])
+    reason_text = "request %s cancelled by %s: %s" % (rid, by, why)
+    if dm["state"] == "PAUSED":
+        dm["reason"] = reason_text
+        dpkt.save_status(dm, dbody)
+    else:
+        out = executor.admin(dpkt, "pause", by=by, reason=reason_text)
+        if out.code != executor.OK:
+            return e, "delegate not paused: %s" % out.msg
+    return e, "delegate %s paused; it never ran" % dpkt.wpid[:8]
+
+
 # --- what a step and a person see ---------------------------------------------------------
+
+# Delegate states in which nobody works on the request until someone acts.
+STALLED = ("PAUSED", "NEEDS_INPUT", "FAILED")
+
+
+def delegate_state(e):
+    """The delegate packet's live (state, step, reason), or None (external, unreadable)."""
+    t = e["to"]
+    if "path" not in t:
+        return None
+    try:
+        st, _ = Packet(t["path"]).load_status()
+    except (OSError, frontmatter.FrontMatterError):
+        return None
+    return st.get("state"), st.get("step"), st.get("reason")
+
+
+def _live(e):
+    """What the delegate is doing, for a request that is out (docs/waiting-v1.md §5.2)."""
+    d = delegate_state(e) if e["state"] == "open" else None
+    if d is None:
+        return ""
+    state, step, reason = d
+    out = "; delegate %s at step %s" % (state, step)
+    if state in STALLED:
+        out += " (%s): nobody is working on it until the owner acts" % (reason or "no reason")
+    return out
+
 
 def describe(e):
     s = {"sending": "not sent yet (sending stopped part-way)", "open": "out",
-         "delivering": "back; recording it", "delivered": "back"}.get(e["state"], e["state"])
-    return "`%s` (%s): %s, sent %s; %s" % (e["id"], e["title"], _where(e), e.get("sent"), s)
+         "delivering": "back; recording it", "delivered": "back",
+         "cancelled": "cancelled by the owner (%s): do not wait for it" % e.get("reason"),
+         }.get(e["state"], e["state"])
+    return "`%s` (%s): %s, sent %s; %s%s" % (e["id"], e["title"], _where(e), e.get("sent"), s,
+                                            _live(e))
 
 
 def section(wpid, h=None):

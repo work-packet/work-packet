@@ -770,14 +770,19 @@ def cmd_request(args) -> int:
                 print("Recorded request %s as taken outside wpk. When it is done: "
                       "`wpk request done %s %s -m RESULT`." % (e["id"], pkt.wpid[:8], e["id"]))
             elif t.get("created"):
-                print("Created project %s at %s for request %s; its root %s is PAUSED." % (
+                d = requests.delegate_state(e) or ("?", 0, None)
+                print("Created project %s at %s for request %s; its root %s is %s." % (
                     t["project"], os.path.dirname(os.path.dirname(t["path"])), e["id"],
-                    t["wpid"][:8]))
-                print("Next: `wpk setup %s --apply` (or `wpk doctor %s`), then "
-                      "`wpk handoff %s`." % ((t["project"],) * 3))
+                    t["wpid"][:8], d[0]))
+                if d[0] != "RUNNABLE":
+                    print("Not started: %s" % d[2])
             else:
                 print("Sent request %s to project %s: its root %s has it as batch %d." % (
                     e["id"], t["project"], t["wpid"][:8], t["batch"]))
+            return 0
+        if args.op == "cancel":
+            e, what = requests.cancel(pkt, args.id, reason=args.reason)
+            print("Cancelled request %s of %s; %s." % (e["id"], pkt.wpid[:8], what))
             return 0
         try:
             text = _text_arg(args)
@@ -1648,6 +1653,12 @@ def build_parser() -> argparse.ArgumentParser:
     g = rp.add_mutually_exclusive_group(required=True)
     g.add_argument("-m", "--message", help="the result")
     g.add_argument("--note-file", help="the result, from a file (- for stdin)")
+    rp.set_defaults(func=cmd_request)
+    rp = rsub.add_parser("cancel", help="withdraw a request; a delegate that never ran "
+                         "stays paused")
+    rp.add_argument("target", help="the requester: WPID (or unique prefix) or project name")
+    rp.add_argument("id")
+    rp.add_argument("-r", "--reason", help="why (the requester's prompt shows it)")
     rp.set_defaults(func=cmd_request)
     rp = rsub.add_parser("sync", help="deliver finished requests now")
     rp.set_defaults(func=cmd_request, target=None)

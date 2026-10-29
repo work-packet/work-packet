@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from . import clock, frontmatter, layout, lease, schema
+from . import clock, frontmatter, layout, lease, schema, waiting
 from .packet import Packet
 
 log = logging.getLogger(__name__)
@@ -60,11 +60,12 @@ def due(entries, now=None):
                 when = meta.get("updated") or ""
             elif st == "SLEEPING" and meta.get("wake_at"):
                 try:
-                    if schema.parse_timestamp(meta["wake_at"]) > now:
-                        continue
+                    late = schema.parse_timestamp(meta["wake_at"]) > now
                 except ValueError:
                     continue
-                when = meta["wake_at"]
+                if late and not waiting.unseen_stops(pkt, meta):
+                    continue        # a stopped child it has not seen wakes it (waiting-v1 §4)
+                when = meta["updated"] if late else meta["wake_at"]
             else:
                 continue
             held = lease.read(pkt.lease_path)

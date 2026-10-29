@@ -20,10 +20,11 @@ RESERVED_STATES = {"WAITING": "Stage 3"}
 STATUS_FIELDS = (
     "wpk", "wpid", "project", "state", "step", "attempts", "parent",
     "spawn_key", "children", "resume_expr", "wake_at", "model", "reason",
-    "updated", "next_size", "stopped", "seen",
+    "updated", "next_size", "stopped", "seen", "children_seen",
 )
-# next_size: docs/scheduler-plan.md decision 4; stopped, seen: docs/overview-recent.md §2
-STATUS_OPTIONAL = ("next_size", "stopped", "seen")
+# next_size: docs/scheduler-plan.md decision 4; stopped, seen: docs/overview-recent.md §2;
+# children_seen: docs/waiting-v1.md §4
+STATUS_OPTIONAL = ("next_size", "stopped", "seen", "children_seen")
 
 MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item", "size")
 ITEM_MAX = 80
@@ -39,7 +40,7 @@ CONFIG_DEFAULTS = {
     "max_concurrent": 1,
     "step_timeout": "120m",
     "max_attempts": 3,
-    "step_budget_usd": 1.00,
+    "step_budget_usd": 1.00,          # AGENT_BUDGET_USD when Agent is allowed
     "step_context_tokens": 80000,     # context.md C3; 0 = off
     "carry_session": False,           # context.md C4
     "carry_ttl": "55m",
@@ -120,8 +121,11 @@ IDE_BACKENDS = ("serve-web", "openvscode-server")   # docs/vscode-plan.md §4.4
 SERVER_AUTH = ("tailscale", "unix", "none")    # unix: docs/unix-login.md
 SERVER_TLS = ("off", "tailscale", "self-signed", "files")   # server.md §2.3
 SERVER_LISTEN = ("", "unix", "network")
+# The default step budget when steps may run sub-agents (docs/waiting-v1.md §3.2).
+AGENT_BUDGET_USD = 3.00
+
 PERMISSION_DEFAULTS = {
-    "allowed_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    "allowed_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Agent"],
     "permission_mode": "acceptEdits",
 }
 
@@ -136,7 +140,7 @@ JOURNAL_TYPES = {
     "handoff": ("by", "from", "to"),
     "config": ("by", "changes"),
     "seed": ("files",),               # docs/setup.md §10: the root filled from the project root
-    "request": ("op", "id", "by"),    # docs/delegation.md: sent, received, done
+    "request": ("op", "id", "by"),    # docs/delegation.md: sent, received, done, cancelled
     "seen": ("by",),                  # docs/overview-recent.md §2: someone looked at it
 }
 DECISION_FIELDS = ("state", "resume_expr", "wake_at", "reason", "model",
@@ -290,6 +294,10 @@ def validate_status(meta, body=""):
             out.append(_err("children", "must be a list of WPIDs"))
         elif len(set(ch)) != len(ch):
             out.append(_err("children", "has duplicates"))
+    seen = meta.get("children_seen")
+    if "children_seen" in meta and not (isinstance(seen, dict) and all(
+            is_wpid(k) and v in STATES for k, v in seen.items())):
+        out.append(_err("children_seen", "must map child WPIDs to states"))
     out += _opt_str(meta, "resume_expr")
     wake = meta.get("wake_at")
     if wake is not None and not is_timestamp(wake):

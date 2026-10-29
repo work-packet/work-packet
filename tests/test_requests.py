@@ -28,8 +28,13 @@ Make reg_c classes get read/write methods.
 
 
 @pytest.fixture
-def req(tmp_path, fake):
-    """A registered requester project with the brief ``reg`` in its root's state/."""
+def req(tmp_path, fake, monkeypatch):
+    """A registered requester project with the brief ``reg`` in its root's state/.
+    Setup fixes fail, so the brief's ~/projects/pssc is never cloned."""
+    import subprocess
+    from work_packet import setup
+    monkeypatch.setattr(setup, "run_fix", lambda cmd, cwd=None: subprocess.CompletedProcess(
+        cmd, 1, "", "no clones in tests"))
     project.new("asker", "Do the labs.\n", path=str(tmp_path / "asker"))
     root = Packet(registry.resolve("asker"))
     os.makedirs(os.path.join(root.state_dir, "requests"))
@@ -73,7 +78,8 @@ def test_send_to_a_new_project_then_deliver(req, tmp_path):
     worker = Packet(registry.resolve("worker"))
     assert os.path.dirname(os.path.dirname(worker.path)) == str(tmp_path / "worker")
     meta, _ = worker.load_status()
-    assert meta["state"] == "PAUSED" and "a request from asker" in meta["reason"]
+    assert meta["state"] == "PAUSED" and "a request from asker, not started" in meta["reason"]
+    assert "pssc is not cloned" in meta["reason"] and "wpk doctor worker --fix" in meta["reason"]
     _, text = worker.load_memento()
     assert text.startswith("# Lower reg_c") and "request from packet" in text \
         and "Make reg_c classes" in text
@@ -99,6 +105,40 @@ def test_send_to_a_new_project_then_deliver(req, tmp_path):
     assert requests.get(req.wpid, "reg")["state"] == "delivered"
     assert requests.sync() == []
     assert len(notes.queued(req)) == 1
+
+
+def _brief(root, rid, repo=None):
+    head = "---\ntitle: Do %s\nto: %s\n" % (rid, rid)
+    if repo:
+        head += "repo:\n  - name: lib\n    from: %s\n" % repo
+    with open(requests.brief_path(root.state_dir, rid), "w") as fp:
+        fp.write(head + "---\n## Task\nIt.\n\n## Done when\nDone.\n")
+
+
+def test_a_new_delegate_with_nothing_to_set_up_starts(req, tmp_path):
+    """The owner's yes is enough (waiting-v1 §5.1)."""
+    _brief(req, "plain")
+    requests.send(req, "plain", by="me")
+    worker = Packet(registry.resolve("plain"))
+    meta, _ = worker.load_status()
+    assert (meta["state"], meta["reason"]) == ("RUNNABLE", None)
+    assert os.path.dirname(os.path.dirname(worker.path)) == str(tmp_path / "plain")
+
+
+def test_a_new_delegate_is_cloned_then_started(req, tmp_path, monkeypatch):
+    import subprocess
+    from work_packet import setup
+    monkeypatch.setattr(setup, "run_fix", lambda cmd, cwd=None: subprocess.run(
+        cmd, shell=True, cwd=cwd, capture_output=True, text=True))
+    src = tmp_path / "lib-src"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)
+    subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    _brief(req, "cloned", repo=str(src))
+    requests.send(req, "cloned", by="me")
+    worker = Packet(registry.resolve("cloned"))
+    assert worker.load_status()[0]["state"] == "RUNNABLE"
+    assert os.path.isdir(str(tmp_path / "cloned" / "work" / "lib" / ".git"))
 
 
 def test_a_sleeping_requester_wakes(req):
@@ -197,6 +237,53 @@ def test_the_step_prompt_lists_requests(req, capsys):
     assert "open" in capsys.readouterr().out
     assert main(["show", "worker"]) == 0
     assert "from asker" in capsys.readouterr().out
+
+
+def test_the_prompt_shows_the_delegates_live_state(req):
+    """A stalled delegate says so, so the requester does not wait on it (waiting-v1 §5.2)."""
+    requests.send(req, "reg")
+    worker = Packet(registry.resolve("worker"))
+    meta, body = worker.load_status()
+    meta.update(state="PAUSED", reason="check the setup")
+    worker.save_status(meta, body)
+    text = requests.section(req.wpid)
+    assert "; out; delegate PAUSED at step 0 (check the setup): nobody is working" in text
+    meta.update(state="RUNNABLE", reason=None)
+    worker.save_status(meta, body)
+    text = requests.section(req.wpid)
+    assert "; out; delegate RUNNABLE at step 0" in text and "nobody" not in text
+    _finish(worker)
+    requests.sync()
+    assert "delegate" not in requests.section(req.wpid)     # back: the note has the result
+
+
+def test_cancel_a_request_whose_delegate_never_ran(req, capsys):
+    requests.send(req, "reg")
+    worker = Packet(registry.resolve("worker"))
+    assert main(["request", "cancel", req.wpid[:8], "reg", "-r", "done in-step"]) == 0
+    assert "delegate %s paused; it never ran" % worker.wpid[:8] in capsys.readouterr().out
+    e = requests.get(req.wpid, "reg")
+    assert (e["state"], e["reason"]) == ("cancelled", "done in-step")
+    meta, _ = worker.load_status()
+    assert meta["state"] == "PAUSED" and "request reg cancelled by" in meta["reason"]
+    assert [r["reason"] for r in _types(req, "cancelled")] == ["done in-step"]
+    assert len(_types(worker, "cancelled")) == 1
+    assert "cancelled by the owner (done in-step): do not wait" in requests.section(req.wpid)
+    assert requests.sync() == []
+    with pytest.raises(requests.RequestError, match="nothing to cancel"):
+        requests.cancel(req, "reg")
+
+
+def test_cancel_leaves_a_delegate_that_has_run(req):
+    _brief(req, "plain")
+    requests.send(req, "plain")
+    worker = Packet(registry.resolve("plain"))
+    meta, body = worker.load_status()
+    meta.update(step=2)
+    worker.save_status(meta, body)
+    _, what = requests.cancel(req, "plain", reason="not needed")
+    assert "RUNNABLE at step 2; left alone" in what
+    assert worker.load_status()[0]["state"] == "RUNNABLE"
 
 
 def test_tick_delivers(req):
