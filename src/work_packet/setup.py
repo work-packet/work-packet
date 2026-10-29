@@ -216,6 +216,10 @@ def _tools(need_git=False):
                              "Check that `%s -p hello` works in a shell." % exe[0]))
         else:
             out.append(Check("tools.claude", "tools", "ok", "claude %s" % ver))
+    from . import harness
+    for name, why in sorted(harness.broken().items()):
+        out.append(Check("tools.harness." + name, "tools", "warn",
+                         "harness plugin %s not loaded" % name, why))
     if need_git and shutil.which("git") is None:
         out.append(Check("tools.git", "tools", "missing", "git is not on PATH",
                          "work/ holds git repositories; steps get a git worktree of each."))

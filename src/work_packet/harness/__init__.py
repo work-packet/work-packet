@@ -115,17 +115,69 @@ def home_env(name, cfg=None, home=None, warn=None):
     return out
 
 
+GROUP = "work_packet.harnesses"
+_plugins = {}       # name -> class, from entry points
+_broken = {}        # name -> why it did not load
+_loaded = []
+
+
+def _load():
+    """Read the ``work_packet.harnesses`` entry points once. A built-in keeps
+    its name; a plugin that does not load is kept in ``broken()``."""
+    if _loaded:
+        return
+    _loaded.append(True)
+    try:
+        from importlib.metadata import entry_points
+        eps = entry_points(group=GROUP)
+    except Exception:                 # noqa: BLE001  (old Pythons, broken metadata)
+        eps = []
+    for ep in eps:
+        if ep.name in _REGISTRY:
+            _broken[ep.name] = "the name is a built-in harness (%s not used)" % ep.value
+            continue
+        try:
+            cls = ep.load()
+            if not (isinstance(cls, type) and issubclass(cls, Harness)):
+                raise TypeError("%s is not a Harness subclass" % ep.value)
+        except Exception as e:        # noqa: BLE001  a broken plugin must not break steps
+            _broken[ep.name] = "%s: %s" % (type(e).__name__, e)
+            continue
+        _plugins[ep.name] = cls
+
+
+def _reset():
+    """Forget the entry points read (tests)."""
+    _loaded.clear()
+    _plugins.clear()
+    _broken.clear()
+
+
 def names():
-    return sorted(_REGISTRY)
+    _load()
+    return sorted(set(_REGISTRY) | set(_plugins))
 
 
 def get(name):
-    """The adapter for ``name``. Raises KeyError for an unknown harness."""
-    return _REGISTRY[name]()
+    """The adapter for ``name``. Raises KeyError for an unknown harness, or
+    one whose plugin did not load (the message says why)."""
+    _load()
+    cls = _REGISTRY.get(name) or _plugins.get(name)
+    if cls is None:
+        if name in _broken:
+            raise KeyError("harness %r did not load: %s" % (name, _broken[name]))
+        raise KeyError("no harness %r; there are: %s" % (name, ", ".join(names())))
+    return cls()
+
+
+def broken():
+    """Entry-point harnesses that were not used: {name: why}."""
+    _load()
+    return dict(_broken)
 
 
 from .claude import Claude  # noqa: E402  (needs Harness above)
 
 _REGISTRY = {"claude": Claude}
 
-__all__ = ["Caps", "StepSpec", "Harness", "Claude", "get", "names"]
+__all__ = ["Caps", "StepSpec", "Harness", "Claude", "get", "names", "broken"]

@@ -37,6 +37,54 @@ def test_registry():
         harness.get("nope")
 
 
+class _EP:
+    def __init__(self, name, value, load):
+        self.name, self.value, self._load = name, value, load
+
+    def load(self):
+        return self._load()
+
+
+class Fake(harness.Harness):
+    name = "fake"
+
+
+def _boom():
+    raise ImportError("no module named fake_site")
+
+
+@pytest.fixture
+def plugin_harnesses(monkeypatch):
+    import importlib.metadata
+    eps = [_EP("fake", "site:Fake", lambda: Fake),
+           _EP("bad", "site:Bad", _boom),
+           _EP("notone", "site:x", lambda: object),
+           _EP("claude", "site:Claude", lambda: Fake)]
+    monkeypatch.setattr(importlib.metadata, "entry_points",
+                        lambda group=None: eps if group == harness.GROUP else [])
+    harness._reset()
+    yield
+    harness._reset()
+
+
+def test_plugin_harness_from_entry_point(plugin_harnesses):
+    assert harness.names() == ["claude", "fake"]
+    assert isinstance(harness.get("fake"), Fake)
+    assert isinstance(harness.get("claude"), claude.Claude)    # a built-in keeps its name
+
+
+def test_broken_plugin_harness_is_reported(plugin_harnesses):
+    b = harness.broken()
+    assert set(b) == {"bad", "notone", "claude"}
+    assert "fake_site" in b["bad"] and "not a Harness" in b["notone"]
+    with pytest.raises(KeyError, match="did not load.*fake_site"):
+        harness.get("bad")
+    from work_packet import setup
+    titles = [c.title for c in setup._tools() if c.id.startswith("tools.harness.")]
+    assert titles == ["harness plugin bad not loaded", "harness plugin claude not loaded",
+                      "harness plugin notone not loaded"]
+
+
 def test_claude_notes_in_system_prompt(fresh):
     proj, root, _ = fresh
     executor.step(proj)
