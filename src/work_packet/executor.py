@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from . import (clock, docs, faults, frontmatter, fsutil, harness, journal, livecard, model,
                notes, procs, profiles, prompt, questions, registry, report, schema, spawn,
                waiting, workspace)
-from . import hooks as hookmod
+from . import cost, hooks as hookmod
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, project_of, settings
@@ -785,6 +785,7 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
         ext = hooks.finish(res)
         if ext:
             meta_out["ext"] = ext
+        cost.settle(meta_out, prof.price, sd)
         fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(meta_out, indent=2) + "\n")
         why, mm = _check(pkt, st, snap, res)
         if why is not None and _nudgeable(h, res, why):
@@ -813,6 +814,9 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
             ext = hooks.finish(res)
             if ext:
                 meta_out["ext"] = ext
+            two = [x for x in (cost.priced(r.tokens, prof.price) for r in (first, res))
+                   if x is not None]
+            cost.settle(meta_out, prof.price, sd, priced_usd=round(sum(two), 6) if two else None)
             meta_out["nudged"] = why
             fsutil.atomic_write(os.path.join(sd, "meta.json"),
                                 json.dumps(meta_out, indent=2) + "\n")
