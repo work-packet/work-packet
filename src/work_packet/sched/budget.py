@@ -177,6 +177,15 @@ def provider(name):
     return obj() if isinstance(obj, type) else obj
 
 
+def renew_command(name):
+    """The command that renews provider ``name``'s login: its ``renew``, else that
+    of the credential it names in ``credential`` (or its own name); "" if none."""
+    from .. import credentials
+    obj = plugins.loaded(GROUP).get(name)
+    return getattr(obj, "renew", "") or credentials.renew_command(
+        getattr(obj, "credential", None) or name)
+
+
 def load_reading(h):
     """``sched/budget-reading.json``: {reading: BudgetReading or None, read_at, error,
     provider}, or None if no reading was ever tried."""
@@ -605,6 +614,8 @@ class Budget:
                 "error": (self.cached or {}).get("error"),
                 "needs_login": bool((self.cached or {}).get("needs_login")),
                 "reading": r.to_json() if r is not None else None}
+            if out["provider"]["needs_login"]:
+                out["provider"]["renew"] = renew_command(self.via)
         for x in self.windows:
             out["windows"].append({
                 "name": x.name, "start": schema.format_timestamp(x.start),

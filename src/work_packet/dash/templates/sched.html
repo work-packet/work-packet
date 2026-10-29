@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_side.html" as sidem with context %}
+{% import "_panels.html" as xpm %}
 {% block title %}Scheduler{% endblock %}
 {% block crumbs %}/ <a href="/sched">scheduler</a>{% endblock %}
 {% block head %}
@@ -82,6 +83,12 @@ tr.go td.why { color: var(--COMPLETED); font-weight: 600; }
 <h2>Budget</h2>
 <div class="panel">
 <p style="margin:0 0 6px">{{ snap.budget.line }}</p>
+{% set pv = snap.budget.provider %}{% if pv %}{% set rd = pv.reading %}
+<p class="provider" style="margin:0 0 6px">From <code>{{ pv.name }}</code>{% if pv.route %} (route {{ pv.route }}){% endif %}{% if pv.read_at %}, read {{ pv.read_at }}{% endif %}{% if rd %}, complete to {{ rd.as_of }}{% if rd.stage %}; stage <b>{{ rd.stage }}</b>{% endif %}{% if rd.blocked %}; <span class="state FAILED">blocked</span>{% endif %}{% if rd.url %}; <a href="{{ rd.url }}" rel="noopener noreferrer">open</a>{% endif %}{% endif %}.</p>
+{% if pv.needs_login %}<p class="state FAILED" style="margin:0 0 6px">Needs a login: {{ pv.error }}{% if pv.renew %}; run <code>{{ pv.renew }}</code>{% endif %}</p>
+{% elif pv.error %}<p class="muted" style="margin:0 0 6px">Last read failed: {{ pv.error }}</p>{% endif %}
+{% for n in (rd.notes if rd else []) %}<p class="muted" style="margin:0 0 6px">{{ n }}</p>{% endfor %}
+{% endif %}
 {% if chart %}
 <svg class="bud" viewBox="0 0 {{ chart.w }} {{ chart.h }}" role="img" aria-label="spend against pace and each class's ceiling">
   <rect class="frame" x="{{ chart.pad }}" y="{{ chart.pad }}" width="{{ chart.w - 2 * chart.pad }}" height="{{ chart.h - 2 * chart.pad }}"></rect>
@@ -104,6 +111,7 @@ tr.go td.why { color: var(--COMPLETED); font-weight: 600; }
 </table>
 </div>
 {% endif %}
+{{ xpm.show(xpanels) }}
 
 {% if creds %}
 <h2>Credentials</h2>

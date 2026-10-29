@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_side.html" as sidem with context %}
+{% import "_panels.html" as xpm %}
 {% import "_tokens.html" as tkm %}
 {% import "_pause.html" as pz with context %}
 {#- How every board is doing, what needs you, and token use (docs/overview.md). -#}
@@ -89,6 +90,8 @@ ul.list button.x:hover { color: var(--FAILED); }
   {% endif %}
   {% endif %}
 </div>
+
+{{ xpm.show(xpanels) }}
 
 <h2 id="attention">Needs attention</h2>
 {% if ov.attention %}

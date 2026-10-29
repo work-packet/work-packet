@@ -23,7 +23,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import __about__, archived, clock, layout, livecard, registry
-from . import data, dfmrun, markup, plan, tokens
+from . import data, dfmrun, markup, panels, plan, tokens
 from . import sched as dsched
 from ..sched.classes import CLASSES
 from .guard import split_host
@@ -150,6 +150,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         ctx["ide_web"] = web_state(request, ctx["ide"])
         return HTMLResponse(env.get_template(name).render(**ctx), status_code=status)
 
+    def xpanels(request, slot, **ctx):
+        """The plugins' panels for ``slot`` (design E7)."""
+        return panels.render(env, slot, request, home, **ctx)
+
     def ide_sizes():
         from ..sched import config as sconfig
         try:
@@ -217,7 +221,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         ov = data.overview(cols, broken, side, burn)
         snap = await run_in_threadpool(dsched.snapshot, home)
         return render(request, "overview.html", ov=ov, burn=burn, broken=broken, live=True,
-                      sch=dsched.tiles(snap),
+                      sch=dsched.tiles(snap), xpanels=xpanels(request, "overview"),
                       home=home or registry.home(), side=side, here=None,
                       windows=tokens.WINDOWS, main_board=registry.DEFAULT_BOARD)
 
@@ -499,7 +503,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         ch = await run_in_threadpool(dsched.chart, snap, home) if snap else None
         cols, broken = data.board(home)
         creds = await run_in_threadpool(dsched.credential_rows, request, home)
-        return render(request, "sched.html", snap=snap, chart=ch, live=True, creds=creds,
+        xp = await run_in_threadpool(xpanels, request, "sched")
+        return render(request, "sched.html", snap=snap, chart=ch, live=True, creds=creds, xpanels=xp,
                       lines=None if snap else ["the config cannot be read"],
                       events=dsched.recent(home), modes=dsched.MODES,
                       side=data.side(home, cols, broken))
@@ -767,6 +772,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         snap = await run_in_threadpool(dsched.snapshot, home)
         return render(request, "project_settings.html", settings=data.settings(e),
                       sch=dsched.project_info(snap, e), classes=CLASSES, boards=bs,
+                      xpanels=xpanels(request, "settings", project=e),
                       on=registry.board_of(e, [b["name"] for b in bs]), **kw)
 
     async def packet(request):
@@ -1643,6 +1649,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/p/{project}/pr", pr_open, methods=["POST"]),
         Route("/p/{project}/run", project_run, methods=["POST"]),
         Route("/healthz", health),
+        *panels.mounts(home),
         Route("/console/cmd", console_cmd, methods=["POST"]),
         Route("/console/commands", console_commands),
         Route("/console/conv", console_conv),

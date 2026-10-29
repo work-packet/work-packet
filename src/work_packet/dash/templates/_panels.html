@@ -1,0 +1,7 @@
+{# Plugin panels (design E7): [{plugin, title, html, error}] from dash/panels.py. #}
+{% macro show(xpanels) %}{% for x in xpanels or [] %}
+<h2 class="xpanel-title">{{ x.title }}</h2>
+<div class="panel xpanel" data-plugin="{{ x.plugin }}">
+{% if x.error %}<p class="muted">Panel {{ x.plugin }} failed: {{ x.error }}</p>{% else %}{{ x.html }}{% endif %}
+</div>
+{% endfor %}{% endmacro %}

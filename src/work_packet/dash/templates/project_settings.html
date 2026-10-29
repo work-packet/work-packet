@@ -2,6 +2,7 @@
 {% import "_tabs.html" as tabs with context %}
 {% import "_settings.html" as sm with context %}
 {% import "_sched.html" as schm with context %}
+{% import "_panels.html" as xpm %}
 {% block title %}{{ e.name }} · settings{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / settings{% endblock %}
 {% block main %}
@@ -10,6 +11,7 @@
 <h2 id="settings">Permissions, limits and model</h2>
 {% if settings %}{{ sm.panel(e, settings, here) }}{% else %}<p class="muted">No settings to show (project.toml unreadable).</p>{% endif %}
 {{ schm.project_panel(e, sch, classes, here) }}
+{{ xpm.show(xpanels) }}
 <h2 id="board">Board</h2>
 <div class="panel">
 {% if boards|length > 1 %}<form class="act row" method="post" action="/p/{{ e.name|urlencode }}/board" style="margin:0">
