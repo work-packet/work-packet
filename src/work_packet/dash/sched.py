@@ -27,6 +27,15 @@ def snapshot(home=None):
         return None
 
 
+def credential_rows(request, home=None):
+    """The credential rows (design E3) for the home's owner; [] for anyone else."""
+    from .. import credentials
+    from ..sched import authz
+    if authz.principal_of(request) != "unix:%s" % authz.home_owner(home):
+        return []
+    return credentials.rows(home)
+
+
 def mode(home=None):
     """The pool's mode for the banner on every page: None while it runs."""
     m = control.read_mode(home)

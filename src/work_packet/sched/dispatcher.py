@@ -9,7 +9,7 @@ import logging
 import os
 import time
 
-from .. import clock, frontmatter, registry, schema, scheduler
+from .. import clock, credentials, frontmatter, registry, schema, scheduler
 from ..packet import Packet
 from . import authz, control, events, gates, jobs, queue
 from . import config as sconfig
@@ -499,10 +499,13 @@ class Dispatcher:
         events.append("wpkd_start", h=self.h, backend=self.backend.name, pid=os.getpid())
         last_fill = 0.0
         want_fill = True
+        self.creds = credentials.Watcher(self.h)
+        self.creds.add(self._creds_changed)
         while not stopping.is_set():
             poked = poke.is_set()
             poke.clear()
             try:
+                self.creds.poll()
                 ended = self.reap()
                 if poked or ended or want_fill or time.monotonic() - last_fill > FALLBACK_S:
                     scheduler._sync_requests(self.h)
@@ -518,6 +521,12 @@ class Dispatcher:
             want_fill = self._timer_due()
         self._drain(drain_timeout)
         events.append("wpkd_stop", h=self.h, pid=os.getpid())
+
+    def _creds_changed(self, names):
+        """A credential was put, marked or removed (design E3): tell the
+        plugins that use it, so a new login works without a restart."""
+        log.info("credentials changed: %s", ", ".join(names))
+        credentials.notify(names, self.h)
 
     def _timer_due(self):
         t = self._next_wake

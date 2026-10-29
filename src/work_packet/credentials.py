@@ -160,17 +160,59 @@ def names(h=None):
     return sorted(f[:-5] for f in files if f.endswith(".json") and _NAME.match(f[:-5]))
 
 
+GROUP = "work_packet.credentials"
+
+
+def _kinds():
+    from . import plugins
+    return plugins.loaded(GROUP)
+
+
+def renew_command(name):
+    """The command that renews ``name``: the ``renew`` of the credential-kind
+    plugin named ``name`` or listing it in ``names``; "" when none says."""
+    for pname, obj in _kinds().items():
+        if pname == name or name in (getattr(obj, "names", None) or ()):
+            return getattr(obj, "renew", "") or ""
+    return ""
+
+
 def rows(h=None):
     """One dict per credential for /sched and doctor: name, subject, status,
-    note, expires. Owner-only: the caller shows them only to the home's owner."""
+    note, expires, renew. Owner-only: the caller shows them only to the home's owner."""
     out = []
     for n in names(h):
         st, note = check(n, h)
         c = get(n, h)
         out.append({"name": n, "status": st, "note": note,
                     "subject": c.subject if c else None,
-                    "expires": c.expires if c else None})
+                    "expires": c.expires if c else None,
+                    "renew": renew_command(n)})
     return out
+
+
+def notify(changed, h=None):
+    """Tell the plugins that use a changed credential: every loaded plugin, of
+    any group, with ``credentials_changed(names, h)`` whose ``credentials``
+    (names it uses; absent = all) meets ``changed``. A plugin that raises is
+    logged, not fatal. Returns the plugin names called."""
+    import logging
+    from . import plugins
+    called = []
+    for p in plugins.everything():
+        fn = getattr(p.obj, "credentials_changed", None) if p.ok else None
+        if fn is None:
+            continue
+        uses = getattr(p.obj, "credentials", None)
+        hit = [n for n in changed if uses is None or n in uses]
+        if not hit:
+            continue
+        try:
+            fn(hit, h)
+            called.append(p.name)
+        except Exception:               # noqa: BLE001  a plugin must not stop wpkd
+            logging.getLogger(__name__).exception("plugin %s: credentials_changed", p.name)
+    return called
 
 
 class Watcher:

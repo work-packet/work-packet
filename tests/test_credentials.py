@@ -125,3 +125,88 @@ def test_watch(home):
 def test_plugin_group_exists():
     from work_packet import plugins
     assert "work_packet.credentials" in plugins.GROUPS
+
+
+class _P:
+    def __init__(self, name, obj, ok=True):
+        self.name, self.obj, self.ok = name, obj, ok
+
+
+class _User:
+    def __init__(self, uses=None, boom=False):
+        self.got, self.boom = [], boom
+        if uses is not None:
+            self.credentials = uses
+
+    def credentials_changed(self, names, h):
+        if self.boom:
+            raise RuntimeError("boom")
+        self.got.append((names, h))
+
+
+class _Kind:
+    names = ("portal",)
+    renew = "wpk gateway login"
+
+
+@pytest.fixture
+def plugged(home, monkeypatch):
+    from work_packet import plugins
+    a, b, c, d = _User(uses=["gateway"]), _User(), _User(uses=["other"]), _User(boom=True)
+    ps = [_P("a", a), _P("b", b), _P("c", c), _P("d", d), _P("off", _User(), ok=False)]
+    monkeypatch.setattr(plugins, "everything", lambda: ps)
+    monkeypatch.setattr(plugins, "loaded", lambda g: {"gateway": _Kind()} if g == creds.GROUP else {})
+    return a, b, c, d
+
+
+def test_notify(plugged, home):
+    a, b, c, d = plugged
+    assert creds.notify(["gateway", "x"], home) == ["a", "b"]
+    assert a.got == [(["gateway"], home)] and b.got == [(["gateway", "x"], home)]
+    assert c.got == []
+
+
+def test_renew_and_rows(plugged, home):
+    creds.put("gateway", {}, subject="alice")
+    creds.put("portal", {})
+    creds.mark("portal", "expired", "token aged out")
+    assert creds.renew_command("gateway") == "wpk gateway login"
+    assert creds.renew_command("portal") == "wpk gateway login"
+    assert creds.renew_command("none") == ""
+    from work_packet.sched import doctor
+    rows = doctor.credential_checks(home)
+    assert [r.level for r in rows] == ["ok", "warn"]
+    assert "signed in as alice" in rows[0].title and rows[0].fix == []
+    assert rows[1].detail == "token aged out" and rows[1].fix == ["wpk gateway login"]
+
+
+def test_dispatcher_callback(plugged, home):
+    from work_packet.sched.dispatcher import Dispatcher
+    a = plugged[0]
+    dsp = Dispatcher.__new__(Dispatcher)
+    dsp.h = home
+    w = creds.Watcher(home)
+    w.add(dsp._creds_changed)
+    w.poll()
+    creds.put("gateway", {"token": "new"})
+    w.poll()
+    assert a.got == [(["gateway"], home)]
+
+
+def test_sched_page_owner_only(home):
+    pytest.importorskip("starlette")
+    pytest.importorskip("httpx")
+    from starlette.testclient import TestClient
+    from work_packet.dash import sched as dsched
+
+    class Req:
+        def __init__(self, user=None, listener=None):
+            self.scope = {"state": {"user": user, "listener": listener}} if user else {}
+
+    creds.put("gateway", {"token": "secret"}, subject="alice")
+    rows = dsched.credential_rows(Req(), home)
+    assert [r["name"] for r in rows] == ["gateway"] and "data" not in rows[0]
+    assert dsched.credential_rows(Req("bob@example.com", "tailnet"), home) == []
+    from work_packet.dash.app import create_app
+    text = TestClient(create_app(home)).get("/sched").text
+    assert "Credentials" in text and "secret" not in text

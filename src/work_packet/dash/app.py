@@ -498,7 +498,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         snap = await run_in_threadpool(dsched.snapshot, home)
         ch = await run_in_threadpool(dsched.chart, snap, home) if snap else None
         cols, broken = data.board(home)
-        return render(request, "sched.html", snap=snap, chart=ch, live=True,
+        creds = await run_in_threadpool(dsched.credential_rows, request, home)
+        return render(request, "sched.html", snap=snap, chart=ch, live=True, creds=creds,
                       lines=None if snap else ["the config cannot be read"],
                       events=dsched.recent(home), modes=dsched.MODES,
                       side=data.side(home, cols, broken))
