@@ -141,7 +141,9 @@ _LSF_FREE = re.compile(r"\s*([^\[\]]*?)\s*(?=\b(?:%s)\[|$)" % "|".join(LSF_SECTI
 SIZE_KEYS = ("cpus", "mem", "time", "partition", "queue", "extra", "resources", "constraint",
              "env", "label", "description")
 SCHED_BUDGET_DEFAULTS = {             # §4; Q2
-    "measure": "",                     # usd | tokens | quota; empty: no budget
+    "measure": "",                     # usd | tokens | quota | provider; empty: no budget
+    "provider": "",                    # measure = "provider": the work_packet.budget plugin
+    "route": "",                       # provider: count local steps of this route (glob)
     "amount": 0.0,
     "period": "week",                  # day | week | month (ignored for quota)
     "slack": 0.1,
@@ -659,8 +661,13 @@ def _validate_budget(t):
     if not isinstance(t, dict):
         return [_err("sched.budget", "must be a table")]
     out = _unknown(t, tuple(SCHED_BUDGET_DEFAULTS), "sched.budget")
-    if t.get("measure", "") not in ("", "usd", "tokens", "quota"):
-        out.append(_err("sched.budget.measure", "must be usd, tokens or quota"))
+    if t.get("measure", "") not in ("", "usd", "tokens", "quota", "provider"):
+        out.append(_err("sched.budget.measure", "must be usd, tokens, quota or provider"))
+    for k in ("provider", "route"):
+        if not isinstance(t.get(k, ""), str):
+            out.append(_err("sched.budget." + k, "must be a string"))
+    if t.get("measure") == "provider" and not t.get("provider"):
+        out.append(_err("sched.budget.provider", "measure = \"provider\" needs provider = <name>"))
     if t.get("period", "week") not in ("day", "week", "month"):
         out.append(_err("sched.budget.period", "must be day, week or month"))
     for k in ("amount", "slack", "hard_cap", "default_step", "cache_read_weight"):

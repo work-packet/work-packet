@@ -4,17 +4,18 @@ Spend is read from each step's ``meta.json``, never estimated; a step that
 is still running holds a reservation, its estimate, until its figures land.
 """
 
+import fnmatch
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from .. import fsutil, layout, schema
+from .. import fsutil, layout, plugins, schema
 from .config import sched_dir
 from .gates import Reason
 
-MEASURES = ("usd", "tokens", "quota")
+MEASURES = ("usd", "tokens", "quota", "provider")
 DEFAULT_STEP = {"usd": 0.50, "tokens": 2_000_000.0, "quota": 0.005}
 HIGH_SHARE = 0.95
 PACKET_HISTORY, PROJECT_HISTORY = 10, 20
@@ -33,6 +34,8 @@ class Rec:
     cost: Optional[float] = None
     tokens: dict = field(default_factory=dict)
     quota: dict = field(default_factory=dict)
+    start: Optional[str] = None
+    route: str = ""                  # account@host (meta.json route)
 
     def amount(self, measure, cache_read_weight=0.1, window="seven_day"):
         """What the step spent in ``measure``, or None if it did not say."""
@@ -55,6 +58,12 @@ class Rec:
 _CACHE = {}          # meta.json path -> (mtime_ns, Rec or None)
 
 
+def _route_of(r):
+    if not isinstance(r, dict):
+        return ""
+    return "%s@%s" % (r.get("account") or "unknown", r.get("host") or "default")
+
+
 def _read(path, project, wpid, name):
     try:
         st = os.stat(path)
@@ -71,7 +80,8 @@ def _read(path, project, wpid, name):
         n, _, run = name.partition(".failed-")
         rec = Rec(project=project, wpid=wpid, step=int(n), failed=bool(run), end=m.get("end"),
                   cost=m.get("cost_usd") if isinstance(m.get("cost_usd"), (int, float)) else None,
-                  tokens=m.get("tokens") or {}, quota=m.get("quota") or {})
+                  tokens=m.get("tokens") or {}, quota=m.get("quota") or {},
+                  start=m.get("start"), route=_route_of(m.get("route")))
     except (OSError, ValueError, TypeError):
         rec = None
     _CACHE[path] = (key, rec)
@@ -101,6 +111,105 @@ def ledger(entries):
                 if r is not None:
                     out.append(r)
     return sorted(out, key=lambda r: (r.end or "", r.project, r.wpid, r.step))
+
+
+# --- a budget provider (design E6): amount, period and spend from elsewhere ---------
+
+GROUP = "work_packet.budget"
+READING = "budget-reading.json"
+
+
+class NeedsLogin(Exception):
+    """The provider's credential is missing or expired; a person must renew it."""
+
+
+class Unavailable(Exception):
+    """The provider cannot answer now (portal down, timeout)."""
+
+
+@dataclass
+class BudgetReading:
+    amount: float               # the period's budget, USD
+    spent: float                # spend the provider knows, all sources
+    period_start: datetime
+    period_end: datetime
+    tz: str                     # the billing zone, for period bounds
+    as_of: datetime             # spend is complete up to here
+    stage: Optional[str] = None  # the policy's label, e.g. "100%"
+    blocked: bool = False       # new calls will be refused
+    url: Optional[str] = None   # where a person sees and acts on it
+    notes: list = field(default_factory=list)   # warnings to show
+
+    _TIMES = ("period_start", "period_end", "as_of")
+
+    def to_json(self):
+        d = asdict(self)
+        for k in self._TIMES:
+            d[k] = schema.format_timestamp(d[k])
+        d["notes"] = list(d["notes"] or [])
+        return d
+
+    @classmethod
+    def from_json(cls, d):
+        d = dict(d)
+        for k in cls._TIMES:
+            d[k] = schema.parse_timestamp(d[k])
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+
+class BudgetProvider:
+    """The base of a ``work_packet.budget`` plugin (a class or an instance)."""
+
+    def changed(self):
+        """A cheap check that a new reading may differ; may always say True."""
+        return True
+
+    def read(self):
+        """A BudgetReading; raises NeedsLogin or Unavailable."""
+        raise NotImplementedError
+
+
+def provider(name):
+    """The loaded provider called ``name``, or None."""
+    obj = plugins.loaded(GROUP).get(name)
+    return obj() if isinstance(obj, type) else obj
+
+
+def load_reading(h):
+    """``sched/budget-reading.json``: {reading: BudgetReading or None, read_at, error,
+    provider}, or None if no reading was ever tried."""
+    try:
+        with open(os.path.join(sched_dir(h), READING), encoding="utf-8") as fp:
+            d = json.load(fp)
+        d["reading"] = BudgetReading.from_json(d["reading"]) if d.get("reading") else None
+        return d
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def refresh(h, name, now):
+    """Ask provider ``name`` for a reading and cache it. A failure keeps the last
+    reading and records why (``error``; ``needs_login`` for NeedsLogin)."""
+    old = load_reading(h) or {}
+    d = {"provider": name, "reading": old.get("reading") if old.get("provider") == name else None,
+         "read_at": old.get("read_at"), "tried_at": schema.format_timestamp(now),
+         "error": None, "needs_login": False}
+    p = provider(name)
+    try:
+        if p is None:
+            raise Unavailable("budget provider %r is not loaded (wpk doctor)" % name)
+        r = p.read()
+        if not isinstance(r, BudgetReading):
+            raise Unavailable("budget provider %r returned %r" % (name, type(r).__name__))
+        d["reading"], d["read_at"] = r, schema.format_timestamp(now)
+    except NeedsLogin as e:
+        d["error"], d["needs_login"] = str(e) or "needs login", True
+    except Exception as e:                # a plugin's failure must not stop wpkd
+        d["error"] = str(e) or type(e).__name__
+    out = dict(d, reading=d["reading"].to_json() if d["reading"] else None)
+    os.makedirs(sched_dir(h), exist_ok=True)
+    fsutil.atomic_write(os.path.join(sched_dir(h), READING), json.dumps(out, indent=1) + "\n")
+    return d
 
 
 # --- periods and pace --------------------------------------------------------------
@@ -206,15 +315,27 @@ class Budget:
         b = cfg["budget"]
         self.h = h
         self.measure = b["measure"]
+        self.via = None                  # provider name, when measure = "provider"
+        self.cached = None               # its last cached reading (load_reading)
+        self.route = b.get("route") or ""
+        if self.measure == "provider":
+            self.measure, self.via = "usd", b.get("provider") or ""
+            self.cached = load_reading(h) if h is not None else None
+            if self.cached and self.cached.get("provider") != self.via:
+                self.cached = None
+        self.reading = (self.cached or {}).get("reading")
         self.period = b.get("period", "week")
         self.amount = float(limits.budget_amount if limits is not None and
                             limits.budget_amount is not None else b["amount"])
+        if self.reading is not None:
+            self.amount = float(self.reading.amount)
         self.slack = float(b["slack"]) * self.amount
         self.hard_cap = float(b["hard_cap"]) or self.amount
         self.crw = float(b["cache_read_weight"])
         self.default_step = float(b["default_step"]) or DEFAULT_STEP[self.measure]
         self.shape = b.get("shape") or {}
-        self.tz_name = b.get("tz") or cfg.get("tz") or ""
+        self.tz_name = (self.reading.tz if self.reading is not None and self.reading.tz
+                        else b.get("tz") or cfg.get("tz") or "")
         self.tz = _zone(self.tz_name)
         self.stale_after = schema.parse_duration(b.get("stale_after") or "6h")
         self.now = now
@@ -231,6 +352,8 @@ class Budget:
 
     def _windows(self):
         now = self.now
+        if self.via is not None:
+            return [self._provider_window()]
         if self.measure != "quota":
             s, e = period_bounds(self.period, now, self.tz)
             cut = schema.format_timestamp(s)
@@ -264,6 +387,32 @@ class Budget:
                 w.stale = "the reading is %dh old" % (age // 3600)
             out.append(w)
         return out
+
+    def _provider_window(self):
+        """The period and spend of the provider's reading, plus the local spend of
+        steps that started after its ``as_of`` (portals lag; only wpk sees those)."""
+        r, now = self.reading, self.now
+        mine = [x for x in self.recs if not self.route or fnmatch.fnmatchcase(x.route, self.route)]
+        if r is None:
+            s, e = period_bounds(self.period, now, self.tz)
+            cut = schema.format_timestamp(s)
+            spent = sum(x.cost or 0 for x in mine if (x.end or "") >= cut)
+            err = (self.cached or {}).get("error")
+            return Window("period", s, e, spent,
+                          stale=err or "no reading yet from provider %r" % self.via)
+        cut = schema.format_timestamp(r.as_of)
+        spent = float(r.spent) + sum(x.cost or 0 for x in mine
+                                     if (x.start or x.end or "") > cut)
+        w = Window("period", r.period_start, r.period_end, spent)
+        read_at = self.cached.get("read_at")
+        age = (now - schema.parse_timestamp(read_at)).total_seconds() if read_at else 0
+        if self.cached.get("error"):
+            w.stale = self.cached["error"]
+        elif r.period_end <= now:
+            w.stale = "the reading is for a past period"
+        elif age > self.stale_after:
+            w.stale = "the reading is %dh old" % (age // 3600)
+        return w
 
     def _history(self):
         self.by_packet, self.by_project = {}, {}
@@ -338,8 +487,17 @@ class Budget:
     def gate(self, it, ctx=None):
         cls = it.cls                       # the real class: aging is for order only
         est = self.estimates_of(it.project, it.wpid)
+        if self.reading is not None and self.reading.blocked:
+            return Reason("budget", "budget: %s says new calls are refused%s" % (
+                self.via, " (%s)" % self.reading.stage if self.reading.stage else ""))
         for w in self.windows:
-            if w.stale and cls not in ("urgent", "high"):
+            if w.stale and self.via is not None:
+                if cls not in ("urgent", "high"):
+                    return Reason("budget", "budget: %s; %s waits for a fresh reading" % (
+                        w.stale, cls))
+                if self.reading is None and self.amount <= 0:
+                    continue               # no amount known: high and urgent go on
+            elif w.stale and cls not in ("urgent", "high"):
                 if self.jobs or cls == "background":
                     return Reason("budget", "budget: quota %s; %s waits for a step to "
                                   "read it again" % (w.stale, cls))
@@ -396,6 +554,14 @@ class Budget:
         out = {"measure": m, "amount": self.amount, "slack": self.slack,
                "hard_cap": self.hard_cap, "shape": self.shape, "tz": self.tz_name,
                "windows": []}
+        if self.via is not None:
+            r = self.reading
+            out["provider"] = {
+                "name": self.via, "route": self.route,
+                "read_at": (self.cached or {}).get("read_at"),
+                "error": (self.cached or {}).get("error"),
+                "needs_login": bool((self.cached or {}).get("needs_login")),
+                "reading": r.to_json() if r is not None else None}
         for x in self.windows:
             out["windows"].append({
                 "name": x.name, "start": schema.format_timestamp(x.start),
@@ -424,8 +590,12 @@ class Budget:
 def gate_for(ctx, records, h, entries=None, recs=None):
     """The budget gate for a fill, or None when ``[sched.budget] measure`` is unset."""
     b = ctx.cfg.get("budget") or {}
-    if b.get("measure") not in MEASURES or not b.get("amount") and not (
-            ctx.limits is not None and ctx.limits.budget_amount):
+    if b.get("measure") not in MEASURES:
+        return None
+    if b["measure"] == "provider":
+        if not b.get("provider"):
+            return None
+    elif not b.get("amount") and not (ctx.limits is not None and ctx.limits.budget_amount):
         return None
     if entries is None:
         entries = [p.entry for p in ctx.projs.values()]
