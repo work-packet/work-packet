@@ -761,11 +761,30 @@ def _validate_harness(d):
     return out
 
 
+def _validate_plugins(d):
+    """``[plugins]``: enable/disable lists of names; any other key is a
+    plugin's own table, which only the plugin checks (design E1)."""
+    t = d.get("plugins")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("plugins", "must be a table")]
+    out = []
+    for k, v in t.items():
+        if k in ("enable", "disable"):
+            if not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+                out.append(_err("plugins." + k, "must be a list of plugin names"))
+        elif not isinstance(v, dict):
+            out.append(_err("plugins." + k, "must be a [plugins.%s] table" % k))
+    return out
+
+
 def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
-                                                "console", "harnesses")) \
+                                                "console", "harnesses", "plugins")) \
         + _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d) \
-        + _validate_console(d) + _validate_forges(d.get("forge")) + _validate_harness(d)
+        + _validate_console(d) + _validate_forges(d.get("forge")) + _validate_harness(d) \
+        + _validate_plugins(d)
     v = d.get("max_step_budget_usd", 1)
     if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
         out.append(_err("max_step_budget_usd", "must be a number > 0"))

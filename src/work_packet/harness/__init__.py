@@ -127,27 +127,24 @@ def _load():
     if _loaded:
         return
     _loaded.append(True)
-    try:
-        from importlib.metadata import entry_points
-        eps = entry_points(group=GROUP)
-    except Exception:                 # noqa: BLE001  (old Pythons, broken metadata)
-        eps = []
-    for ep in eps:
-        if ep.name in _REGISTRY:
-            _broken[ep.name] = "the name is a built-in harness (%s not used)" % ep.value
+    from .. import plugins
+    for p in plugins.load(GROUP):
+        if not p.enabled:
             continue
-        try:
-            cls = ep.load()
-            if not (isinstance(cls, type) and issubclass(cls, Harness)):
-                raise TypeError("%s is not a Harness subclass" % ep.value)
-        except Exception as e:        # noqa: BLE001  a broken plugin must not break steps
-            _broken[ep.name] = "%s: %s" % (type(e).__name__, e)
+        if p.name in _REGISTRY:
+            p.error = "the name is a built-in harness (%s not used)" % p.value
+        elif p.error is None and not (isinstance(p.obj, type) and issubclass(p.obj, Harness)):
+            p.error = "TypeError: %s is not a Harness subclass" % p.value
+        if p.error is not None:
+            _broken[p.name] = p.error
             continue
-        _plugins[ep.name] = cls
+        _plugins[p.name] = p.obj
 
 
 def _reset():
     """Forget the entry points read (tests)."""
+    from .. import plugins
+    plugins._reset()
     _loaded.clear()
     _plugins.clear()
     _broken.clear()
