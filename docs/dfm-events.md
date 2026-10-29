@@ -1,6 +1,6 @@
 # Live DFM runs on the board
 
-Status (2026-10-25): the DFM side (E1 and the DFM half of E4) is built in `packages/dv-flow-mgr`, uncommitted, and covered by unit tests only. The wpk side is not started. The work splits into a DFM side (dv-flow-mgr) and a wpk side. A fresh session should be able to pick up from this file and the status log at the end.
+Status (2026-10-29): the DFM side (E1 and the DFM half of E4) is committed in `packages/dv-flow-mgr` (`5d3d05d`). The wpk side's collector, journal and list view (E2, E3) are built and tested, and a real `dfm run` has been seen end to end. Next: a graph or timeline tab (E5), once the list has been used. A fresh session should be able to pick up from this file and the status log at the end.
 
 dv-flow-mgr (DFM) runs are often long, and today the only view into one is the CLI that launched it, which may sit inside a step's Bash tool where nobody can see it. The goal is for the board to show, for any DFM run started under wpk, what it **is** doing, what it **has** done and what it **plans** to do. The same channel should later feed a VS Code view of runs started in its terminals.
 
@@ -210,18 +210,18 @@ The milestones carry an E prefix.
 - [x] `TaskListenerEvents`, registered in `cmd_run` when `DFM_EVENT_SINK` is set
 - [x] `plan` and `extend` reasons on the runner; skip notifications
 - [x] Tests with a file sink; dead-socket test
-- [ ] A real `dfm run` against a live socket, then a PR to dv-flow-mgr
+- [x] A real `dfm run` against a live socket (2026-10-29), committed as `5d3d05d`
 - Estimate: about a day. This is a change to another repo, so it needs its own PR and review there.
 
 **E2 — wpk collector and journal.**
-- [ ] `dash/events.py` unix server on the Board loop; `DFM_EVENT_SINK` exported at board start
-- [ ] Journal under `$WPK_HOME/runs/dfm/`; `lost` detection; pruning
-- [ ] Test: a fake producer (or real DFM with a file sink, replayed) gives the expected folded model
+- [x] `dash/events.py` unix server on the Board loop; `DFM_EVENT_SINK` exported at board start
+- [x] Journal under `$WPK_HOME/runs/dfm/`; `lost` detection; pruning
+- [x] Test: a fake producer gives the expected folded model (`tests/test_dfm_events.py`)
 
 **E3 — board list view.**
-- [ ] `data.dfm_run` fold; `/runs` and `/runs/{sid}` pages; links from step and packet pages
-- [ ] Polling while live
-- [ ] Test in `test_dash.py` with a canned journal
+- [x] Fold (in `dash/dfmrun.py`, not `data.py`); `/runs` and `/runs/{sid}` pages; links from step and packet pages
+- [x] Polling while live
+- [x] Test with a canned journal (`tests/test_dfm_events.py`)
 
 **E4 — completeness (DFM).** Live markers, exec start/end with the current command, nested-runner listeners, `graph.extend` for control nodes. Tests with a `repeat` flow and a nested `dfm run`.
 - [x] Live markers, exec start/end, nested-runner listeners, `graph.extend` (built with E1; unit-tested through `run_subgraph`)
@@ -258,3 +258,14 @@ Built in `packages/dv-flow-mgr`, uncommitted (§4, "As built"). Changed from the
 
 ### 2026-10-25: heartbeat
 Added `run.alive` and `DFM_EVENT_HEARTBEAT` (§2, §3.2): sent only after a quiet interval, with the running node ids. The collector's `lost` rule now includes silence for about three intervals (§5). 3 more tests; the DFM unit suite passes.
+
+### 2026-10-29: collector and list view (E2, E3)
+Built on the wpk side:
+- `dash/events.py`: the `Collector`, started by `Board.run` before the runner, so steps inherit `DFM_EVENT_SINK=unix:$WPK_HOME/events/events.sock` and `DFM_EVENT_CTX=WPK_*`. Startup is non-fatal: if it cannot listen, the board logs a warning and carries on. Lines are journaled as received to `$WPK_HOME/runs/dfm/<sid>.jsonl`. The collector adds its own `src:"wpk"` lines: `conn.open` (with the `SO_PEERCRED` pid) and `conn.close` (with `why`) when a connection ends before `run.end`. A `sid` first named by another peer is ignored. At startup it prunes to 200 journals, none older than 30 days. Not built: the in-memory index. The pages fold the journals instead, cached by size and mtime.
+- `dash/dfmrun.py`: `fold`/`view`/`runs`. A run is `lost` on `conn.close`, or after 3 × `DFM_EVENT_HEARTBEAT` (default 10 s) of silence. Compound nodes are left out of the lists and counts.
+- Pages: `/runs` (the side tab "DFM runs", `?wpid=` filter), `/runs/{sid}` (Running, Failed, Pending with "waiting on", Skipped, Done with up-to-date and cached tasks collapsed, nested runs by `parent`), and `/runs/{sid}/log.txt?id=` (a log's tail, only inside the run's or the node's rundir). The step page lists its runs (matched on `WPK_WPID` and `WPK_STEP`). The packet page shows its last 5. A step's env has no `WPK_PROJECT`, so the board finds the project from the wpid.
+- Checked end to end with a real `dfm run` (4 tasks, one failing) into a live collector: the live samples progressed, and the run folded to `fail` with t2 failed, report skipped and the ctx through.
+- Not done: the IDE workspace's `terminal.integrated.env` does not get `DFM_EVENT_SINK` yet, so only terminals that inherit the board's environment report. Steps run on another host (LSF, slurm) cannot reach the socket (open question 4).
+
+### 2026-10-29: beside the processes
+The live view (`/p/{project}/{wpid}/live`) has a "DFM runs" panel at the top of its right-hand column, above Processes. It shows the current step's live runs, or else its newest one. Each panel has the run's status, a progress bar, the tasks running now with their current command and time, failures with their first message and a log link, and the next few pending tasks with what they wait on. In the Processes table, a live run's `dfm` process gets a "DFM" tag that links to the run page. Macro `panel` in `_dfm.html`; test `test_live_view_shows_the_steps_dfm_runs`.

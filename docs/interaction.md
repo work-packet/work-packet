@@ -48,6 +48,19 @@ Once answered: start item 0a in state/outline.md. ...
 | `choices` | list of strings | no | the answers a front end offers as buttons; free text is still allowed |
 | `grants` | list of tool strings | no | answering yes (`yes`, `y`, `true`, `ok`, `approve`, `grant`) runs `wpk allow` for these tools before the hand-off |
 | `request` | name | no | answering yes sends the request `state/requests/<name>.md` before the hand-off (docs/delegation.md §3); the brief must exist when the step commits |
+| `sets` | mapping | no | project settings the answer applies before the hand-off, with `wpk set` and a `config` record. `{key: value}` applies on a yes; `{choice: {key: value}}`, where every key is one of `choices`, applies when that choice is the answer (case ignored). Keys: `step_budget_usd`, `step_timeout`, `step_context_tokens`. An answer that would set `step_budget_usd` over `max_step_budget_usd` (`config.toml`, default 10.00) is refused, and nothing is applied |
+
+A step whose budget, time or context is too small asks with `sets`, so the
+owner's answer is the change. Asked in words alone ("raise the budget?"),
+an answer only reaches the next step as text, and the limit stays as it was:
+
+```yaml
+  - id: budget
+    q: Raise the step budget to $5, or split 5b4a into smaller parts?
+    recommend: raise budget
+    choices: [raise budget, split smaller]
+    sets: {raise budget: {step_budget_usd: 5.00}}
+```
 
 - `status.reason` becomes a one-line summary: the question itself for one,
   "N questions: <first>" for more.
@@ -71,8 +84,9 @@ A question left unanswered is shown as unanswered, so the model asks again
 or uses its recommendation, as the note says.
 
 **Take the recommendations** fills every unanswered question from its
-`recommend`. Grants run first: `project.allow`, with a `config` record. Then
-the hand-off happens.
+`recommend`. Grants run first: `project.allow`, with a `config` record; then
+the `sets` the answers pick, with `project.set_values`. Then the hand-off
+happens.
 
 ## 4. One set of actions
 
@@ -102,7 +116,8 @@ place, because it costs nothing. The pages put its token in every form.
   - its text and the recommendation;
   - buttons for its `choices`, or a text box filled in with the
     recommendation;
-  - "grants: Bash" when answering yes grants something.
+  - "grants: Bash" when answering yes grants something;
+  - "“raise budget” sets step_budget_usd 5.0" when an answer sets something.
 
   Below the questions there is a note box and two buttons, **Send answers**
   and **Take the recommendations**.
