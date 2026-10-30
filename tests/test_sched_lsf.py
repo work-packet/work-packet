@@ -5,7 +5,7 @@ import sys
 
 from work_packet.sched import config as sconfig
 from work_packet.sched.backends import DONE, LOST, PENDING, RUNNING, Task
-from work_packet.sched.backends.lsf import Lsf, cpu_seconds, utc
+from work_packet.sched.backends.lsf import Lsf, cpu_seconds, resource_string, utc
 
 
 def cfg(**lsf):
@@ -29,6 +29,62 @@ def test_bsub_argv_per_size():
     assert a[a.index("-W") + 1] == "4:00" and a[a.index("-n") + 1] == "8"
     assert a[a.index("-R") + 1] == "rusage[mem=32768] span[hosts=1]"
     assert a[a.index("-q") + 1] == "big" and a[-1].endswith("--lost preempted")
+
+
+def test_size_resources_merged_into_one_R():
+    def r(res, mem=None):
+        t = {"cpus": 1, "resources": res}
+        if mem:
+            t["mem"] = mem
+        return resource_string(sconfig._size("x", t))
+    assert r("") == "span[hosts=1]"
+    assert r("type==X86_64", "4G") == "select[type==X86_64] rusage[mem=4096] span[hosts=1]"
+    assert r("select[osrel==8] type==X86_64") == \
+        "select[(osrel==8) && (type==X86_64)] span[hosts=1]"
+    assert r("rusage[lic=1:duration=5] span[ptile=4]", "1G") == \
+        "rusage[mem=1024, lic=1:duration=5] span[ptile=4]"
+    assert r("same[model] select[defined(x)]") == \
+        "select[defined(x)] same[model] span[hosts=1]"
+    c = sconfig.load(raw={"sched": {"backend": "lsf", "sizes": {
+        "big": {"cpus": 4, "mem": "8G", "resources": "select[type==X86_64 && osrel==8]"}}}})
+    t = Task("j", "step", "p", "w", "/w", sconfig.size(c, "big"), "/h/j.log", step=1, name="n")
+    a = Lsf(c).submit_argv(t)
+    assert a.count("-R") == 1
+    assert a[a.index("-R") + 1] == \
+        "select[type==X86_64 && osrel==8] rusage[mem=8192] span[hosts=1]"
+
+
+def test_size_resources_schema():
+    from work_packet import schema
+    ok = schema.validate_config({"sched": {"sizes": {"a": {
+        "cpus": 1, "resources": "select[a==1]", "constraint": "avx512"}}}})
+    assert ok == []
+    bad = schema.validate_config({"sched": {"sizes": {"a": {
+        "cpus": 1, "resources": "select[a==1", "constraint": 3}}}})
+    msgs = " ".join(str(e) for e in bad)
+    assert "resources" in msgs and "unclosed" in msgs and "constraint" in msgs
+    bad = schema.validate_config({"sched": {"sizes": {"a": {"cpus": 1, "resources": "foo[x]"}}}})
+    assert "cannot read" in " ".join(str(e) for e in bad)
+
+
+def test_size_env_label_description():
+    from work_packet.prompt import sizes_section
+    c = sconfig.load(raw={"sched": {"backend": "lsf", "node_env": "module load wpk", "sizes": {
+        "xl": {"cpus": 16, "env": "module load bigsim\n\nexport OMP=16\n", "label": "X-large",
+               "description": "full-chip sims"}}}})
+    z = sconfig.size(c, "xl")
+    t = Task("j", "step", "p", "w", "/w", z, "/h/j.log", step=1, name="n")
+    assert Lsf(c).submit_argv(t)[-1] == \
+        "module load wpk && module load bigsim && export OMP=16 && exec wpk step /w"
+    t.size = sconfig.size(c, "look")
+    assert Lsf(c).submit_argv(t)[-1] == "module load wpk && exec wpk step /w"
+    assert (z.text, z.title) == ("X-large", "16 cores: full-chip sims")
+    assert sconfig.size(c, "look").text == "look"
+    s = sizes_section([sconfig.size(c, "look"), z])
+    assert "- `xl` (X-large): 16 cores: full-chip sims" in s and "- `look`: 1 core, 4G\n" in s
+    from work_packet import schema
+    bad = schema.validate_config({"sched": {"sizes": {"a": {"cpus": 1, "env": ["x"], "label": 1}}}})
+    assert {e.field for e in bad} >= {"sched.sizes.a.env", "sched.sizes.a.label"}
 
 
 def test_bjobs_states():

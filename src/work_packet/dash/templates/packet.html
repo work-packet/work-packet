@@ -59,7 +59,7 @@
   <input type="hidden" name="wpid" value="{{ p.wpid }}">
   {% if st in ("RUNNABLE", "SLEEPING") %}<button class="go" name="pause" value="1"{% if p.running %} disabled title="a step is running: pause after it ends"{% endif %}>Pause and open</button>
   {% endif %}<button class="go" name="go" value="desktop">Open in VS Code</button>
-  {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
+  {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
   <span class="muted" style="font-size:12px">{% if p.running or st in ("RUNNABLE", "SLEEPING") %}The runner owns it: files open read-only until you pause it.{% else %}Its worktrees, <code>state/</code> and the packet folder.{% endif %}</span>
 </form>
 {% endif %}
@@ -127,7 +127,7 @@
     <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span></td>
     <td style="white-space:nowrap">{{ s.start|when }}</td>
     <td class="num">{{ s.duration_s|secs }}</td>
-    <td class="num">{{ s.cost_usd|money }}</td>
+    <td class="num"{% if s.cost_basis %} title="cost basis: {{ s.cost_basis }}"{% endif %}>{{ s.cost_usd|money }}{% if s.cost_basis and s.cost_basis != "harness" %} <span class="muted">{{ s.cost_basis }}</span>{% endif %}</td>
     <td class="num">{{ s.context_tokens|tok if s.context_tokens is not none }}</td>
     <td class="num">{{ s.output_tokens|tok if s.output_tokens is not none }}</td>
     {% if items %}<td>{{ s.item or "" }}</td>{% endif %}

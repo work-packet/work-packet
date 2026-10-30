@@ -216,6 +216,28 @@ def _tools(need_git=False):
                              "Check that `%s -p hello` works in a shell." % exe[0]))
         else:
             out.append(Check("tools.claude", "tools", "ok", "claude %s" % ver))
+    from . import harness
+    for name, why in sorted(harness.broken().items()):
+        out.append(Check("tools.harness." + name, "tools", "warn",
+                         "harness plugin %s not loaded" % name, why))
+    from .sched import backends
+    for name, why in sorted(backends.broken().items()):
+        out.append(Check("tools.sched_backend." + name, "tools", "warn",
+                         "scheduler backend plugin %s not loaded" % name, why))
+    from . import cli, plugins
+    cli.build_parser()                # marks clashing command groups
+    for p in plugins.everything():
+        cid = "tools.plugin.%s.%s" % (p.group.split(".")[-1], p.name)
+        where = "%s (%s)" % (p.value, " ".join(x for x in (p.dist, p.version) if x) or "?")
+        if not p.enabled:
+            out.append(Check(cid, "tools", "info", "plugin %s disabled" % p.name,
+                             "%s; [plugins] in config.toml" % p.group))
+        elif p.error is None:
+            out.append(Check(cid, "tools", "ok", "plugin %s" % p.name,
+                             "%s from %s" % (p.group, where)))
+        elif p.group not in (harness.GROUP, backends.GROUP):   # listed above, with the reason
+            out.append(Check(cid, "tools", "warn", "plugin %s not loaded" % p.name,
+                             "%s from %s: %s" % (p.group, where, p.error)))
     if need_git and shutil.which("git") is None:
         out.append(Check("tools.git", "tools", "missing", "git is not on PATH",
                          "work/ holds git repositories; steps get a git worktree of each."))

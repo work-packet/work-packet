@@ -266,7 +266,22 @@ mem  = "32G"
 time = "4h"                  # run limit; default: the project's step_timeout
 partition = "batch"          # slurm; `queue` for lsf
 extra = []                   # more sbatch/bsub arguments for this size
+resources = "select[ws] rusage[licA=1]"   # lsf: merged into the one -R
+constraint = "avx512"        # slurm: --constraint
+env = "module load vcs/2026"   # shell lines after node_env, for jobs of this size
+label = "Simulation"         # shown in the size pickers and the prompt
+description = "regressions and full-chip sims"
 ```
+
+On LSF, a size's `resources` is merged with the memory request into one
+`-R` string: selects are and-ed (`select[(mem>8000) && (ws)]`), `rusage`
+terms join the job's `mem=`, and a size's `span[...]` replaces the
+default `span[hosts=1]`. A section the merge does not know (`foo[`) is
+refused when the config is checked. `env` lines run on the compute node
+after `[sched] node_env` and before `wpk step`. `label` (default: the
+name) and `description` appear in the board's size pickers and in the
+size list the model sees: "`sim` (Simulation): 8 cores, 32G:
+regressions and full-chip sims".
 
 The pool counts what its tasks hold: `[sched] cores`, `mem` and `jobs`
 are its limits, and a task starts only if its size fits under all three
@@ -636,6 +651,7 @@ extra     = []
 queue   = "normal"
 project = "dv-agents"
 extra   = []
+bin     = ""                 # a directory bsub/bjobs/bkill are run from
 
 [sched.ide]
 reserve   = "look"           # room agents never use; "" for none
@@ -644,6 +660,36 @@ run_limit = "8h"
 [server]
 listen = "unix"              # unix | loopback | tailnet (§7.1)
 ```
+
+**A site wrapper in front of the batch system.** `[sched.slurm] bin` and
+`[sched.lsf] bin` name a directory the commands (`sbatch`, `squeue`,
+`sacct`, `scancel`; `bsub`, `bjobs`, `bkill`) are run from instead of
+`PATH`. A site that requires flags on every job (a license tag, a cost
+code, an approved queue) puts small wrappers there that add them and
+`exec` the real command, and sets `bin` in the site config
+(`/etc/wpk/config.toml`, with `[site] locked = ["sched.lsf.bin"]` so a
+user cannot point it elsewhere).
+
+**A backend of your own.** For a farm none of `local`, `slurm` and `lsf`
+fits, a Python package registers a `Backend` subclass
+(`work_packet.sched.backends.Backend`, §5.1) under the
+`work_packet.sched_backends` entry-point group:
+
+```toml
+# the site package's pyproject.toml
+[project.entry-points."work_packet.sched_backends"]
+acmefarm = "acme_wpk.farm:AcmeFarm"
+```
+
+`[sched] backend = "acmefarm"` then selects it; it is made as
+`AcmeFarm(cfg, h)`, where `cfg` is the merged `[sched]` table and its
+own settings are in `cfg["acmefarm"]` (`[sched.acmefarm]` in
+`config.toml`; the config check allows that table only for the selected
+plugin backend). It implements `submit`, `poll`, `cancel` and
+`list_ours`, and may set `poll_s` and `holds_room_while_pending`. A
+plugin that does not load, is not a `Backend` subclass, or takes a
+built-in's name is not used and is shown as a warning by `wpk doctor`;
+`[plugins] disable` turns it off like any plugin.
 
 Per project (`project.toml`): `max_cores`, `weight`, `budget_usd_per_day`,
 `budget_quota_per_week`, `sizes` (allowed), and `[slurm]` / `[lsf]`

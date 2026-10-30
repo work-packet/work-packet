@@ -59,7 +59,16 @@ def run(h=None, probe=True, wait_s=180):
     else:
         out.append(Check("ok", "board listener: %s" % ("unix socket" if listen == "unix"
                                                        else "loopback, single-user host")))
-    be = cfg.get("backend", "local")
+    sp = registry.site_config_path()
+    if sp and os.path.exists(sp):
+        out.append(Check("ok", "site config: %s" % sp))
+        locks = registry.overridden_locks(h)
+        if locks:
+            out.append(Check("warn", "config.toml sets locked keys: %s" % ", ".join(locks),
+                             "the site config locks them; its values are used",
+                             ["remove them from %s" % os.path.join(h, "config.toml")]))
+    out += credential_checks(h)
+    be =cfg.get("backend", "local")
     if be == "local":
         out.append(Check("ok", "backend local: steps run on this host"))
         return out
@@ -75,6 +84,23 @@ def run(h=None, probe=True, wait_s=180):
     out.append(Check("ok", "%s commands found%s" % (be, " in " + bindir if bindir else "")))
     if probe:
         out += _probe(h, cfg)
+    return out
+
+
+def credential_checks(h):
+    """One row per stored credential (design E3): status, subject, expiry and
+    the command to renew. Doctor runs as the home's owner, so no secrets leak."""
+    from .. import credentials
+    out = []
+    for r in credentials.rows(h):
+        bits = [r["status"]]
+        if r["subject"]:
+            bits.append("signed in as %s" % r["subject"])
+        if r["expires"]:
+            bits.append("expires %s" % r["expires"])
+        fix = ([r["renew"]] if r["renew"] else []) if r["status"] != "ok" else []
+        out.append(Check("ok" if r["status"] == "ok" else "warn",
+                         "credential %s: %s" % (r["name"], ", ".join(bits)), r["note"], fix))
     return out
 
 

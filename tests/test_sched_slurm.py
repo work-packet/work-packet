@@ -101,6 +101,10 @@ def test_submit_argv_per_size(home):
     assert argv[argv.index("-t") + 1] == "4:00:00" and argv[argv.index("-c") + 1] == "8"
     assert argv[argv.index("-p") + 1] == "big" and "--exclusive" in argv
     assert argv[-1].endswith("wpk step /proj/packets/w --lost preempted")
+    assert "--constraint" not in argv
+    task.size = sconfig._size("c", {"cpus": 2, "constraint": "avx512&ib"})
+    argv = b.submit_argv(task)
+    assert argv[argv.index("--constraint") + 1] == "avx512&ib"
 
 
 def test_sacct_formats():

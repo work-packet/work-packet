@@ -9,12 +9,14 @@ import os
 import re
 import shutil
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 
 from . import (clock, docs, faults, frontmatter, fsutil, harness, journal, livecard, model,
                notes, procs, profiles, prompt, questions, registry, report, schema, spawn,
                waiting, workspace)
+from . import cost, hooks as hookmod
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, project_of, settings
@@ -319,6 +321,24 @@ def _move_failed(pkt, n):
     return r
 
 
+def _failed_meta(sd, n, a, why, start=None):
+    """Mark the failed attempt's meta.json with why; write one if the run left
+    none (it did not finish, or never ran), so stats can count every attempt."""
+    path = os.path.join(sd, "meta.json")
+    try:
+        with open(path, encoding="utf-8") as fp:
+            m = json.load(fp)
+    except (OSError, ValueError):
+        if not os.path.isdir(sd):
+            return
+        start = start or {}
+        m = {"step": n, "attempt": a, "start": start.get("t"), "end": _ts(),
+             "model": start.get("model"),
+             "session_id": start.get("session_id"), "cost_usd": None, "tokens": {}}
+    m["failed"] = why
+    fsutil.atomic_write(path, json.dumps(m, indent=2) + "\n")
+
+
 def _recover(pkt, st, lost=None):
     """Finish or clean up a crashed step. Returns a message, or None if there was nothing.
 
@@ -343,6 +363,7 @@ def _recover(pkt, st, lost=None):
                "why": "attempt did not finish"}
         if lost:
             rec.update(why="attempt did not finish: %s" % lost, counted=False)
+        _failed_meta(pkt.step_dir(n, r), n, a, rec["why"], start)
         journal.append(pkt.journal_path, rec)
         msg = "recorded step %d attempt %d as failed (it did not finish)" % (n, a)
         if lost:
@@ -395,6 +416,7 @@ def _fail(pkt, st, n, a, why):
     The ``.pending/`` files it left are kept there for the retry's prompt."""
     r = _move_failed(pkt, n)
     _keep_pending(pkt, pkt.step_dir(n, r))
+    _failed_meta(pkt.step_dir(n, r), n, a, why)
     meta, body = pkt.load_status()
     meta.update(attempts=a, updated=_ts())
     if a >= st.max_attempts:
@@ -630,7 +652,14 @@ def _model(pkt, st, h, spec, env, sd, lease, text, timeout_s, append=False):
         lease.stop_refresher()
 
 
-def _meta(n, a, now, end, h, prof, meta, session, carried, res, prev):
+def _route(h, env, res):
+    """Which account and API host the run used (docs/harness.md): never the key."""
+    url = env.get(h.base_url_var) if h.base_url_var else None
+    return {"account": res.account or "unknown",
+            "host": (urllib.parse.urlparse(url).hostname if url else None) or "default"}
+
+
+def _meta(n, a, now, end, h, prof, meta, session, carried, res, prev, env):
     return {
         "step": n, "attempt": a, "start": _ts(now), "end": _ts(end), "harness": h.name,
         "profile": prof.id, "model": meta["model"],
@@ -640,7 +669,8 @@ def _meta(n, a, now, end, h, prof, meta, session, carried, res, prev):
         "cost_usd": _step_cost(res, prev, h.caps.cost_is_chain_total),
         "session_cost_usd": res.cost_usd,
         "tokens": res.tokens, "context": _context_meta(res, prev),
-        "duration_s": res.duration_s, "api_s": res.api_s, "quota": res.quota or None}
+        "duration_s": res.duration_s, "api_s": res.api_s, "quota": res.quota or None,
+        "route": _route(h, env, res)}
 
 
 def allowed_sizes(st):
@@ -769,39 +799,55 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
     env.update(WPK_STARTED_AT="%.0f" % t0, WPK_DEADLINE="%.0f" % (t0 + st.step_timeout_s),
                WPK_WARN_AT="%.0f" % (t0 + TIME_WARN * st.step_timeout_s))
     env.update(h.env(spec))
-    run = functools.partial(_model, pkt, st, h, spec, env, sd, lease)
-    res = run(text, st.step_timeout_s)
-    end = clock.now()
-    faults.point("after-model")
-    meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev)
-    fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(meta_out, indent=2) + "\n")
-    why, mm = _check(pkt, st, snap, res)
-    if why is not None and _nudgeable(h, res, why):
-        # One more turn in the same session: the work is all in its context,
-        # only the two files are missing (docs/experiments/dvs-enh-steps.md).
-        journal.append(pkt.journal_path, {"type": "step-nudge", "t": _ts(), "step": n,
-                                          "attempt": a, "why": why})
-        snap = _snapshot(pkt)       # the journal line is part of it, as at step-start
-        lease.start_refresher()
-        try:
-            _wait_for_leftovers(meta["wpid"], n, NUDGE_WAIT_S)
-        finally:
-            lease.stop_refresher()
-        first = res
-        nspec = dataclasses.replace(spec, resume_from=res.session_id, session_id=str(
-            uuid.uuid5(uuid.UUID(meta["wpid"]), "%d:%d:nudge" % (n, run_no))),
-            budget_usd=max(spec.budget_usd - (res.cost_usd or 0.0), NUDGE_BUDGET_MIN))
-        run = functools.partial(_model, pkt, st, h, nspec, env, sd, lease)
-        res = run(NUDGE % why, max(st.step_timeout_s - res.duration_s, NUDGE_TIMEOUT_MIN),
-                  append=True)
-        if not h.caps.cost_is_chain_total and None not in (res.cost_usd, first.cost_usd):
-            res.cost_usd += first.cost_usd
-        res.duration_s = round(first.duration_s + res.duration_s, 3)
+    hooks = hookmod.Hooks(sd, meta["wpid"], n, a, h.name, meta["model"], env)
+    hooks.start()       # after the harness env, so a hook can point the run elsewhere
+    try:
+        run = functools.partial(_model, pkt, st, h, spec, env, sd, lease)
+        res = run(text, st.step_timeout_s)
         end = clock.now()
-        meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev)
-        meta_out["nudged"] = why
+        faults.point("after-model")
+        meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev, env)
+        ext = hooks.finish(res)
+        if ext:
+            meta_out["ext"] = ext
+        cost.settle(meta_out, prof.price, sd)
         fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(meta_out, indent=2) + "\n")
         why, mm = _check(pkt, st, snap, res)
+        if why is not None and _nudgeable(h, res, why):
+            # One more turn in the same session: the work is all in its context,
+            # only the two files are missing (docs/experiments/dvs-enh-steps.md).
+            journal.append(pkt.journal_path, {"type": "step-nudge", "t": _ts(), "step": n,
+                                              "attempt": a, "why": why})
+            snap = _snapshot(pkt)       # the journal line is part of it, as at step-start
+            lease.start_refresher()
+            try:
+                _wait_for_leftovers(meta["wpid"], n, NUDGE_WAIT_S)
+            finally:
+                lease.stop_refresher()
+            first = res
+            nspec = dataclasses.replace(spec, resume_from=res.session_id, session_id=str(
+                uuid.uuid5(uuid.UUID(meta["wpid"]), "%d:%d:nudge" % (n, run_no))),
+                budget_usd=max(spec.budget_usd - (res.cost_usd or 0.0), NUDGE_BUDGET_MIN))
+            run = functools.partial(_model, pkt, st, h, nspec, env, sd, lease)
+            res = run(NUDGE % why, max(st.step_timeout_s - res.duration_s, NUDGE_TIMEOUT_MIN),
+                      append=True)
+            if not h.caps.cost_is_chain_total and None not in (res.cost_usd, first.cost_usd):
+                res.cost_usd += first.cost_usd
+            res.duration_s = round(first.duration_s + res.duration_s, 3)
+            end = clock.now()
+            meta_out = _meta(n, a, now, end, h, prof, meta, session, carried, res, prev, env)
+            ext = hooks.finish(res)
+            if ext:
+                meta_out["ext"] = ext
+            two = [x for x in (cost.priced(r.tokens, prof.price) for r in (first, res))
+                   if x is not None]
+            cost.settle(meta_out, prof.price, sd, priced_usd=round(sum(two), 6) if two else None)
+            meta_out["nudged"] = why
+            fsutil.atomic_write(os.path.join(sd, "meta.json"),
+                                json.dumps(meta_out, indent=2) + "\n")
+            why, mm = _check(pkt, st, snap, res)
+    finally:
+        hooks.stop()
     if why is not None:
         return _fail(pkt, st, n, a, why)
     # 12. Resolve.

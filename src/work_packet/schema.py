@@ -105,9 +105,45 @@ SCHED_DEFAULTS = {                    # docs/scheduler.md §10
 SCHED_BACKENDS = ("local", "slurm", "lsf")
 SCHED_CLASSES = ("urgent", "high", "normal", "low", "background")
 SCHED_MODES = ("run", "drain", "stop")
-SIZE_KEYS = ("cpus", "mem", "time", "partition", "queue", "extra")
+LSF_SECTIONS = ("select", "order", "rusage", "span", "same", "cu", "affinity")
+
+
+def lsf_sections(s):
+    """Split an LSF ``-R`` string into ``[(section, body)]``. Text outside
+    ``name[...]`` is a ``select`` expression (``type==X86_64``)."""
+    out, i, n = [], 0, len(s)
+    while i < n:
+        m = _LSF_SECTION.match(s, i)
+        if m and m.group(1) in LSF_SECTIONS:
+            depth, j = 1, m.end()
+            while j < n and depth:
+                depth += {"[": 1, "]": -1}.get(s[j], 0)
+                j += 1
+            if depth:
+                raise ValueError("unclosed %s[" % m.group(1))
+            out.append((m.group(1), s[m.end():j - 1].strip()))
+            i = j
+            continue
+        m = _LSF_FREE.match(s, i)
+        if not m or not m.group(1):
+            if s[i:].strip():
+                raise ValueError("cannot read %r (sections: %s)" % (s[i:], ", ".join(LSF_SECTIONS)))
+            break
+        out.append(("select", m.group(1)))
+        i = m.end()
+    return out
+
+
+_LSF_SECTION = re.compile(r"\s*([a-z]+)\[")
+_LSF_FREE = re.compile(r"\s*([^\[\]]*?)\s*(?=\b(?:%s)\[|$)" % "|".join(LSF_SECTIONS))
+
+
+SIZE_KEYS = ("cpus", "mem", "time", "partition", "queue", "extra", "resources", "constraint",
+             "env", "label", "description")
 SCHED_BUDGET_DEFAULTS = {             # §4; Q2
-    "measure": "",                     # usd | tokens | quota; empty: no budget
+    "measure": "",                     # usd | tokens | quota | provider; empty: no budget
+    "provider": "",                    # measure = "provider": the work_packet.budget plugin
+    "route": "",                       # provider: count local steps of this route (glob)
     "amount": 0.0,
     "period": "week",                  # day | week | month (ignored for quota)
     "slack": 0.1,
@@ -617,9 +653,14 @@ def validate_size(name, t, where="sched.sizes"):
             parse_duration(t["time"])
         except ValueError as e:
             out.append(_err(f + ".time", str(e)))
-    for k in ("partition", "queue"):
+    for k in ("partition", "queue", "resources", "constraint", "env", "label", "description"):
         if k in t and not isinstance(t[k], str):
             out.append(_err("%s.%s" % (f, k), "must be a string"))
+    if isinstance(t.get("resources"), str):
+        try:
+            lsf_sections(t["resources"])
+        except ValueError as e:
+            out.append(_err(f + ".resources", str(e)))
     if "extra" in t and not _strs(t["extra"]):
         out.append(_err(f + ".extra", "must be a list of strings"))
     return out
@@ -629,8 +670,13 @@ def _validate_budget(t):
     if not isinstance(t, dict):
         return [_err("sched.budget", "must be a table")]
     out = _unknown(t, tuple(SCHED_BUDGET_DEFAULTS), "sched.budget")
-    if t.get("measure", "") not in ("", "usd", "tokens", "quota"):
-        out.append(_err("sched.budget.measure", "must be usd, tokens or quota"))
+    if t.get("measure", "") not in ("", "usd", "tokens", "quota", "provider"):
+        out.append(_err("sched.budget.measure", "must be usd, tokens, quota or provider"))
+    for k in ("provider", "route"):
+        if not isinstance(t.get(k, ""), str):
+            out.append(_err("sched.budget." + k, "must be a string"))
+    if t.get("measure") == "provider" and not t.get("provider"):
+        out.append(_err("sched.budget.provider", "measure = \"provider\" needs provider = <name>"))
     if t.get("period", "week") not in ("day", "week", "month"):
         out.append(_err("sched.budget.period", "must be day, week or month"))
     for k in ("amount", "slack", "hard_cap", "default_step", "cache_read_weight"):
@@ -663,9 +709,15 @@ def validate_sched(t):
     """``[sched]`` (docs/scheduler.md §10)."""
     if not isinstance(t, dict):
         return [_err("sched", "must be a table")]
-    out = _unknown(t, tuple(SCHED_DEFAULTS), "sched")
-    if t.get("backend", "local") not in SCHED_BACKENDS:
-        out.append(_err("sched.backend", "must be one of %s" % ", ".join(SCHED_BACKENDS)))
+    backend = t.get("backend", "local")
+    known = SCHED_BACKENDS
+    if backend not in SCHED_BACKENDS:
+        from .sched import backends
+        known = tuple(backends.names())
+    # a plugin backend keeps its own settings in [sched.<name>]
+    out = _unknown(t, tuple(SCHED_DEFAULTS) + (() if backend in SCHED_BACKENDS else (backend,)), "sched")
+    if backend not in known:
+        out.append(_err("sched.backend", "must be one of %s" % ", ".join(known)))
     for k in ("cores", "jobs"):
         v = t.get(k, 0)
         if not (is_int(v) and v >= 0):
@@ -749,11 +801,66 @@ def _validate_console(d):
     return out
 
 
+HARNESS_KEYS = ("env", "env_file")     # [harnesses.<name>] (docs/harness.md)
+
+
+def _validate_harness(d):
+    t = d.get("harnesses")
+    if t is None:
+        return []
+    if not (isinstance(t, dict) and all(isinstance(v, dict) for v in t.values())):
+        return [_err("harnesses", "must be a table of [harnesses.<name>] tables")]
+    out = []
+    for name, h in t.items():
+        k = "harnesses." + name
+        out += _unknown(h, HARNESS_KEYS, k)
+        env = h.get("env", {})
+        if not (isinstance(env, dict) and all(isinstance(v, str) for v in env.values())):
+            out.append(_err(k + ".env", "must be a table of strings"))
+        if "env_file" in h and not (isinstance(h["env_file"], str) and h["env_file"]):
+            out.append(_err(k + ".env_file", "must be a path"))
+    return out
+
+
+def _validate_plugins(d):
+    """``[plugins]``: enable/disable lists of names; any other key is a
+    plugin's own table, which only the plugin checks (design E1)."""
+    t = d.get("plugins")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("plugins", "must be a table")]
+    out = []
+    for k, v in t.items():
+        if k in ("enable", "disable"):
+            if not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+                out.append(_err("plugins." + k, "must be a list of plugin names"))
+        elif not isinstance(v, dict):
+            out.append(_err("plugins." + k, "must be a [plugins.%s] table" % k))
+    return out
+
+
+def _validate_site(d):
+    """``[site]``: ``locked``, dotted keys of the site config a user's
+    ``config.toml`` may not override (design E8.1)."""
+    t = d.get("site")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("site", "must be a table")]
+    out = _unknown(t, ("locked",), "site")
+    v = t.get("locked", [])
+    if not (isinstance(v, list) and all(isinstance(x, str) and x for x in v)):
+        out.append(_err("site.locked", "must be a list of dotted keys"))
+    return out
+
+
 def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
-                                                "console")) \
+                                                "console", "harnesses", "plugins", "site")) \
         + _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d) \
-        + _validate_console(d) + _validate_forges(d.get("forge"))
+        + _validate_console(d) + _validate_forges(d.get("forge")) + _validate_harness(d) \
+        + _validate_plugins(d) + _validate_site(d)
     v = d.get("max_step_budget_usd", 1)
     if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
         out.append(_err("max_step_budget_usd", "must be a number > 0"))

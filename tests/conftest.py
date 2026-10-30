@@ -15,6 +15,12 @@ NS_WPK = uuid.UUID("6f0c3e1a-8b7d-5c2e-9f4a-1d3b5e7a9c0b")
 MODEL = "claude-haiku-4-5-20251001"
 
 
+@pytest.fixture(autouse=True)
+def _no_site_config(monkeypatch):
+    """No test reads the host's /etc/wpk/config.toml."""
+    monkeypatch.setenv("WPK_SITE_CONFIG", "")
+
+
 def child_wpid(parent, step, index):
     return str(uuid.uuid5(NS_WPK, "%s:%d:%d" % (parent, step, index)))
 

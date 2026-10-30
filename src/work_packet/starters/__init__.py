@@ -92,19 +92,32 @@ def _load():
         return
     _loaded.append(True)
     from . import builtin            # noqa: F401  (registers)
-    try:
-        from importlib.metadata import entry_points
-        eps = entry_points(group="work_packet.starters")
-    except Exception:                 # noqa: BLE001  (old Pythons, broken metadata)
-        eps = []
-    for ep in eps:
+    from .. import plugins
+    for p in plugins.load("work_packet.starters"):
+        if not p.enabled:
+            continue
         try:
-            register(ep.load())
+            if p.error is not None:
+                raise RuntimeError(p.error)
+            register(p.obj)
+            _from_plugins.append(p.obj.name)
         except Exception as e:        # noqa: BLE001  a broken plugin must not break New task
-            _broken[ep.name] = str(e)
+            _broken[p.name] = str(e)
 
 
 _broken = {}
+_from_plugins = []
+
+
+def _reset():
+    """Forget the entry-point starters (tests); the built-ins stay."""
+    from .. import plugins
+    plugins._reset()
+    for n in _from_plugins:
+        _REGISTRY.pop(n, None)
+    _from_plugins.clear()
+    _broken.clear()
+    _loaded.clear()
 
 
 def names():

@@ -65,8 +65,54 @@ class Backend:
         pass
 
 
+BUILTIN = ("local", "slurm", "lsf")
+GROUP = "work_packet.sched_backends"
+_plugins = {}       # name -> Backend subclass, from entry points
+_broken = {}        # name -> why it did not load
+_loaded = []
+
+
+def _load():
+    """Read the ``work_packet.sched_backends`` entry points once. A built-in
+    keeps its name; a plugin that does not load is kept in ``broken()``."""
+    if _loaded:
+        return
+    _loaded.append(True)
+    from ... import plugins
+    for p in plugins.load(GROUP):
+        if not p.enabled:
+            continue
+        if p.name in BUILTIN:
+            p.error = "the name is a built-in backend (%s not used)" % p.value
+        elif p.error is None and not (isinstance(p.obj, type) and issubclass(p.obj, Backend)):
+            p.error = "TypeError: %s is not a Backend subclass" % p.value
+        if p.error is not None:
+            _broken[p.name] = p.error
+            continue
+        _plugins[p.name] = p.obj
+
+
+def _reset():
+    """Forget the entry points read (tests)."""
+    _loaded.clear()
+    _plugins.clear()
+    _broken.clear()
+
+
+def names():
+    _load()
+    return sorted(set(BUILTIN) | set(_plugins))
+
+
+def broken():
+    """Entry-point backends that were not used: {name: why}."""
+    _load()
+    return dict(_broken)
+
+
 def get(cfg, h=None):
-    """The backend ``[sched] backend`` names."""
+    """The backend ``[sched] backend`` names. A plugin backend is made as
+    ``cls(cfg, h)``; its own settings are in ``cfg[<name>]``."""
     name = cfg.get("backend", "local")
     if name == "local":
         from .local import Local
@@ -77,4 +123,9 @@ def get(cfg, h=None):
     if name == "lsf":
         from .lsf import Lsf
         return Lsf(cfg, h)
+    _load()
+    if name in _plugins:
+        return _plugins[name](cfg, h)
+    if name in _broken:
+        raise ValueError("backend %r did not load: %s" % (name, _broken[name]))
     raise ValueError("unknown backend %r" % name)

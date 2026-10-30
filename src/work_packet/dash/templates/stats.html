@@ -25,7 +25,7 @@
 {% macro prow(r) -%}
   <tr><td><a href="/p/{{ r.name|urlencode }}/cost">{{ r.name }}</a></td>{% if side|length > 1 %}<td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>{% endif %}
     {% if burn.days > 1 %}<td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>{% endif %}
-    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.quota_week|pct }}</td>
+    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}{% if r.cost_bases and r.cost_bases|length > 1 %}<span title="mixed cost basis: {{ r.cost_bases|join(', ') }}">*</span>{% endif %}</td><td class="num">{{ r.quota_week|pct }}</td>
     <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
     <td class="num">{{ r.output_tokens|tok }}</td><td class="num">{{ r.thinking_share|pct }}</td>
     <td class="num {{ 'err' if r.failed_share and r.failed_share > 0.1 }}">{{ r.failed_share|pct }}</td></tr>
@@ -56,7 +56,7 @@
   {% for b in side %}{% set r = burn.boards.get(b.name) %}{% if r %}
   <tr><td><a href="/b/{{ b.name|urlencode }}">{{ b.name }}</a></td>
     {% if burn.days > 1 %}<td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>{% endif %}
-    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td>
+    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}{% if r.cost_bases and r.cost_bases|length > 1 %}<span title="mixed cost basis: {{ r.cost_bases|join(', ') }}">*</span>{% endif %}</td>
     <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.output_tokens|tok }}</td></tr>
   {% endif %}{% endfor %}
 </table></div>

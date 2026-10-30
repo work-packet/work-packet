@@ -1,6 +1,5 @@
 """``[sched]``: sizes and pool limits (docs/scheduler.md §5.2, §10)."""
 
-import copy
 import os
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
@@ -13,14 +12,7 @@ def sched_dir(h=None):
     return os.path.join(h or registry.home(), "sched")
 
 
-def _merge(base, over):
-    out = copy.deepcopy(base)
-    for k, v in over.items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _merge(out[k], v)
-        else:
-            out[k] = copy.deepcopy(v)
-    return out
+_merge = registry.merge_tables
 
 
 def load(h=None, raw=None):
@@ -51,6 +43,11 @@ class Size:
     partition: str = ""
     queue: str = ""
     extra: Tuple[str, ...] = ()
+    resources: str = ""              # LSF: merged into the one -R
+    constraint: str = ""             # SLURM: --constraint
+    env: str = ""                    # lines run after node_env, for jobs of this size
+    label: str = ""                  # shown in pickers in place of the name
+    description: str = ""            # what the size is for: pickers, the prompt
 
     def describe(self):
         out = "%d core%s" % (self.cpus, "" if self.cpus == 1 else "s")
@@ -59,6 +56,16 @@ class Size:
         if self.time_s:
             out += ", up to %s" % fmt_dur(self.time_s)
         return out
+
+    @property
+    def text(self):
+        """A picker's option text."""
+        return self.label or self.name
+
+    @property
+    def title(self):
+        """A picker's tooltip: the shape, then what it is for."""
+        return self.describe() + (": " + self.description if self.description else "")
 
 
 def fmt_mem(mb):
@@ -82,7 +89,10 @@ def _size(name, t):
                 mem_mb=schema.parse_mem(t["mem"]) if t.get("mem") else 0,
                 time_s=schema.parse_duration(t["time"]) if t.get("time") else None,
                 partition=t.get("partition", ""), queue=t.get("queue", ""),
-                extra=tuple(t.get("extra") or ()))
+                extra=tuple(t.get("extra") or ()),
+                resources=t.get("resources", ""), constraint=t.get("constraint", ""),
+                env=t.get("env", ""), label=t.get("label", ""),
+                description=t.get("description", ""))
 
 
 def sizes(cfg):

@@ -48,7 +48,7 @@ table.pk .tree { color: var(--muted); } table.pk.sorted .tree { display: none; }
   <button class="mini" name="op" value="hold" title="Hold their projects: nothing new starts there">Hold project</button>
   <select name="value" aria-label="class or size"><option value="">class or size…</option>
     <optgroup label="class">{% for c in classes %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</optgroup>
-    {% if sizes|length > 1 %}<optgroup label="size">{% for z in sizes %}<option value="{{ z }}">{{ z }}</option>{% endfor %}</optgroup>{% endif %}
+    {% if sizes|length > 1 %}<optgroup label="size">{% for z in sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</optgroup>{% endif %}
   </select>
   <button class="mini" name="op" value="prio">Set class</button>
   {% if sizes|length > 1 %}<button class="mini" name="op" value="size">Set size</button>{% endif %}

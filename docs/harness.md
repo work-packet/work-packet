@@ -58,6 +58,34 @@ The protocol has a harness-neutral part (`prompts/protocol.md`) and a short
 harness part (`prompts/harness-<name>.md`): Claude Code's "Read before
 Write" rule and tool names live there.
 
+### Per-home environment
+
+A home can give a harness's runs extra environment, such as a gateway URL
+and its key, in `config.toml`. The table is `[harnesses.<name>]` (plural:
+the top-level `harness` key names the default harness):
+
+```toml
+[harnesses.claude]
+env_file = "claude.env"          # relative to the home; ~ expanded
+
+[harnesses.claude.env]
+ANTHROPIC_BASE_URL = "https://gateway.example/v1"
+```
+
+The order is: wpk's own environment, then `env`, then `env_file`. The file
+holds `KEY=VALUE` lines (`#` comments, `export ` and quotes allowed) and
+must be mode 0600: if group or others can read it, wpk warns and skips the
+file (the `env` table still applies). Keys belong in the file, not in
+`config.toml`.
+
+Each step's `meta.json` records its route, never the key:
+`"route": {"account": "subscription", "host": "gateway.example"}`. The
+account comes from the transcript (Claude Code's `apiKeySource`: `none` is
+a subscription login, anything else is `key`; `unknown` if not reported);
+the host from the adapter's `base_url_var` (`ANTHROPIC_BASE_URL` for
+Claude), or `default`. `wpk stats --by route` gives token use and cost per
+`account@host`.
+
 ## 4. Profiles (H2)
 
 Built in at `work_packet/profiles.toml`, overridable in the runner's
@@ -185,6 +213,65 @@ Consequences for the adapters:
   `steps` cap can stand in for a budget.
 - Neither lets wpk choose the session id, so carry-over takes it from the
   previous step's `meta.json` (as it already does).
+
+### The Codex adapter
+
+`harness = "codex"` in a profile runs steps under `codex exec` (or
+`$WPK_CODEX`). It is a first cut, **not yet run against a real Codex**: the
+command line is all in `Codex.command()` and the event names all in
+`Codex.parse()` (`src/work_packet/harness/codex.py`).
+
+- Command: `codex exec --json --skip-git-repo-check --model <m>`, then
+  `--sandbox workspace-write -c approval_policy="never"` (or
+  `--dangerously-bypass-approvals-and-sandbox` for `bypassPermissions`),
+  `--add-dir` for each linked folder, and `-`: the prompt is on stdin.
+- Caps: none. The protocol leads the prompt (no system slot), there is no
+  context warning, no owner's notes mid-step, no carry-over and no nudge.
+  The project's tool list and step budget are not passed; the sandbox and
+  the step timeout are the limits.
+- Transcript: `thread.started` gives the session id, each `turn.completed`
+  its `usage` (summed; `cached_input_tokens` is recorded as
+  `cache_read_input_tokens` and taken out of `input_tokens`,
+  `reasoning_output_tokens` as `thinking_tokens`), `turn.failed` or `error`
+  fail the run, the last `agent_message` is the text.
+- Cost: Codex reports none; `cost_usd` is empty until it is priced from the
+  profile's `price`.
+- Route: `OPENAI_BASE_URL` gives the host. The account is `key` when
+  `CODEX_API_KEY` or `OPENAI_API_KEY` is set (in the environment or
+  `[harnesses.codex]`), else `subscription` (a ChatGPT login); a guess at
+  which one Codex uses when both are there.
+
+### Writing a harness
+
+A site package (docs/sites.md) can add a harness without changing wpk. Subclass
+`work_packet.harness.Harness` and name it in the package's entry points:
+
+```toml
+# pyproject.toml of the site package
+[project.entry-points."work_packet.harnesses"]
+mycli = "acme_wpk.harness:MyCli"
+```
+
+The class sets `name` (the entry point's name is what profiles use), `caps`
+(only the features it really has: the executor falls back for the rest),
+`base_url_var` if the CLI can be pointed at another API host, and defines:
+
+- `command(spec)`: the argv for one run; the prompt comes on stdin. `spec`
+  is a `StepSpec`: model, session id, permission mode, tools, budget,
+  folders, and the system file, context limit and resume session when the
+  caps allow them.
+- `env(spec)`: extra environment; return `home_env(self.name)` last, so
+  `[harnesses.<name>]` applies.
+- `parse(transcript_path, res)`: fill the `StepResult` from the run's
+  stdout: `got_result` when the run ended its turn, `is_error`,
+  `session_id`, `tokens` (Claude's names where they mean the same),
+  `context`, `cost_usd` if known, `text`, and `account` (never a key).
+- `models()`: `[(model, label)]` for the New task form.
+
+A built-in name (`claude`, `codex`) cannot be taken. An entry point that
+fails to load, or is not a `Harness` subclass, is left out and shown by
+`wpk doctor` as a warning, with the reason; a profile that names it is
+refused as naming an unknown harness.
 
 ## 8. Build plan
 

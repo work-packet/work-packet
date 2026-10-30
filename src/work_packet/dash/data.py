@@ -12,7 +12,7 @@ from datetime import timedelta
 from urllib.parse import quote as urlquote
 
 from .. import (clock, frontmatter, lease as lease_mod, notes as notes_mod, procs as procs_mod,
-               questions, registry, report as report_mod, schema)
+               questions, registry, report as report_mod, schema, stats)
 from .. import archived, layout
 from ..packet import Packet
 from ..project import ProjectError, load_project
@@ -110,6 +110,7 @@ def steps(pkt):
             "dir": name, "n": n, "attempt": attempt, "outcome": outcome,
             "start": _ts(meta.get("start")), "end": _ts(meta.get("end")),
             "cost_usd": meta.get("cost_usd"), "duration_s": meta.get("duration_s"),
+            "cost_basis": stats.basis_of(meta),
             "context_tokens": _context_tokens(meta.get("tokens")),
             "output_tokens": (meta.get("tokens") or {}).get("output_tokens"),
             "summary": _first_line(_read(os.path.join(sd, "summary.md"))),

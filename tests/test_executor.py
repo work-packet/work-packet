@@ -202,6 +202,8 @@ def test_failed_attempt(fresh, fake, fault, why):
     assert (st["state"], st["step"], st["attempts"]) == ("RUNNABLE", 0, 1)
     assert records(root, "step-failed")[0]["why"].find(why.split()[0]) >= 0
     assert os.path.isdir(root.step_dir(1, 1)) and not os.path.exists(root.step_dir(1))
+    failed = json.load(open(os.path.join(root.step_dir(1, 1), "meta.json")))
+    assert why.split()[0] in failed["failed"] and failed["attempt"] == 1
     assert tree(root.state_dir) == before
     assert not os.path.exists(root.pending_dir)
     assert_clean(proj)
@@ -365,6 +367,10 @@ def test_recover_crashed_attempt(fresh):
     assert out.code == 0 and "step 2 attempt 1" in out.msg
     assert status(root)["attempts"] == 1
     assert os.path.isdir(root.step_dir(2, 1)) and not os.path.exists(root.pending_dir)
+    lost = json.load(open(os.path.join(root.step_dir(2, 1), "meta.json")))
+    assert lost.pop("end")
+    assert lost == {"step": 2, "attempt": 1, "start": NOW, "model": "m", "session_id": "s",
+                    "cost_usd": None, "tokens": {}, "failed": "attempt did not finish"}
     assert executor.recover(proj).msg == "nothing to recover"
     assert_clean(proj)
     assert executor.step(proj).code == 0
