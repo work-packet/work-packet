@@ -1,0 +1,13 @@
+Bundled license information:
+
+vega-embed/build/embed.js:
+  /*!
+   * https://github.com/Starcounter-Jack/JSON-Patch
+   * (c) 2017-2022 Joachim Wester
+   * MIT licensed
+   */
+  /*!
+   * https://github.com/Starcounter-Jack/JSON-Patch
+   * (c) 2017-2021 Joachim Wester
+   * MIT license
+   */

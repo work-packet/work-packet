@@ -38,7 +38,7 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pane.js"), "
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Served from the package: compose.js, shell.js and the vendored xterm.js (no CDN, the CSP
 # is script-src 'self'). Name -> media type.
-STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript",
+STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript",
           "vendor/xterm.js": "text/javascript", "vendor/addon-fit.js": "text/javascript",
           "vendor/xterm.css": "text/css"}
 REFRESH_S = 10
@@ -46,6 +46,22 @@ LIVE_MS = 3000             # the live view refreshes faster
 log = logging.getLogger("wpk.dash")
 UPLOAD_MAX = 16 << 20      # bytes of one uploaded input
 PROCS_MAX = 60             # rows of the live view's Processes panel (a -j32 build has hundreds)
+
+
+def _vendored(request, rel):
+    """A file of the studio's vendored libraries (``dash/vendored.py``)."""
+    from . import vendored
+    got = vendored.lookup(rel)
+    if got is None:
+        return PlainTextResponse("not found\n", status_code=404)
+    path, mt, sha = got
+    etag = '"%s"' % sha[:32]
+    hdrs = {"cache-control": vendored.CACHE, "etag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=hdrs)
+    if not os.path.isfile(path):
+        return PlainTextResponse("not found\n", status_code=404)
+    return FileResponse(path, media_type=mt, headers=hdrs)
 
 
 def _inline(text):
@@ -1599,6 +1615,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
 
     async def static(request):
         name = request.path_params["name"]
+        if name not in STATIC and name.startswith("vendor/"):
+            return _vendored(request, name[len("vendor/"):])
         if name not in STATIC:
             return PlainTextResponse("not found\n", status_code=404)
         try:
@@ -1607,6 +1625,21 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         except OSError:
             return PlainTextResponse("not found\n", status_code=404)
         return Response(body, media_type=STATIC[name], headers={"cache-control": "max-age=300"})
+
+    async def content_file(request):
+        """``/sc/<token>/<path>``: a file of a studio's folder, on the sandboxed
+        content origin (``studio/content.py``; the guard checked the token)."""
+        from ..studio import content
+        root = request.scope.get("state", {}).get("content_root")
+        if root is None:            # not through the guard: no token was checked
+            token = request.path_params["token"]
+            root = content.TOKENS.resolve(token)
+            if root is None:
+                return PlainTextResponse("no such content\n", status_code=403)
+        path = content.file_for(root, request.path_params.get("path", ""))
+        if path is None:
+            return PlainTextResponse("not found\n", status_code=404)
+        return FileResponse(path, media_type=content.media_type(path))
 
     async def live_js(request):
         return Response(LIVE_JS, media_type="text/javascript",
@@ -1624,6 +1657,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             return await websocket.close(1008)
         return await dide.proxy_ws(ide_backend, websocket)
 
+    from . import studio as studiomod
+    studio_routes = studiomod.routes(home, agents, render, entry, who, not_found)
     return Starlette(middleware=[Middleware(ArchivedReadOnly, home=home)], routes=[
         Route("/ide/{rest:path}", ide_http,
               methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
@@ -1661,6 +1696,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/static/live.js", live_js),
         Route("/static/pane.js", pane_js),
         Route("/static/{name:path}", static),
+        Route("/sc/{token}/{path:path}", content_file),
         Route("/new", new_form),
         Route("/new/search", new_search),
         Route("/new", new_create, methods=["POST"]),
@@ -1677,6 +1713,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/p/{project}/docs/{entry}/{docset}/{path:path}", docs_file),
         Route("/p/{project}/docslog/{entry}/{docset}", docs_log),
         Route("/p/{project}/markup", markup_post, methods=["POST"]),
+        *studio_routes,
         Route("/p/{project}/{wpid}/act", act, methods=["POST"]),
         Route("/p/{project}/{wpid}/live", live_view),
         Route("/p/{project}/{wpid}/file", deliverable),

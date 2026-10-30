@@ -36,6 +36,7 @@ class StepSpec:
     marker: Optional[str] = None        # C3 hook's state file
     notes: Optional[tuple] = None       # (inbox, notes.seen) for mid-step notes
     resume_from: Optional[str] = None   # C4: session to resume
+    resume_same: bool = False           # continue session_id itself, not a fork (the studio)
 
 
 class Harness:

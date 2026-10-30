@@ -12,3 +12,4 @@ slides/node_modules/
 .codex/
 .cursor/
 
+tools/vendor/node_modules/

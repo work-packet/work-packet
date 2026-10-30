@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{# A studio document in the canvas's frame (docs/studio-plan.md S1.5): the doc-markup
+   article; comments are written into the file, Ask goes to the studio's agent. #}
+{% block title %}{{ rel }}{% endblock %}
+{% block head %}
+<style>
+{% include "_markup_css.html" %}
+body.frame main { max-width: none; margin: 0; padding: 12px 18px; }
+.docbar { position: sticky; top: 0; background: var(--bg); padding: 4px 0; z-index: 5; }
+</style>
+{% endblock %}
+{% block main %}
+<div class="docbar muted">
+  <code>{{ rel }}</code>
+  {% if items %}<span><strong>{{ items }}</strong> markup item{{ "s" if items != 1 }}</span>
+  <button type="button" class="mini" id="mk-ask" title="Ask the studio's agent to deal with the markup">Ask Claude</button>{% endif %}
+  <span class="hint">{% if writable %}Select text to comment or suggest a change · click markup to accept or reject{% else %}read-only: the file cannot be written{% endif %}</span>
+</div>
+{% if html is not none %}
+<article class="panel md" id="mk-doc" data-post="{{ base }}/markup" data-path="{{ rel }}"
+  data-wpid="{{ wpid }}" data-sha="{{ sha }}" data-csrf="{{ csrf or '' }}"
+  data-writable="{{ '1' if writable else '' }}">{{ html|safe }}</article>
+<script src="/static/markup.js?v={{ asset_v }}"></script>
+{% else %}
+<pre class="panel">{{ text }}</pre>
+{% endif %}
+{% endblock %}

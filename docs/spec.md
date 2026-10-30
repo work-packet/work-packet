@@ -268,6 +268,8 @@ present, unknown keys are errors.
 | `children_seen` | map | optional: each child's WPID and the state the last step's prompt showed it in. A child now `COMPLETED`, `FAILED`, `NEEDS_INPUT` or `PAUSED` in a different state wakes a `SLEEPING` parent, at the child's commit or the next scheduler pass (docs/waiting-v1.md §4) |
 | `waiting_on` | list | optional: set by a commit with `resume: wait ...` (§5): the child WPIDs and `request:<id>` it waits on. With it, the packet wakes when all of them (or any, per `wait_mode`) have stopped or come back, not on other news. The next commit replaces or removes it |
 | `wait_mode` | `all` \| `any` | set exactly when `waiting_on` is |
+| `taken_by` | string | optional: who has taken the packet for the studio (`wpk take`, docs/interaction.md §6b). While set, the runner leaves it alone and only a pause changes it; a take of a `RUNNABLE` or `SLEEPING` packet makes it `PAUSED` with reason `studio`. Removed by `wpk release` |
+| `taken` | timestamp | set exactly when `taken_by` is: when the take happened |
 
 `NEEDS_INPUT` means the last step asked a question (`ask:`, §4.2) and the
 packet waits for a hand-off (`wpk handoff`); nothing runs it until then.
@@ -353,7 +355,7 @@ a warning, not an error; the executor ignores it.
 
 | `type` | Written when | Further required keys |
 |---|---|---|
-| `step-start` | after the lease is taken | `step`, `attempt`, `model`, `session_id` |
+| `step-start` | after the lease is taken | `step`, `attempt`, `model`, `session_id`; `worker` for a recorded step (§ meta.json), whose `session_id` may be null |
 | `step-failed` | an attempt ends without committing | `step`, `attempt`, `why`; `run`, the folder's number (§4.4), since it was added; `counted: false` when the scheduler ended it (Stop now, a farm preemption: `wpk step --lost`), and `attempts` was not raised |
 | `step-nudge` | the model's turn ended with `.pending/` incomplete; the session is resumed once | `step`, `attempt`, `why` |
 | `commit-begin` | before any committed file changes | `step`, `decision` (below) |
@@ -399,7 +401,7 @@ journal ends in an unfinished commit (a warning: run `wpk recover`).
 | `deliverables/` | a copy of each file or folder `report.md` lists, at its path (`state/…`, `work/…`), as it was at the commit; `.git` left out; only on `done`/`fail` |
 | `deliverables.json` | `{path: "copied" \| "too large" \| "missing"}` for that copy; past 64 MiB a step copies only what fits |
 | `state.diff` | `diff -ruN` of `state/` before and after |
-| `meta.json` | start, end, harness, profile (`name@version`), model, session id, `carried_from`, exit code, cost (this step's; `session_cost_usd` is what Claude Code reported for the session), tokens (summed over the step's runs: `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`, `thinking_tokens`, `cache_write_1h`, `cache_write_5m`), `context` (`first`, `peak`, `last`, `calls`, `base`, `cache_breaks`, `cache_rewrite`), `duration_s`, `api_s` |
+| `meta.json` | `worker` (`studio` for a step recorded from the studio, docs/interaction.md §6b; absent means `agent`, a model's step), start, end, harness, profile (`name@version`), model, session id, `carried_from`, exit code, cost (this step's; `session_cost_usd` is what Claude Code reported for the session), tokens (summed over the step's runs: `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`, `thinking_tokens`, `cache_write_1h`, `cache_write_5m`), `context` (`first`, `peak`, `last`, `calls`, `base`, `cache_breaks`, `cache_rewrite`), `duration_s`, `api_s` |
 
 For every committed step `1..status.step` a folder `NNNN` exists, except
 steps with no model run (none in Stage 1). Failed attempts are

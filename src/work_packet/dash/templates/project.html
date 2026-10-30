@@ -29,6 +29,11 @@
 <div class="panel" style="margin:12px 0">{% for n in runs %}{% if not loop.first %}<br>{% endif %}Running: {{ n.name or n.short }} step {{ n.running.step }}{% if n.running.attempt and n.running.attempt > 1 %}, attempt {{ n.running.attempt }}{% endif %}.
   <a href="/p/{{ e.name|urlencode }}/{{ n.wpid }}/live"><strong>Live view</strong></a> · <a href="/p/{{ e.name|urlencode }}/{{ n.wpid }}/live#procs">processes</a>{% endfor %}</div>
 {% endif %}
+{% set root = nodes[0] if nodes else None %}
+{% if root %}{% set sbase = "/p/" ~ (e.name|urlencode) ~ "/" ~ root.wpid ~ "/studio" %}
+<div class="panel" style="margin:12px 0">{% if root.taken_by %}In studio ({{ root.taken_by }}): the runner leaves the root packet alone until it is released.
+  <a href="{{ sbase }}"><strong>{{ "Return to the studio" if root.taken_by == user else "See the studio" }}</strong></a>{% elif root.taking %}{{ root.taking }} is taking the root packet for the studio after this step. <a href="{{ sbase }}">Studio</a>{% else %}<a href="{{ sbase }}" title="Work on the root packet live with an agent">Studio</a>: work on this project live with an agent.{% endif %}</div>
+{% endif %}
 {% if rp %}<div style="margin-top:12px">{{ rpm.panel(e, rp, "/p/" ~ e.name|urlencode ~ "/" ~ rp.wpid ~ "#steps") }}</div>{% endif %}
 <h2>Tasks</h2>
 {{ ptm.table(e, tasks) }}

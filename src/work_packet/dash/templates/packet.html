@@ -11,7 +11,20 @@
 <h1><code>{{ p.wpid }}</code>
   {% if p.running %}<span class="state running pulse">RUNNING</span>{% endif %}
   {% if p.meta.state == "NEEDS_INPUT" and p.questions and not p.running %}<a class="state NEEDS_INPUT" href="#answer" title="Answer its questions">NEEDS_INPUT</a>
-  {% else %}<span class="state {{ p.meta.state }}">{{ p.meta.state or "?" }}</span>{% endif %}</h1>
+  {% else %}<span class="state {{ p.meta.state }}">{{ p.meta.state or "?" }}</span>{% endif %}
+  {% if p.taken_by %}<span class="state PAUSED studio" title="taken for the studio: the runner leaves it alone">IN STUDIO</span>{% endif %}</h1>
+{% set sbase = "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid ~ "/studio" %}
+{% if p.taken_by %}
+<div class="panel" style="margin-bottom:12px">In studio ({{ p.taken_by }}) since {{ p.taken|when }}: the runner leaves it alone until it is released.
+  {% if p.taken_by == user %}<a href="{{ sbase }}"><strong>Return to the studio</strong></a>{% else %}<a href="{{ sbase }}">See the studio</a>{% endif %}</div>
+{% elif p.taking %}
+<div class="panel" style="margin-bottom:12px">{{ p.taking }} is taking it for the studio: taking over after this step. <a href="{{ sbase }}">Studio</a></div>
+{% elif p.studio and p.meta.state %}
+<form class="act" method="post" action="{{ sbase }}/open" style="margin:0 0 12px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <button class="go" title="Work on it live with an agent; the runner leaves it alone while the studio is open{{ ' (it takes over after the running step)' if p.running }}">Open studio{{ " after this step" if p.running }}</button>
+</form>
+{% endif %}
 
 {% if p.running %}
 <div class="panel" style="margin-bottom:12px">Running step {{ p.running.step }}, attempt {{ p.running.attempt }},
@@ -31,9 +44,9 @@
   {% else %}<a href="/p/{{ e.name|urlencode }}/compose"><strong>Next batch</strong></a><span class="muted">: {{ "it is done; " if st == "COMPLETED" }}give it a new instruction, change files in a shell, and hand it off.</span>{% endif %}
 </div>
 {% endif %}
-{% if p.questions and not p.running %}
+{% if p.questions and not p.running and not p.taken_by %}
 {{ ans.form(e, p.wpid, p.questions) }}
-{% elif st in ("PAUSED", "FAILED", "NEEDS_INPUT") and not p.running %}
+{% elif st in ("PAUSED", "FAILED", "NEEDS_INPUT") and not p.running and not p.taken_by %}
 <form class="act panel" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:14px">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
   <h2 style="margin-top:0">Hand off</h2>
@@ -42,7 +55,7 @@
   <textarea id="note" name="note"></textarea>
   <div class="row"><button class="go primary" name="action" value="handoff">Hand off to the runner</button></div>
 </form>
-{% elif st in ("RUNNABLE", "SLEEPING") %}
+{% elif st in ("RUNNABLE", "SLEEPING") and not p.taking %}
 <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:12px">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
   {% if p.pausing %}<span class="state PAUSED">PAUSING</span>
@@ -124,7 +137,7 @@
   {% for s in p.steps %}
   <tr>
     <td><a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/{{ s.dir }}">{{ s.n }}{% if s.outcome == "failed" %} attempt {{ s.attempt }}{% endif %}</a></td>
-    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span></td>
+    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span>{% if s.worker and s.worker != "agent" %} <span class="badge" title="done by a person in the {{ s.worker }}, not by a model's step">{{ s.worker }}</span>{% endif %}</td>
     <td style="white-space:nowrap">{{ s.start|when }}</td>
     <td class="num">{{ s.duration_s|secs }}</td>
     <td class="num"{% if s.cost_basis %} title="cost basis: {{ s.cost_basis }}"{% endif %}>{{ s.cost_usd|money }}{% if s.cost_basis and s.cost_basis != "harness" %} <span class="muted">{{ s.cost_basis }}</span>{% endif %}</td>

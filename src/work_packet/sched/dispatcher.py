@@ -309,7 +309,11 @@ class Dispatcher:
             if req is None:
                 out.append(it)
                 continue
-            got = executor.admin(pkt, "pause", by=req.get("by"), reason=executor.pause_reason(req))
+            if req.get("take"):
+                got = executor.take(pkt, by=req.get("by"))
+            else:
+                got = executor.admin(pkt, "pause", by=req.get("by"),
+                                     reason=executor.pause_reason(req))
             if got.code != 0:
                 out.append(it)          # the step will do it
         return out

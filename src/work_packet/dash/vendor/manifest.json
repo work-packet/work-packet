@@ -1,0 +1,903 @@
+{
+ "versions": {
+  "@excalidraw/excalidraw": "0.18.1",
+  "@excalidraw/mermaid-to-excalidraw": "2.2.2",
+  "mermaid": "11.17.2",
+  "react": "18.3.1",
+  "react-dom": "18.3.1",
+  "vega": "6.4.0",
+  "vega-embed": "7.3.0",
+  "vega-interpreter": "2.3.2",
+  "vega-lite": "6.5.0"
+ },
+ "budget": {
+  "vega": 1500000,
+  "draw": 10000000
+ },
+ "files": {
+  "vega/vega.js": {
+   "sha256": "6a18646f1c87b09137dd8fe0ec6e5b0da290289fc25f72be3bcbc27c4b76ad99",
+   "size": 842004
+  },
+  "vega/vega.js.LEGAL.txt": {
+   "sha256": "a76933232e641dd00ca5e46a30ddc256b42cd708b135b8d0344aebe3ca2de651",
+   "size": 288
+  },
+  "draw/chunks/abnfDiagram-VCTEODGH-24JC2LY3.js": {
+   "sha256": "ee223dca8b8362e97e55ba0e48a51817fa4532cb4290c8c56b8673be2c56a6eb",
+   "size": 2294
+  },
+  "draw/chunks/ar-SA-G6X2FPQ2-IYQ2GZUX.js": {
+   "sha256": "aa19e9d79c7ab66b08f73e97b16f4e561b6c7ed29f7c8c59ab920de8a210355c",
+   "size": 57199
+  },
+  "draw/chunks/architecture-7GRP2DOG-H6NWUDNE.js": {
+   "sha256": "5e0beacbe66b065c7fd303b60798effb0037acf8f1bf70a238d906f43edbc148",
+   "size": 168
+  },
+  "draw/chunks/architectureDiagram-5GKGNRK7-SIPWLOI7.js": {
+   "sha256": "9e1814408f1b2f44003cce9dcd4dd4bac9006de7e3e47626fc510530d95dbb63",
+   "size": 152969
+  },
+  "draw/chunks/az-AZ-76LH7QW2-VDSNOIKV.js": {
+   "sha256": "db3461b4667ae1790bbb9576ba3c9586233704c84a880523e80f1b5c24b9d5b2",
+   "size": 9111
+  },
+  "draw/chunks/bg-BG-XCXSNQG7-V3N56KF5.js": {
+   "sha256": "b4cb42f508b47d09a269b92205b8b0c17cb9e9a99e5d58567eaf68566d169737",
+   "size": 44558
+  },
+  "draw/chunks/blockDiagram-I7D4REHJ-RVZWXEER.js": {
+   "sha256": "dd6d24ab1d0886d86d4190cce203cf74ac49d8f749a26cfbeea852023279f147",
+   "size": 40254
+  },
+  "draw/chunks/bn-BD-2XOGV67Q-JHCD244J.js": {
+   "sha256": "77b6624f99e90f7a8070c16dd040d26cdc739303fe5cdfbd79ea16a5d7f1afb2",
+   "size": 38645
+  },
+  "draw/chunks/c4Diagram-7LVT6UL2-52N6L6UF.js": {
+   "sha256": "e409df7e4de6dd91df83f58ee99416c5f915880f29b62a8e8cce3c24a72b6f6b",
+   "size": 65819
+  },
+  "draw/chunks/ca-ES-6MX7JW3Y-OXKW3RQS.js": {
+   "sha256": "ef096556fe434a7a9ec5c78381c288012bdfb17acee5d9092503ee39f42042b7",
+   "size": 20262
+  },
+  "draw/chunks/chunk-2APGBY4I.js": {
+   "sha256": "109fd09d274e2e783609b2af94705f1e462052bcfe517ebdd48513da5b62415d",
+   "size": 62041
+  },
+  "draw/chunks/chunk-2BLJS5WR.js": {
+   "sha256": "ede58a0c31fb48f7c1841056e1718616b135b97ed54638c6a28b35c1a34c47e3",
+   "size": 1558
+  },
+  "draw/chunks/chunk-32M45IKP.js": {
+   "sha256": "2d5f64e1c41c5271ba70064405507c3caa5973fbd91a88dbe523392fdee57249",
+   "size": 912
+  },
+  "draw/chunks/chunk-33DVZHLI.js": {
+   "sha256": "cfb5f152beb79f0a0c44730be24619328bbf5cbbcaf9a1977c984d8abc8c135b",
+   "size": 1044
+  },
+  "draw/chunks/chunk-3S4ZRVCV.js": {
+   "sha256": "f570c70a7549c0a29c90f29865a3043be524886c4019308efeb0ba7292f5eac3",
+   "size": 15727
+  },
+  "draw/chunks/chunk-6GHBDBJQ.js": {
+   "sha256": "299b334b33a4e94caf29a69d9863b6720bdd4ebd33ccc7e7175e9c27bd1c1d67",
+   "size": 22453
+  },
+  "draw/chunks/chunk-7GST2IHF.js": {
+   "sha256": "9c52b93bdec4103076e1732257098bd7852b4d48e88b2a859e6f1e847c129c34",
+   "size": 108714
+  },
+  "draw/chunks/chunk-7Y2IF3B2.js": {
+   "sha256": "b80f0fbedf500a65d9944866e1743c7d0293cb39f86e470d2abc94d855d79b06",
+   "size": 443244
+  },
+  "draw/chunks/chunk-7Y2IF3B2.js.LEGAL.txt": {
+   "sha256": "9aca14ef8d4b303c6666aa8d58ef291346f64af381a0aa1aecdbf238a06f2931",
+   "size": 760
+  },
+  "draw/chunks/chunk-AWGRIQVE.js": {
+   "sha256": "e46d84b03799b1738ddd7e243debed10487bbe1d51036cb00b0e4d416d3220e9",
+   "size": 240205
+  },
+  "draw/chunks/chunk-AWGRIQVE.js.LEGAL.txt": {
+   "sha256": "4245c420f535f6b11e3f590606105d70565d76e4ba670d1f1497c1f39c57800a",
+   "size": 417
+  },
+  "draw/chunks/chunk-B6DLVZHA.js": {
+   "sha256": "a808a0b9549904d5c6a26f05b50176dbc2bbae52aabb9ef683c11d1f3c6823f6",
+   "size": 27373
+  },
+  "draw/chunks/chunk-BFQI4TUY.js": {
+   "sha256": "e427b800c890d2f785c33655660dbfe3a0bc90ef71c30852f29c7e2f312e38f8",
+   "size": 28155
+  },
+  "draw/chunks/chunk-BFQI4TUY.js.LEGAL.txt": {
+   "sha256": "108b77c578b750eb21d34748148ce6a0c86e552be7e54ea96a6ffa103ccb9720",
+   "size": 172
+  },
+  "draw/chunks/chunk-BHR6SABC.js": {
+   "sha256": "bbbc9ec6c03dddd563ad4dcb4ca7329e6b4086685a180c34d5628da2ebb00585",
+   "size": 308
+  },
+  "draw/chunks/chunk-BOBXEZBE.js": {
+   "sha256": "df0430f20bdc4c99db2910cd4bb47cb0997c51b221dd8d839aac65d1e554f91b",
+   "size": 52852
+  },
+  "draw/chunks/chunk-C4FDHM7Q.js": {
+   "sha256": "119fa933b239c3e31a46a4be5f0e285e22cfa9592186f5c3c179a6ffbce38f82",
+   "size": 591
+  },
+  "draw/chunks/chunk-DENTO6ZR.js": {
+   "sha256": "84ecbc04ec95ccb612667189d92d9835860d13123f826c28c65a02c804115a3f",
+   "size": 2527
+  },
+  "draw/chunks/chunk-EGRKB347.js": {
+   "sha256": "19a9e13e176aa80d09743cf994bcea3a8d0c048f0b6ff2a225ff3d10f9c6d3fe",
+   "size": 894
+  },
+  "draw/chunks/chunk-EIBFAW37.js": {
+   "sha256": "db25c7615162582a9a162279563ba063a43b7823caea8a77f0517f8d2dc5385e",
+   "size": 156
+  },
+  "draw/chunks/chunk-ETLER5K2.js": {
+   "sha256": "b8b67a5276319ee5397e599397f2ca555e526a6e3efd62767d19e9a70eff96e2",
+   "size": 449
+  },
+  "draw/chunks/chunk-ETOMFKZJ.js": {
+   "sha256": "b8a825901b4121d201bf477b09d127f3b0dbe7d04d55019f08cdabebaf58d608",
+   "size": 976
+  },
+  "draw/chunks/chunk-GFABIX7B.js": {
+   "sha256": "ecbfa4d1c8246e0b19bb8f66bd2b76b7828431e7bd51373400d34ee0c91b0731",
+   "size": 448
+  },
+  "draw/chunks/chunk-GIK2URCW.js": {
+   "sha256": "59b61c7ca1e696cbe56a5bd0a7bbb88ecf8fccf56abaa5549b3dcdce2f2442f5",
+   "size": 1567
+  },
+  "draw/chunks/chunk-HO3CBVSO.js": {
+   "sha256": "4c5ffd894232cf558ff968b9d25009d91ca8319c11cd7bf52af18c5b2806d704",
+   "size": 1822001
+  },
+  "draw/chunks/chunk-HO3CBVSO.js.LEGAL.txt": {
+   "sha256": "9d6729d5b5efcd1497bc4ea02c55ae358dd16e192613e741a47418db53e0c61e",
+   "size": 3214
+  },
+  "draw/chunks/chunk-IOG4ONDI.js": {
+   "sha256": "ffda623830d572e6574b78ca41f1cd98ae7b2c6a3e52e3e0a0aa6a027c91b382",
+   "size": 17840
+  },
+  "draw/chunks/chunk-JDPIDRBT.js": {
+   "sha256": "c56398090985a11459c1f91f2beda5ead91506a22b32b01d482242425b3ba627",
+   "size": 668353
+  },
+  "draw/chunks/chunk-JDPIDRBT.js.LEGAL.txt": {
+   "sha256": "d7775cb7e11ff052896456388b072b6c234c4ecf13254e902d1fd0a0a5d7288f",
+   "size": 603
+  },
+  "draw/chunks/chunk-JRAHLUQM.js": {
+   "sha256": "32fbfc3dba00282c453ee63e308be4ee619bc04beb48609a717708eda3928f88",
+   "size": 47128
+  },
+  "draw/chunks/chunk-KQT4PB4T.js": {
+   "sha256": "2621740b72a4434413cbaa7bea8d8926a5d2955e26f3c907181183b7162faddf",
+   "size": 36720
+  },
+  "draw/chunks/chunk-LHT7QYDH.js": {
+   "sha256": "29981ca1694fab11683ee33d321e42b24353057fa621f206388474a9e8453f37",
+   "size": 1942
+  },
+  "draw/chunks/chunk-LVWHCJGT.js": {
+   "sha256": "027d99f537b16038b456fd846e418c2c827beeda2397ef8e0abd40343a6a4c38",
+   "size": 1119
+  },
+  "draw/chunks/chunk-NBH7YOBD.js": {
+   "sha256": "88d9ff0c7ed2b6836eb640415a2df19558038a17c876a62d99727fa19909330c",
+   "size": 359
+  },
+  "draw/chunks/chunk-NCOVM3YF.js": {
+   "sha256": "838d515866e7ec1b7276fc3150e4507022a204f3638b451f9591fe57bd1c345d",
+   "size": 220
+  },
+  "draw/chunks/chunk-Q4C55MCK.js": {
+   "sha256": "0abdcb802ed529ce6d441182978d2555c11e579939ef7aa2c811ba7a531abd15",
+   "size": 457
+  },
+  "draw/chunks/chunk-Q5AMKJXY.js": {
+   "sha256": "af3c41c5f15d64d2d8df82cf0ff933d9a7ec429545fa3bb804a19da5ab8bc8c6",
+   "size": 2020
+  },
+  "draw/chunks/chunk-RJ5P45UE.js": {
+   "sha256": "d62d938cc08a713064cacb73e934c64981ec4a160a7243a83771c33e519a8daf",
+   "size": 1412
+  },
+  "draw/chunks/chunk-RU3YXJ4G.js": {
+   "sha256": "3d1d4a153ba76e99d1e24890362e6e3914bd42985693ef8b86a35cc79152bcf1",
+   "size": 557
+  },
+  "draw/chunks/chunk-SICUWOJQ.js": {
+   "sha256": "f159938347e3bc0730586acb0582c993f1525ed215871b0fb7e8ff65f4c8a167",
+   "size": 1895
+  },
+  "draw/chunks/chunk-SKSBZS5M.js": {
+   "sha256": "a45b0d3280b6df30fe3bc2f7c9fe6fdef906cc51d32fc2c503d294b5ddcbfca7",
+   "size": 38368
+  },
+  "draw/chunks/chunk-STYHOYNU.js": {
+   "sha256": "3e9b970259d4b727660310d06970b57d62b9de188e257ac7db0174b5482d9209",
+   "size": 456
+  },
+  "draw/chunks/chunk-TOWZW5H3.js": {
+   "sha256": "4cceae3fabf446795ebca3c157e5190ac6031410b51411f24096ef94b5a28e16",
+   "size": 53212
+  },
+  "draw/chunks/chunk-UCWJGTKX.js": {
+   "sha256": "57ef67a13c898828ff02c9d4a6f3736d13f612c313d23423f2f4d8807e9e3c8a",
+   "size": 10097
+  },
+  "draw/chunks/chunk-UVQJSJR6.js": {
+   "sha256": "580a3694b50f84e9b981f761a4c2e8c077add62a9cba0585d21a283633211533",
+   "size": 3312
+  },
+  "draw/chunks/chunk-UYIUW43X.js": {
+   "sha256": "937e63a345b330c240bc5fcc9a86b42319611226d293d2ed8f43e29fa937fecc",
+   "size": 635
+  },
+  "draw/chunks/chunk-UZNLKM6V.js": {
+   "sha256": "e66f3270c4b1a744c726d8ad80edacf9caad4101f40c73db9ce5cc61bee9fd79",
+   "size": 25645
+  },
+  "draw/chunks/chunk-VI5SWAUG.js": {
+   "sha256": "a9451bc3536aa19c8cc5ed9d385ce589153198f631b74f297976b4a9ac804105",
+   "size": 9729
+  },
+  "draw/chunks/chunk-VLCPJJSU.js": {
+   "sha256": "fdb2696ad23ac845341158c46e486c63ad913f6b0a1f5d171de01b3ca2715b66",
+   "size": 451
+  },
+  "draw/chunks/chunk-VRTBCP2C.js": {
+   "sha256": "2178a598f51f374d01c0232100172fb6f9746c29ca1532c2355a7bbb380f145f",
+   "size": 5870
+  },
+  "draw/chunks/chunk-W5XKGQWE.js": {
+   "sha256": "4f0d1ed820e5080b7eb10ab7005a03ed035e4e2f899299cbe449f98573aa4cd9",
+   "size": 261
+  },
+  "draw/chunks/chunk-WHKVF3RK.js": {
+   "sha256": "8cb40ee804d5e753b9b45a744bc3eba77b2213d0d295316276b5f76a5e756cba",
+   "size": 105563
+  },
+  "draw/chunks/chunk-XP4YW4ZA.js": {
+   "sha256": "8468dab6c1f09f1bc02153c7a7318ccdc22a99a194de4676c78ce5a45016d141",
+   "size": 1032
+  },
+  "draw/chunks/chunk-XWYV4OPA.js": {
+   "sha256": "c018e85d60bf92fd17f31b0a9d11e2c13539a5a845cbc263b0455064f45949bb",
+   "size": 186
+  },
+  "draw/chunks/chunk-YAD37I4J.js": {
+   "sha256": "1bb8267f507f46e605e442949ed9263f574a8152d661b54b578902c33a28b65f",
+   "size": 544583
+  },
+  "draw/chunks/chunk-YAD37I4J.js.LEGAL.txt": {
+   "sha256": "62544d6446f960ae3f37318b41d8e85566921a7777ae492da7ab72d45ca1af31",
+   "size": 735
+  },
+  "draw/chunks/chunk-YDI5R25F.js": {
+   "sha256": "1144e54f239ad04e5cba44e8915f69539bc2d5ef75d7b8feda5d3038dfee3e69",
+   "size": 825
+  },
+  "draw/chunks/chunk-YFPTOMY4.js": {
+   "sha256": "dc0b548d5c46ed3acb48760a9195f10078da8d7f1042e5d2feb76436c4f13721",
+   "size": 1658
+  },
+  "draw/chunks/chunk-YIN5CSIF.js": {
+   "sha256": "0b2d6ee7bf77a8bc1e184d6f1d9d6863fb45cd3c4be79673504e20ddcca0eb8a",
+   "size": 37954
+  },
+  "draw/chunks/chunk-YIN5CSIF.js.LEGAL.txt": {
+   "sha256": "e307472273e1ef372ca969af6d0a32f575f172970adc3b89dfad3600fc632107",
+   "size": 469
+  },
+  "draw/chunks/chunk-YQRC5KG6.js": {
+   "sha256": "e6c1c6ac0993dbb2da7bcf32625696388508149b0de1c59796015257a16e2a4a",
+   "size": 462
+  },
+  "draw/chunks/chunk-ZDCHLQQL.js": {
+   "sha256": "65a6b352c86b3a0abf5b8f1da3d82c21980432dabb1bd2b039724e7055949790",
+   "size": 591
+  },
+  "draw/chunks/chunk-ZOUGGI53.js": {
+   "sha256": "52548a15041c77d45ef9f885eeb001daf68be0f655ff76100fe870b59c46073d",
+   "size": 49269
+  },
+  "draw/chunks/classDiagram-ZZMXUADV-X54GHOWY.js": {
+   "sha256": "d728343143ac30be83585e7b7105d8e18027c8b3efcf8ae888bbc4d9b0352927",
+   "size": 779
+  },
+  "draw/chunks/classDiagram-v2-VYDZK3BY-V65AOTU3.js": {
+   "sha256": "d728343143ac30be83585e7b7105d8e18027c8b3efcf8ae888bbc4d9b0352927",
+   "size": 779
+  },
+  "draw/chunks/cose-bilkent-JH36ORCC-CTIIIU4P.js": {
+   "sha256": "8b7a08fe12a2d7ccbd912df6875a314fe2010df68871e30697dd1c8e5b46a319",
+   "size": 82453
+  },
+  "draw/chunks/cs-CZ-2BRQDIVT-YQXRZWB6.js": {
+   "sha256": "6e785157f111e66c52fac2cb0eaec8c6b52b1f34cd139227709c9bbc124dd637",
+   "size": 22665
+  },
+  "draw/chunks/cynefin-OW5HDTMX-OJ6ZQ4FY.js": {
+   "sha256": "9c96b74ea896482cb30242a3e9a82c547e201f9720f1d70bf22810df3ebc1c84",
+   "size": 158
+  },
+  "draw/chunks/cynefinDiagram-5FMLGOSQ-2RVGRHWO.js": {
+   "sha256": "157f0c76ceb10b466f476af68225e877026662941ea526a277f12e5e1d83f6be",
+   "size": 10592
+  },
+  "draw/chunks/da-DK-5WZEPLOC-2FLBCNTF.js": {
+   "sha256": "d4cb5c5d12e49fe4b84188ae4987f83815b6fedf9707c696ee1dfbf4521f5059",
+   "size": 14738
+  },
+  "draw/chunks/dagre-GXQ25YYZ-LTR653RZ.js": {
+   "sha256": "2ac15c631bcb9047b1dde00ef1dbf19deccecbb3924a323924017741a2d8eb29",
+   "size": 10999
+  },
+  "draw/chunks/de-DE-XR44H4JA-57EAVRF3.js": {
+   "sha256": "989b93e75c874823ef8b27a19a04cb873c3175edb95509a40b1aa1c4603970e6",
+   "size": 23856
+  },
+  "draw/chunks/diagram-S7CK7UJ4-EKWL3OTL.js": {
+   "sha256": "bcb368f55ae2c81c122f6170c2b88474ba36c0bb2bd1790b7d770a33d7cbd0fc",
+   "size": 8717
+  },
+  "draw/chunks/diagram-UQ7AKVKN-3Q73IQOQ.js": {
+   "sha256": "a6ed65d0b064f9cecf1c002ff47e8f2817eb027066cf1f5ef74bb3eddfb4ff83",
+   "size": 6601
+  },
+  "draw/chunks/diagram-VSXAHHWV-OBZYFOBF.js": {
+   "sha256": "69483afcbb4ec686ba4363d8eda197e12248b9496463aaa3769f3dcd0488f0e3",
+   "size": 11195
+  },
+  "draw/chunks/diagram-VX7I27RA-ZPS2QEHU.js": {
+   "sha256": "ceac111b42ca5ef2c30f264d73d0b22139b45ffff3cfd1cbfb90cf7909d0e2fb",
+   "size": 11622
+  },
+  "draw/chunks/diagram-Z3DM3KII-YZIGUOFH.js": {
+   "sha256": "98d5ff501ffda7fa0a07ead2f2c4ff4bf168c38e57d6cbd22bab83988c5fcf3c",
+   "size": 4774
+  },
+  "draw/chunks/directory-open-01563666-X7J2TJMH.js": {
+   "sha256": "3ca879f3e38d437e372c61bc1dcf5983be313bdf508d3a22a4ef8fd2546a981b",
+   "size": 612
+  },
+  "draw/chunks/directory-open-4ed118d0-HNQ3W35L.js": {
+   "sha256": "1f909e0cdb9b3e80c7b8cff72fe7a69cd07817aa8d8d2f195c6b11427bb396db",
+   "size": 1569
+  },
+  "draw/chunks/dist-BLOEA4ZE.js": {
+   "sha256": "791609c73de59799e582276a1863cb8c93eb7e78755d3e2703011605c952c654",
+   "size": 634
+  },
+  "draw/chunks/ebnfDiagram-PWID7BFC-PS2JBGDY.js": {
+   "sha256": "e147a1d00db6ab2135b400b32dc6c4dd40a213b05942312876909af9a369483b",
+   "size": 2508
+  },
+  "draw/chunks/el-GR-BZB4AONW-RVKIZGBR.js": {
+   "sha256": "4a13a7d566388b91eabc96fca31f6794a26e958f8c8546adea5ceaac9c7acbb3",
+   "size": 69299
+  },
+  "draw/chunks/en-B4ZKOASM-2R6GXMHR.js": {
+   "sha256": "ffcccad84560a1306015fd5d19403194218e8ca719a4f767df047aa0ee17ea7f",
+   "size": 903
+  },
+  "draw/chunks/erDiagram-RLTQ6QDP-FW4ZSZCR.js": {
+   "sha256": "b13adfb82b07a6865020eeeb86e5b717543d0f10121ec5896243544bc1d0c862",
+   "size": 31112
+  },
+  "draw/chunks/es-ES-U4NZUMDT-O4AHLR64.js": {
+   "sha256": "8ca60307fb02a18036d9962ca16762804799972cab6f83deb853e1082a52c885",
+   "size": 21780
+  },
+  "draw/chunks/eu-ES-A7QVB2H4-ERJ3KB2Y.js": {
+   "sha256": "434894e3ab314ab8c850f338d1f87a6b6c1695c8d71fec8c52bff2573ce9719f",
+   "size": 21235
+  },
+  "draw/chunks/eventmodeling-NTZA5JFV-MW5YKAIU.js": {
+   "sha256": "2585bc346bddc3129a580ade36e8e7790b3e9e5daa332dd1973604ecde23ac34",
+   "size": 170
+  },
+  "draw/chunks/fa-IR-HGAKTJCU-SSM2QELD.js": {
+   "sha256": "7529b656f5c0a9462f25ec12521438a5bc95ed786f24a4b38f06da396e8fa208",
+   "size": 53096
+  },
+  "draw/chunks/fi-FI-Z5N7JZ37-ND6SVUJU.js": {
+   "sha256": "43c2d78d07af4c7f759a598591dddebad526ed7682cfe4ad7cfc11daf13e364d",
+   "size": 19451
+  },
+  "draw/chunks/file-open-002ab408-XVNVA5XN.js": {
+   "sha256": "6530b60facb0738d749b4ed8b4270552d98a76499ed8efd2cf592576fd91b4dc",
+   "size": 555
+  },
+  "draw/chunks/file-open-7c801643-LQXPYGOB.js": {
+   "sha256": "5773920f849be81623cb632a0c0ea4de4690ed5bcf54d2a6701e0a45b1b34c6b",
+   "size": 474
+  },
+  "draw/chunks/file-save-3189631c-HTLKKZZB.js": {
+   "sha256": "2f69cf6ef85ce7a990d0db96ba1a95998e266ae02b1a3ee294cd96678987b988",
+   "size": 728
+  },
+  "draw/chunks/file-save-745eba88-KKPKTQC2.js": {
+   "sha256": "9daa3e6dd7a9ef470b86ace2d3795ee5da1c6deab9f5ead5a1f6fb2d82692079",
+   "size": 885
+  },
+  "draw/chunks/flowDiagram-HODETNUW-BW3J676I.js": {
+   "sha256": "374f8ce5eb2f68a56170571f826302bd0110312bb3ade5ad46bfabf02f9495dc",
+   "size": 652
+  },
+  "draw/chunks/fr-FR-RHASNOE6-XQ334GI6.js": {
+   "sha256": "535c194a2303cf874d56fbbfcf1134022c9b0663a1024ffa98e194f81a196f7f",
+   "size": 24326
+  },
+  "draw/chunks/ganttDiagram-EL5Y4UJY-7LIMTM3R.js": {
+   "sha256": "91680cc2207132794e322bbad32aad9dcba8f830fd981f692d99512e7e1aa052",
+   "size": 50364
+  },
+  "draw/chunks/gitGraph-4MIJSDKK-BMEATTN7.js": {
+   "sha256": "4600f7ab65652019ed2259d103bb065cd9564be0ca1c19b794e405d627287303",
+   "size": 160
+  },
+  "draw/chunks/gitGraphDiagram-WWUBYQGX-YGEAT5MT.js": {
+   "sha256": "ec221a8b978ffa82d37eea4435a49eb21a056baff8e2b1379728e60cb9160865",
+   "size": 29703
+  },
+  "draw/chunks/gl-ES-HMX3MZ6V-DDH2NQYA.js": {
+   "sha256": "7ba332d072f7fc6c184f019aeae5fedfb2b7672168afa2ef5c413c595a143f36",
+   "size": 19852
+  },
+  "draw/chunks/he-IL-6SHJWFNN-5VV2CHIU.js": {
+   "sha256": "8d90378f168bfc89ca991070c2f5b4098278b1cff0e8841216e61a3c0a990bbc",
+   "size": 42357
+  },
+  "draw/chunks/hi-IN-IWLTKZ5I-3JB5EKJT.js": {
+   "sha256": "b15ebf0e401f23919f48d84a89039115c27541e9fa5c66af766119854f6cc503",
+   "size": 55014
+  },
+  "draw/chunks/hu-HU-A5ZG7DT2-V4DL4FRC.js": {
+   "sha256": "9c88fc049317c7ef718ef7aad7abe5e8af88ac726342aa312a23f97b99f8e2f1",
+   "size": 20428
+  },
+  "draw/chunks/id-ID-SAP4L64H-TEIMBZFO.js": {
+   "sha256": "a9bec39a76074f1fda3fa8704fec815218a9dee1ca36e68975bb28ba5fe26f80",
+   "size": 19709
+  },
+  "draw/chunks/image-GAAHSSAO-K64NJP5C.js": {
+   "sha256": "706f6665946d1daac7c90439388415f42f74235715652aa848f215f4907a7543",
+   "size": 214
+  },
+  "draw/chunks/image-blob-reduce.esm-PEHVL3XK.js": {
+   "sha256": "a141963bacf690f09714290d64450ab902a1ebf68520b875859eb9dd61cf9d33",
+   "size": 46007
+  },
+  "draw/chunks/image-blob-reduce.esm-PEHVL3XK.js.LEGAL.txt": {
+   "sha256": "784af932cf9057a7b45ac984633342b2b59b0028cb6506d0e114355fb3a4c8d4",
+   "size": 227
+  },
+  "draw/chunks/info-A6RAGUB7-7U5X35MM.js": {
+   "sha256": "014ce01a44fff2589ee2142a286f4d5aaeaf6981afb74d639b9beee986940e78",
+   "size": 152
+  },
+  "draw/chunks/infoDiagram-27XIBGKW-EU43ZJCH.js": {
+   "sha256": "fdbc197e0c4061fa378a77390611f9478a15faec748bda6a24dc1b229ed7c910",
+   "size": 1112
+  },
+  "draw/chunks/ishikawaDiagram-5VMMS53U-CVB5PTYP.js": {
+   "sha256": "418e2d56ab2489e69f596bae87ba74799c5b2458cfb5d38b2a37e64ff123125e",
+   "size": 17623
+  },
+  "draw/chunks/it-IT-JPQ66NNP-HZUPDBNZ.js": {
+   "sha256": "b3b91816c617e66bfa73fee39afb3a3fbb211684c86566d072df59d837c5f3f9",
+   "size": 22198
+  },
+  "draw/chunks/ja-JP-DBVTYXUO-KY7HLFKU.js": {
+   "sha256": "2a4c901e20f259631588309103645f044016edea11edf8b80280a3117790f837",
+   "size": 38215
+  },
+  "draw/chunks/journeyDiagram-3NMN7TZE-CDXHAA43.js": {
+   "sha256": "24b15cae31410188d6d9199afd9e31e6b4ae9154dc795cfa5ae4c748215c0487",
+   "size": 23545
+  },
+  "draw/chunks/kaa-6HZHGXH3-N3ZTDB6I.js": {
+   "sha256": "a4d2a4a3450d5b9c6bc12dd0a1098891b1c280b09d677dbd9bd3a70f76d3b112",
+   "size": 10990
+  },
+  "draw/chunks/kab-KAB-ZGHBKWFO-3KMIVDZ5.js": {
+   "sha256": "1df3fcc1339f7f2d9041b3aaadb6b849feabe1529990bab14a0561bb697106ce",
+   "size": 20751
+  },
+  "draw/chunks/kanban-definition-UXKFOSKX-PTUEQH36.js": {
+   "sha256": "a71261a59af3582e1171cecbb65356347a027adc52151501eef34f497a7522ca",
+   "size": 20780
+  },
+  "draw/chunks/katex-IMZF2CO6.js": {
+   "sha256": "0eeddaad7837b9c5d54b55f9f0bacb187698d5d1f0d7de773796956f6b3f3b43",
+   "size": 267710
+  },
+  "draw/chunks/kk-KZ-P5N5QNE5-WUJJUO4T.js": {
+   "sha256": "6cb5b7b2312c1ed3ad9901c08002860cac7b80ac31f993c84b8a0a2bef8044b4",
+   "size": 14719
+  },
+  "draw/chunks/km-KH-HSX4SM5Z-FYVMHCCP.js": {
+   "sha256": "4bd7597db2673294dfad50d02710318c468b58b81f1b9b84e34c44e0c58165be",
+   "size": 64561
+  },
+  "draw/chunks/ko-KR-MTYHY66A-PSVXO4MG.js": {
+   "sha256": "3f83bc18a0650082c941e8f7d64ef33f16eebb396c0b497d352e5bc8e0f98925",
+   "size": 37824
+  },
+  "draw/chunks/ku-TR-6OUDTVRD-QSDMC4CE.js": {
+   "sha256": "fa722ae1ce91aa936c849001fd2b6fd4898f9e5b45afa67b1be3e492dc86d0ba",
+   "size": 68319
+  },
+  "draw/chunks/lt-LT-XHIRWOB4-T2IYKHKH.js": {
+   "sha256": "b40ba52512ab47acdb4a38d675b5a41737d0258b15dde047a64425d94fe2c78c",
+   "size": 13591
+  },
+  "draw/chunks/lv-LV-5QDEKY6T-GE5H6B56.js": {
+   "sha256": "9c3a8dab6ef250c0c1673377f776f34ca0ff3163943665d6f3a77f1bdcefe605",
+   "size": 22997
+  },
+  "draw/chunks/mindmap-definition-YA3MSWOX-4633FDNO.js": {
+   "sha256": "253cc4376119f116ce0f839af780c99ba71d9e94cf7ad29c204e98ae6a3368a6",
+   "size": 23826
+  },
+  "draw/chunks/mr-IN-CRQNXWMA-PK2WZV65.js": {
+   "sha256": "fb41a728c29ae09ca1a04edbf844fa8fc7d7a73525a9b9afef3049fade274895",
+   "size": 74313
+  },
+  "draw/chunks/my-MM-5M5IBNSE-LTJUIZOH.js": {
+   "sha256": "da424275fdba743c6a84cf6f393c4bea5e95549bbbb9e6e2c5ea2b529765d6c2",
+   "size": 27279
+  },
+  "draw/chunks/nb-NO-T6EIAALU-YKN5HNS7.js": {
+   "sha256": "b9d766749f1dbb8bf4915f26793a7713413f6ed22f49ff9da72fe193ffe7a056",
+   "size": 20562
+  },
+  "draw/chunks/nl-NL-IS3SIHDZ-JYXOPT7N.js": {
+   "sha256": "17d14ec8a7ed407e5e6c20d84822a42c219f706864c18e893fd0e0ef5063e29d",
+   "size": 16797
+  },
+  "draw/chunks/nn-NO-6E72VCQL-Q3BHDP7N.js": {
+   "sha256": "4512d80b86689ad0c4451359d4f150c43231bf8ce6a3c9ff322c141a5a938c52",
+   "size": 16263
+  },
+  "draw/chunks/oc-FR-POXYY2M6-FABP7CRJ.js": {
+   "sha256": "bbccf12b114126e809c29802f5308cd4b8615e1d86e84c25635ee69d4fde5671",
+   "size": 20707
+  },
+  "draw/chunks/pa-IN-N4M65BXN-CLIJGYFB.js": {
+   "sha256": "a66c97e3439c8b93001f7d7f0982ba6cd8c8242d6b75928aedadf0f2a327f969",
+   "size": 46648
+  },
+  "draw/chunks/packet-AYTQ26CC-DQ7ADL2X.js": {
+   "sha256": "8f3a96fa9e5304c61a15e40d041cdf96c2084f19a6f3599ae0507356847e1acd",
+   "size": 156
+  },
+  "draw/chunks/pegDiagram-XKGWAZYB-2ZV37725.js": {
+   "sha256": "0458a628a2dbf5ff0d56577e18a6c99ab83222456b5b13763bdbfa9ead1b94d0",
+   "size": 2450
+  },
+  "draw/chunks/percentages-BXMCSKIN-N2CPXXWD.js": {
+   "sha256": "0f9c566a5487f881f8cc61cfb20667b3c0ef986b25b940febaa350a14401d404",
+   "size": 144
+  },
+  "draw/chunks/pica-V3W4HA5E.js": {
+   "sha256": "7be8461f2380f1c88fa43f80e330e77e85157fb9511a0dab2d761908e91c44a5",
+   "size": 32739
+  },
+  "draw/chunks/pica-V3W4HA5E.js.LEGAL.txt": {
+   "sha256": "65f20b75bfa40cf26749e8adb218d4f3e5befd4be7d3d8af5b4ff8f1fe683fbd",
+   "size": 167
+  },
+  "draw/chunks/pie-WAS4IAKB-GZD37GBM.js": {
+   "sha256": "474cb848a946e7695d239cd9c71947cae725e72a1e7d2feb888944f406a85ebc",
+   "size": 150
+  },
+  "draw/chunks/pieDiagram-E7YTZNPT-S4HX3NIV.js": {
+   "sha256": "18bc9f6c828cd5203105a6d5aeca1c6e1c12dd50c8960dab516bdaa428f74298",
+   "size": 5600
+  },
+  "draw/chunks/pl-PL-T2D74RX3-3EOGRDCM.js": {
+   "sha256": "24f0485b6ecdbfb76fb9147f9f694f8e0091b0168d2d822b69ba393f05b1f0eb",
+   "size": 25552
+  },
+  "draw/chunks/pt-BR-5N22H2LF-YVN57SOM.js": {
+   "sha256": "311ba0b756593630a7e41709713940ee2c61adac05fdfc7e038857341b9762b4",
+   "size": 21752
+  },
+  "draw/chunks/pt-PT-UZXXM6DQ-UBNMCK75.js": {
+   "sha256": "7371b9c88c644e92b495546dda00401cbd5014c868c37f9ae1bd7b4ee240e252",
+   "size": 20301
+  },
+  "draw/chunks/quadrantDiagram-AXDQQJYC-KOYHH3LI.js": {
+   "sha256": "2fc13b61239332695e37cda699cc70c7eb97fe05a6fd499f568888d34e991406",
+   "size": 34046
+  },
+  "draw/chunks/radar-RG4KPBEZ-TVKC2MDP.js": {
+   "sha256": "ad18f20c8a1238c592744bf1f14249cfdc7fb8601b0f0f89afae133e4f3c7d1a",
+   "size": 154
+  },
+  "draw/chunks/railroad-74A4TZTK-VQ4II7SU.js": {
+   "sha256": "0d11852b2955a795f36ea16fd7333cdff64837f6324ba3fdcefa5680515ff806",
+   "size": 160
+  },
+  "draw/chunks/railroad-abnf-HS5TGJTU-ESLUOMBC.js": {
+   "sha256": "f12ff210e3fa2ada11a60d9fd35a9ee707910b0bfd4ea91a353cd794322fad84",
+   "size": 168
+  },
+  "draw/chunks/railroad-ebnf-LZEXJU2U-LBY6RVBE.js": {
+   "sha256": "a188da318f13885a63e57bbc4dc105ae45c2029da617983e8534a7bd89de226c",
+   "size": 168
+  },
+  "draw/chunks/railroad-peg-WCYAUIDC-KW4XIKP6.js": {
+   "sha256": "3f694e8cdbe6a4cc1867ba915cd63068b69908dc1faab49a329fcdec7a1667b4",
+   "size": 166
+  },
+  "draw/chunks/railroadDiagram-O6MQD6OU-ERV3RB2F.js": {
+   "sha256": "a5b892afa02f4c5314a95bf0941a35ff6ec8f55e44a72214fece409b3931212e",
+   "size": 2116
+  },
+  "draw/chunks/requirementDiagram-BXWQKSXE-LLVKKDJJ.js": {
+   "sha256": "95d8286618f42746c7b67b929761594d6c153480672039eaf6b2f0ab356b497c",
+   "size": 31417
+  },
+  "draw/chunks/ro-RO-JPDTUUEW-YPYTTQH4.js": {
+   "sha256": "3a917251b351aa7e774390c0293c4c7f006ebbe2856af427c6e2ed3873e972cc",
+   "size": 25759
+  },
+  "draw/chunks/roundRect-ZZCAGKGG.js": {
+   "sha256": "37fde421eb9e773e1b15b381a2eea9f07dafebd85a85f4de8c17cbe286a8151f",
+   "size": 2963
+  },
+  "draw/chunks/ru-RU-B4JR7IUQ-RTJ5NY5U.js": {
+   "sha256": "9af3d8e075fc8c4430387b2e3df59874f7089c48ca4edf1d39edb34bab0f3cac",
+   "size": 72240
+  },
+  "draw/chunks/sankeyDiagram-P5KCCOFB-4WERTGPL.js": {
+   "sha256": "24bf6c1c999621a97f9926f9c22a87e84cff6b4f6a79a38204f9779e71ca666e",
+   "size": 22991
+  },
+  "draw/chunks/sequenceDiagram-WJ2MYXX4-D63PV2BI.js": {
+   "sha256": "31eeb1ea28af9637e659d3ddc5824e8fd6d338c09a6b5383a3c2554e395e4538",
+   "size": 116938
+  },
+  "draw/chunks/si-LK-N5RQ5JYF-O6QNAQHO.js": {
+   "sha256": "9349f34b69babe782a30e9648fb968948532903ac62335e5607ee133da904760",
+   "size": 9505
+  },
+  "draw/chunks/sizeCapture-INFHLROL-XWPK4GCN.js": {
+   "sha256": "7ad38c8d6539d05d1da954c6c26995e58dfadd48d9cd4bdc5c3aa9bf740985bc",
+   "size": 943
+  },
+  "draw/chunks/sk-SK-C5VTKIMK-ZPZW6ZZC.js": {
+   "sha256": "249c2bb8d56ec46fcc2228e7fafd8bc17316e4cea230a43f8b6a48d9309e0583",
+   "size": 26219
+  },
+  "draw/chunks/sl-SI-NN7IZMDC-667WOSMI.js": {
+   "sha256": "726effac435ddc92603ac34381785c1b2d88d2531d0cb116d3fb9b4b17ec3c16",
+   "size": 22823
+  },
+  "draw/chunks/stateDiagram-D77RDMKH-KQ4623RW.js": {
+   "sha256": "5685e7c621880c41c16390ef79e5e7cf3bf44889a872b03e5b90e455e16eb4c7",
+   "size": 10680
+  },
+  "draw/chunks/stateDiagram-v2-MP3YSRHH-VUZDHKN6.js": {
+   "sha256": "35db4f6fdf4abd5b55413b77b22d29062467a5eda0a6a74606f7b14d3d76af81",
+   "size": 754
+  },
+  "draw/chunks/subset-shared.chunk-LMW6TSNV.js": {
+   "sha256": "b5e00d84767a2815adbfdbb890ce1131cf7a4aee29a7fe8ff4032784fba9fd40",
+   "size": 222
+  },
+  "draw/chunks/subset-worker.chunk-AHAAALG4.js": {
+   "sha256": "c604cd7f4a514ab56682d0ad74001993737d71b115b05543dfa7acf5391fb867",
+   "size": 391
+  },
+  "draw/chunks/sv-SE-XGPEYMSR-QIMVZVUA.js": {
+   "sha256": "5d4187a6ec28da88f391d0956d7d4b849f2119a138bd65855b2bcf08bbce422c",
+   "size": 22533
+  },
+  "draw/chunks/swimlanes-42K2YHIH-SO6GFRF7.js": {
+   "sha256": "8c0806f2124cd47d2af780db30f789995b7881a66eec049ae9d58eca02688771",
+   "size": 113524
+  },
+  "draw/chunks/swimlanesDiagram-VR7AAH4N-DEAACJIM.js": {
+   "sha256": "65268864ebe63058fb8900c057ef5fe3a17f9479f763c4dd8eaa73bf21cefa52",
+   "size": 852
+  },
+  "draw/chunks/ta-IN-2NMHFXQM-26GGH2MD.js": {
+   "sha256": "25029711059a2b2d4b3b18f9cddea3548a0b39271280dbf661cfc984c3fb41ce",
+   "size": 61645
+  },
+  "draw/chunks/th-TH-HPSO5L25-UEZ47Z4T.js": {
+   "sha256": "5a1cce230520a2c7d4550fb4849da50acedcba7a9e65624fda2a98cf84d44673",
+   "size": 23170
+  },
+  "draw/chunks/timeline-definition-24CTP7MA-B7BV5TY3.js": {
+   "sha256": "e2ddb29602b7e8feb152cccb5fa4e26d4d7d0c6f81a23cd6080f4c21b0d4a1ad",
+   "size": 30814
+  },
+  "draw/chunks/tr-TR-DEFEU3FU-3HYHSCR5.js": {
+   "sha256": "1b8e0dbaca1d778db54e1d409db3e09ae12f7a00f7d65dd0997bf12ea604775c",
+   "size": 23188
+  },
+  "draw/chunks/treeView-Q6P3EWNA-BHSAZBU5.js": {
+   "sha256": "fdbbccee0186e074025ed3a75788187a5195c6b1f8676913b01a2e577aa828eb",
+   "size": 160
+  },
+  "draw/chunks/treemap-WGGIJYW6-A2UJZN5O.js": {
+   "sha256": "98ab5b86f8a47262810326ec1a5d8d25678cc56d712d8b9b31e9a0aa51100ec0",
+   "size": 158
+  },
+  "draw/chunks/uk-UA-QMV73CPH-VJPCABVG.js": {
+   "sha256": "678000bf6c03934af6fc565fe257c5467d5ac7d65874473ead87966d7081b66b",
+   "size": 74724
+  },
+  "draw/chunks/vennDiagram-4TSXK5OY-24IKNECK.js": {
+   "sha256": "cdb071be806da5fa399e8f17982aa2ce656dbc77efef7b97a0d3c16a8366f6cd",
+   "size": 41691
+  },
+  "draw/chunks/vi-VN-M7AON7JQ-LPILUSNB.js": {
+   "sha256": "7fc08a155a43f191f500bb34530c0bda15c86c1b4f442303b718f86b2c933478",
+   "size": 16882
+  },
+  "draw/chunks/wardley-WFR3VGLG-ZVYKP5YG.js": {
+   "sha256": "56ab1e58d21bed55ef09009910f55bda283ea5fe7746c84293d0088581b02620",
+   "size": 158
+  },
+  "draw/chunks/wardleyDiagram-VM6X3IG4-ZFGT6VPF.js": {
+   "sha256": "a94701136587271685756da896b39993751086537cbd8d048186037825ccc625",
+   "size": 25891
+  },
+  "draw/chunks/xychartDiagram-S5SC5T6Z-WRB4EFBR.js": {
+   "sha256": "68efc655ca39daa46df579d3a994217f8edd5a2fd2c39030790abb38dff2d4ce",
+   "size": 43337
+  },
+  "draw/chunks/zh-CN-LNUGB5OW-DCY6JBUX.js": {
+   "sha256": "8c77f331b97b095a3ced83f5a35dd2ace162cf4b4ab6a000ad27ebd70da26805",
+   "size": 29314
+  },
+  "draw/chunks/zh-HK-E62DVLB3-TO5MJAAJ.js": {
+   "sha256": "0ee0ecc12ddc7423f3d07822c1ed7f488e51a94afe4dbd84b4fcb46f7c626a94",
+   "size": 10481
+  },
+  "draw/chunks/zh-TW-RAJ6MFWO-53EKL733.js": {
+   "sha256": "df491290ef9744c8fced8c2c62a99f57b570ba76c023d9ddd6d98b11bf9a53b7",
+   "size": 28974
+  },
+  "draw/excalidraw.css": {
+   "sha256": "e72092760bae272ebe075bdadaff7f82909d318c5d819313185b19e99be31e49",
+   "size": 144689
+  },
+  "draw/excalidraw.js": {
+   "sha256": "bd59b3e956cd681ba147ac53b8bf3f0ef2dcbca66bd0b9a0db487aa43d677aba",
+   "size": 729810
+  },
+  "draw/excalidraw.js.LEGAL.txt": {
+   "sha256": "7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e",
+   "size": 1361
+  },
+  "draw/fonts/Assistant/Assistant-Bold.woff2": {
+   "sha256": "e0cdd332ce039770e93ec44336b6db65f931940f42b0342aad35a06e7f991d29",
+   "size": 20380
+  },
+  "draw/fonts/Assistant/Assistant-Medium.woff2": {
+   "sha256": "81a9f280ce6a790f20ca8cd521183caa430f1f7fdc0752c36ef1cc6dc828ac57",
+   "size": 20320
+  },
+  "draw/fonts/Assistant/Assistant-Regular.woff2": {
+   "sha256": "76945f09225aae65bdbd204cb4ac40d4caa4ff67150e5074bab1a04d1b778fc3",
+   "size": 20232
+  },
+  "draw/fonts/Assistant/Assistant-SemiBold.woff2": {
+   "sha256": "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d",
+   "size": 20212
+  },
+  "draw/fonts/Cascadia/CascadiaCode-Regular.woff2": {
+   "sha256": "5bce041e0fcce617e35efbc335b1372d27a84acb65fb464c65ff80ab3424a885",
+   "size": 65732
+  },
+  "draw/fonts/ComicShanns/ComicShanns-Regular-279a7b317d12eb88de06167bd672b4b4.woff2": {
+   "sha256": "fa930fceb529a4b51ba3055d590302722c27704f6a6357495873950136b1e2ea",
+   "size": 17488
+  },
+  "draw/fonts/ComicShanns/ComicShanns-Regular-6e066e8de2ac57ea9283adb9c24d7f0c.woff2": {
+   "sha256": "782f24081b810b8de9f04da055007ce4f1445c18abbf096c831f8888d65935c1",
+   "size": 1292
+  },
+  "draw/fonts/ComicShanns/ComicShanns-Regular-dc6a8806fa96795d7b3be5026f989a17.woff2": {
+   "sha256": "61c376d32e1773588f6163599aed24fe0387b5a5cb622bd200455f20c2b36a87",
+   "size": 2816
+  },
+  "draw/fonts/ComicShanns/ComicShanns-Regular-fcb0fc02dcbee4c9846b3e2508668039.woff2": {
+   "sha256": "ee641c2e35730c3e6e3826855f1b6cc3b343a017c3e216e4e4a2e47010c53ad1",
+   "size": 9856
+  },
+  "draw/fonts/Excalifont/Excalifont-Regular-349fac6ca4700ffec595a7150a0d1e1d.woff2": {
+   "sha256": "a0637cff365c7344d2f7a15905a1f74dceaf56b5ac2ff913d150358bed6921f0",
+   "size": 2656
+  },
+  "draw/fonts/Excalifont/Excalifont-Regular-3f2c5db56cc93c5a6873b1361d730c16.woff2": {
+   "sha256": "18ea9be1dd6b5a67b057f44eba8e34cb290f88308c272bcf35c79c1a220d0d7b",
+   "size": 2104
+  },
+  "draw/fonts/Excalifont/Excalifont-Regular-41b173a47b57366892116a575a43e2b6.woff2": {
+   "sha256": "c96649a5f96e2faa9143ee94e5b590b5afb08092f8d67c67f09cef332d66e4a7",
+   "size": 8712
+  },
+  "draw/fonts/Excalifont/Excalifont-Regular-623ccf21b21ef6b3a0d87738f77eb071.woff2": {
+   "sha256": "b004007be100261e58188cf8a0f7e850e997702f35d57110915995cd880e49f1",
+   "size": 824
+  },
+  "draw/fonts/Excalifont/Excalifont-Regular-a88b72a24fb54c9f94e3b5fdaa7481c9.woff2": {
+   "sha256": "e4423b318e11432aff2e6e865e300b7ca270f92321a3f56632268fede01c1b48",
+   "size": 24956
+  },
+  "draw/fonts/Excalifont/Excalifont-Regular-b9dcf9d2e50a1eaf42fc664b50a3fd0d.woff2": {
+   "sha256": "b424d16da4398be3e9852857a54ff70e043c8e2ec5c4444dbf7f88d7469b9859",
+   "size": 13296
+  },
+  "draw/fonts/Excalifont/Excalifont-Regular-be310b9bcd4f1a43f571c46df7809174.woff2": {
+   "sha256": "4fb8ad69be9aeac5664d99e5aa3a68a27ea40c98943b80387f7cd55c034fcc93",
+   "size": 12220
+  },
+  "draw/fonts/Liberation/LiberationSans-Regular.woff2": {
+   "sha256": "006a2b28cbbeeaec937d1b367d0949f5f48ef4b2e7b4e1d8dc7a799d2d639be8",
+   "size": 70668
+  },
+  "draw/fonts/Lilita/Lilita-Regular-i7dPIFZ9Zz-WBtRtedDbYE98RXi4EwSsbg.woff2": {
+   "sha256": "2b6568c7a0f16300bc6c8d292bd426c361fcdb40699c2cbfab2bd3e9e6993dea",
+   "size": 1416
+  },
+  "draw/fonts/Lilita/Lilita-Regular-i7dPIFZ9Zz-WBtRtedDbYEF8RXi4EwQ.woff2": {
+   "sha256": "8d6cd0f298738a92ca9bf6e13f54a9191afd06ce04ea00ebbf24499c017191b7",
+   "size": 10676
+  },
+  "draw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTA3j6zbXWjgevT5.woff2": {
+   "sha256": "e512f2d7c9fe062b1acf8f6ea64d4bfd89a77d26728150977627e445c7b6e937",
+   "size": 8392
+  },
+  "draw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTQ3j6zbXWjgeg.woff2": {
+   "sha256": "6d1626aac658786e37e78e0adce3ffffddbd75abc923d72e45a7168bd80053da",
+   "size": 16476
+  },
+  "draw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTk3j6zbXWjgevT5.woff2": {
+   "sha256": "3e7f76fcc8798b8bba4d6bcc06bdb0d788f6e89706c1d6e64ac81d65ca683c14",
+   "size": 11104
+  },
+  "draw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTo3j6zbXWjgevT5.woff2": {
+   "sha256": "7928f47b21192cb6fdb2f46b71a474a3bd2fd608945c5ad7d7ed6bde8b0ae24c",
+   "size": 15476
+  },
+  "draw/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTs3j6zbXWjgevT5.woff2": {
+   "sha256": "5117398298dd0dba3c95a406ff12fbeb88289fa4e913e3a5cf482cafe7f7071a",
+   "size": 6116
+  },
+  "draw/fonts/Virgil/Virgil-Regular.woff2": {
+   "sha256": "2279cf7daf1c42a3a53b2c1437ad72f0050efb67ac263e0245f67612fd766714",
+   "size": 56156
+  },
+  "draw/mermaid-to-excalidraw.js": {
+   "sha256": "4b8ba9503e466b78b366cbbf165b6ae8a9714ef8d9d8a37203271fd0e2aaac0f",
+   "size": 786
+  },
+  "draw/mermaid.js": {
+   "sha256": "5aacc53aa6de16539d87f23219657c47e291df98eead1b6fc74a57ced5846b24",
+   "size": 734
+  }
+ }
+}

@@ -38,6 +38,9 @@ tui = [
     "textual >= 0.80",
     "pyte >= 0.8",
 ]
+studio = [
+    "duckdb >= 1.1",              # the studio's tables and queries (docs/studio-plan.md S2)
+]
 
 [project.scripts]
 wpk = "work_packet.cli:main"
@@ -52,8 +55,8 @@ version = {attr = "work_packet.__about__.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-work_packet = ["prompts/*.md", "dash/templates/*.html", "dash/live.js", "dash/pane.js", "dash/compose.js", "dash/shell.js", "dash/new.js", "dash/ide.js", "dash/board.js", "dash/packets.js", "dash/sched.js", "dash/console.js", "dash/vendor/*", "profiles.toml"]
+work_packet = ["prompts/*.md", "dash/templates/*.html", "dash/live.js", "dash/pane.js", "dash/compose.js", "dash/shell.js", "dash/new.js", "dash/ide.js", "dash/board.js", "dash/packets.js", "dash/sched.js", "dash/console.js", "dash/studio.js", "dash/studio_chart.js", "dash/vendor/*", "dash/vendor/**/*", "profiles.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["live: calls the real claude CLI (skipped unless WPK_LIVE=1)"]
+markers = ["live: uses real external tools: the claude CLI, a browser (skipped unless WPK_LIVE=1)"]

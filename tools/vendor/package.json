@@ -1,0 +1,21 @@
+{
+  "name": "wpk-vendor",
+  "private": true,
+  "description": "The JavaScript libraries the studio vendors into src/work_packet/dash/vendor/ (docs/studio-plan.md P0.5). Run `npm ci && node build.mjs`.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
+    "@excalidraw/mermaid-to-excalidraw": "2.2.2",
+    "mermaid": "11.17.2",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "vega": "6.4.0",
+    "vega-embed": "7.3.0",
+    "vega-interpreter": "2.3.2",
+    "vega-lite": "6.5.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

@@ -53,6 +53,7 @@ class Step:
     tools: Optional[dict] = None  # tool-cost attribution, when read from the history store
     route: Optional[str] = None   # "account@host" from meta.json, when it was recorded
     basis: Optional[str] = None   # where cost came from: harness, priced, or a plugin's name
+    worker: str = "agent"         # who did the step: agent, or studio (docs/studio-plan.md P0.2)
 
     @property
     def key(self):
@@ -184,7 +185,7 @@ def packet_steps(project, pkt):
             resume=None if m.group(2) else _resume(mm), item=schema.memento_item(mm),
             diff_lines=_diff_lines(_read(os.path.join(d, "state.diff"))),
             end=meta.get("end"), dir=d, quota=quota or None, route=_route(meta),
-            basis=basis_of(meta)))
+            basis=basis_of(meta), worker=meta.get("worker") or "agent"))
     # A failed attempt that left no item belongs to the item its step committed.
     done = {s.step: s.item for s in out if not s.failed}
     for s in out:
@@ -410,6 +411,7 @@ ROLLUPS = {
     "model": lambda s: s.model,
     "route": lambda s: s.route or "(not recorded)",
     "basis": lambda s: s.basis or "(no cost)",
+    "worker": lambda s: s.worker,
     "item": lambda s: "%s/%s %s" % (s.project, s.wpid[:8], s.item or "(no item)"),
     "day": lambda s: (s.end or "?")[:10],
     "step": lambda s: "%s/%s/%04d%s" % (s.project, s.wpid[:8], s.step,

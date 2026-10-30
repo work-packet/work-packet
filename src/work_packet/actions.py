@@ -179,7 +179,7 @@ def resumable(meta):
     what Resume on a project gives back to the runner."""
     from .project import SETUP_REASON
     return meta.get("state") == "PAUSED" and meta.get("reason") != SETUP_REASON and \
-        not meta.get("stopped")
+        not meta.get("stopped") and not meta.get("taken_by")
 
 
 def _tree(entry):

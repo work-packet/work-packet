@@ -20,6 +20,14 @@ Transcript events, each with ``t`` (epoch seconds) and ``k``:
 run from a proposal has ``ref`` (``<say id>:<i>``), and ``auto`` when it ran
 without a click. Sockets also get ``busy``
 (``on``).
+
+A conversation's ``mode`` is ``console`` (the above) or ``studio``
+(docs/studio-plan.md P0.3): the agent of a packet's studio, which writes. Its
+command line is a step's (``harness.get("claude").command``: the project's
+tools and Bash allowlist, the step's ``--add-dir`` and hooks, ``acceptEdits``),
+with the packet's model and step budget, in the packet folder; the path hook
+refuses edits of the run's own files (``WPK_PROTECT``). It runs only for the
+person who has taken the packet (``executor.take``).
 """
 
 import json
@@ -47,8 +55,18 @@ GUIDE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KILL_AFTER_S = 5
 
 
+# The studio agent's tools, whatever the project allows besides (P0.3).
+STUDIO_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep") + tuple(
+    "Bash(wpk studio %s *)" % c for c in ("exec", "query", "datasets")) + (
+    "Bash(wpk studio datasets)",)               # the kernel (docs/studio-plan.md S2.2)
+
+
 class Busy(Exception):
     """The conversation is already answering, or too many are."""
+
+
+class NotTaken(Exception):
+    """A studio conversation for a packet the asker has not taken."""
 
 
 def config(home=None):
@@ -130,7 +148,7 @@ class Agents:
         got = self.list(key)
         return got[0] if got else None
 
-    def new(self, scope, cwd, by, model=None, project_dir=None):
+    def new(self, scope, cwd, by, model=None, project_dir=None, mode="console"):
         cid = time.strftime("%Y%m%dT%H%M%S", time.gmtime()) + "-" + secrets.token_hex(3)
         os.makedirs(self._dir(cid), exist_ok=True)
         now = time.time()
@@ -139,7 +157,7 @@ class Agents:
                 "cwd": cwd, "project_dir": project_dir, "by": by,
                 "model": model or config(self.home)["model"],
                 "session": str(uuid.uuid4()), "started": False, "created": now,
-                "updated": now, "title": "", "turns": 0, "cost": 0.0}
+                "updated": now, "title": "", "turns": 0, "cost": 0.0, "mode": mode}
         self._save(meta)
         return meta
 
@@ -213,6 +231,8 @@ class Agents:
             meta = self.get(cid)
             if meta is None:
                 raise KeyError(cid)
+            if meta.get("mode") == "studio":
+                _check_taken(meta, by)
             self.running[cid] = None      # held until the process starts
         try:
             d = self._dir(cid)
@@ -226,6 +246,8 @@ class Agents:
                        PATH=os.path.dirname(sys.executable) + os.pathsep
                        + os.environ.get("PATH", ""))
             env.pop("CLAUDECODE", None)
+            if meta.get("mode") == "studio":
+                env.update(self._studio_env(meta))
             err = open(os.path.join(d, "stderr.log"), "a")
             p = subprocess.Popen(argv, cwd=meta["cwd"], env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=err, text=True,
@@ -246,6 +268,8 @@ class Agents:
         t.start()
 
     def command(self, meta, primer_path):
+        if meta.get("mode") == "studio":
+            return self._studio_command(meta, primer_path)
         cfg = config(self.home)
         exe = shlex.split(os.environ.get("WPK_CLAUDE") or "claude")
         argv = exe + ["-p", "--output-format", "stream-json", "--verbose",
@@ -263,6 +287,31 @@ class Agents:
         else:
             argv += ["--session-id", meta["session"]]
         return argv
+
+    def _studio_spec(self, meta, primer_path):
+        from .. import executor, harness, notes, project
+        pkt = _packet(meta)
+        st = project.settings(meta["project_dir"])
+        tools = list(STUDIO_TOOLS) + [t for t in st.allowed_tools if t not in STUDIO_TOOLS]
+        return harness.StepSpec(
+            model=meta["model"], session_id=meta["session"], permission_mode="acceptEdits",
+            allowed_tools=tools, budget_usd=st.step_budget_usd,
+            add_dirs=[x for x in executor.step_dirs(pkt) if x != meta["cwd"]],
+            system_file=primer_path,
+            notes=(notes.inbox(pkt), os.path.join(self._dir(meta["id"]), notes.SEEN)),
+            resume_same=bool(meta.get("started")))
+
+    def _studio_command(self, meta, primer_path):
+        from .. import harness
+        return harness.get("claude").command(self._studio_spec(meta, primer_path))
+
+    def _studio_env(self, meta):
+        from .. import harness
+        out = harness.get("claude").env(self._studio_spec(meta, os.devnull))
+        out.update(WPK_PROTECT=protected(meta["project_dir"]), WPK_STUDIO=meta["id"])
+        if os.path.normpath(meta["cwd"]) != os.path.normpath(_packet(meta).path):
+            out["WPK_PROTECT_ALLOW"] = meta["cwd"]      # a child's work/, not its run dir
+        return out
 
     def _say(self, cid, text, propose, auto):
         ev = {"k": "say", "text": text, "id": secrets.token_hex(4)}
@@ -369,6 +418,42 @@ class Agents:
             procs = [p for p in self.running.values() if p is not None]
         for p in procs:
             self._kill(p, "the server stopped")
+
+
+def _packet(meta):
+    from ..packet import Packet
+    return Packet(layout.run_dir(meta["project_dir"], meta["wpid"]))
+
+
+def _check_taken(meta, by):
+    """Raise NotTaken unless ``by`` has taken the conversation's packet."""
+    from .. import executor, frontmatter
+    try:
+        st, _ = _packet(meta).load_status()
+    except (OSError, frontmatter.FrontMatterError) as ex:
+        raise NotTaken("cannot read the packet: %s" % ex) from None
+    owner = executor.taken_by(st)
+    if owner != by:
+        raise NotTaken("%s is %s; the studio's agent works only for whoever has taken it" % (
+            meta["wpid"][:8], "taken by %s" % owner if owner else "not taken"))
+
+
+def protected(project_dir):
+    """``WPK_PROTECT`` for the path hook: what wpk keeps of the project."""
+    if layout.is_packet_layout(project_dir):
+        return project_dir
+    return os.pathsep.join((layout.runs_dir(project_dir),
+                            os.path.join(project_dir, "project.toml")))
+
+
+def studio_place(entry, wpid):
+    """The studio agent's cwd for packet ``wpid`` of ``entry``: the packet
+    folder for the root, a child's ``work/`` (or its run directory)."""
+    if wpid == entry.get("root"):
+        return layout.packet_folder(entry["path"])
+    rd = layout.run_dir(entry["path"], wpid)
+    w = os.path.join(rd, "work")
+    return w if os.path.isdir(w) else rd
 
 
 def _what(inp):

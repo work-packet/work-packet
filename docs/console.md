@@ -123,6 +123,21 @@ Server-level pages use the wpk source repo when wpk is installed editable
 **A cheap model by default** (`haiku`), switched per conversation with
 `/model`. The default is a `[console] model` key in the server config.
 
+### 6. Modes: console and studio
+
+A conversation has a `mode` in its `meta.json`: `console` (all of the
+above: read-only tools, proposes slash commands) or `studio`
+(docs/studio-guide.md, docs/interaction.md §6b): the agent of a packet's
+studio, which writes. A studio conversation's command line is a step's
+(`harness.get("claude").command`, the project's tools and allowlist plus
+Read/Write/Edit/Glob/Grep, `acceptEdits`, the step's hooks, the packet's
+model and step budget), later turns `--resume` the same session, it runs in
+the packet folder, and only for whoever has taken the packet (`NotTaken`
+otherwise). Its primer is `prompts/studio.md` plus the canvas and the files
+the person changed (`studio/primer.py`). Studio conversations are made by
+the studio page, not by the drawer; the drawer's `/studio [packet]` goes to
+that page (a packet's, or a project's root packet's).
+
 ## Steps
 
 - **C1: the drawer and slash commands, no model.**

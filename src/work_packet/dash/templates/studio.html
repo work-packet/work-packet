@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{# The studio (docs/interactive-tasks.md, docs/studio-plan.md S1.5): the canvas and the
+   conversation with the studio's agent. studio.js does the rest. #}
+{% set q = e.name|urlencode %}
+{% block title %}studio · {{ short }} · {{ e.name }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ q }}">{{ e.name }}</a> / <a href="/p/{{ q }}/{{ wpid }}"><code>{{ short }}</code></a> / studio{% endblock %}
+{% block head %}
+<style>
+main#main { max-width: none; }
+.st-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 34%); gap: 12px;
+  height: calc(100vh - 96px); }
+.st-canvas, .st-conv { display: flex; flex-direction: column; min-height: 0; }
+.st-tabs { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+.st-tab { border: 1px solid var(--line); background: var(--panel); border-radius: 6px 6px 0 0;
+  padding: 3px 8px; cursor: pointer; font: inherit; font-size: 13px; color: var(--ink); }
+.st-tab.on { border-bottom-color: var(--panel); font-weight: 600; }
+.st-tab .x { margin-left: 6px; color: var(--muted); }
+.st-tab .by { color: var(--muted); font-size: 11px; margin-left: 4px; }
+.st-tiles { flex: 1; display: grid; gap: 8px; min-height: 0; }
+.st-tiles.two { grid-template-columns: 1fr 1fr; }
+.st-tile { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); min-height: 0;
+  display: flex; flex-direction: column; overflow: hidden; }
+.st-tile iframe { flex: 1; border: 0; width: 100%; background: var(--bg); }
+.st-tile .img { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 8px; }
+.st-tile .img img { max-width: 100%; }
+.st-empty { color: var(--muted); padding: 24px; }
+.st-out { flex: 1; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 8px 10px; }
+.st-ev { margin: 6px 0; white-space: pre-wrap; word-break: break-word; }
+.st-ev.ask { background: var(--hunk); border-radius: 6px; padding: 4px 8px; }
+.st-ev.tool, .st-ev.end, .st-ev.changed { color: var(--muted); font-size: 12px; }
+.st-ev.end.bad { color: var(--FAILED); }
+.st-card { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin: 6px 0; }
+.st-card .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.st-card img { max-width: 100%; max-height: 160px; display: block; margin-top: 4px; }
+.st-card iframe { width: 100%; height: 160px; border: 1px solid var(--line); border-radius: 4px; margin-top: 4px; }
+.st-input { display: flex; gap: 6px; margin-top: 6px; }
+.st-input textarea { flex: 1; min-height: 3em; font: inherit; padding: 6px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); color: var(--ink); }
+.st-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.st-bar .sp { margin-left: auto; }
+.st-table [hidden] { display: none !important; }
+.st-table { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 6px 8px; }
+.st-table .tb-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 13px; }
+.st-table .tb-grid { flex: 1; overflow: auto; min-height: 0; }
+.st-table.small .tb-grid { max-height: 180px; }
+.st-table table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.st-table th { position: sticky; top: 0; background: var(--panel); cursor: pointer; white-space: nowrap; text-align: left; }
+.st-table .tb-filter td { position: sticky; top: 22px; background: var(--panel); }
+.st-table .tb-filter input { width: 100%; min-width: 5em; font: inherit; font-size: 12px; box-sizing: border-box; }
+.st-table td, .st-table th { border-bottom: 1px solid var(--line); padding: 2px 8px; max-width: 28em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-table td.num { text-align: right; } .st-table td.null { color: var(--muted); font-style: italic; }
+.st-table .tb-sql { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.st-table .tb-sql textarea { flex: 1 1 100%; min-height: 4em; font: 12.5px ui-monospace, monospace; padding: 4px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.st-table .tb-stats { max-height: 30%; overflow: auto; margin-bottom: 6px; }
+dialog.st-close textarea { width: 100%; min-height: 8em; font: inherit; box-sizing: border-box; }
+@media (max-width: 900px) { .st-wrap { grid-template-columns: 1fr; height: auto; }
+  .st-tiles { min-height: 60vh; } .st-out { min-height: 40vh; } }
+</style>
+{% endblock %}
+{% block main %}
+{% if not st.open %}
+<h1>Studio <span class="muted">{{ short }}</span></h1>
+<div class="panel">
+  <p>Work on this packet live with an agent: it writes in the packet folder
+  (<code>{{ st.folder }}</code>) and what it makes shows on a canvas. While the studio is
+  open the packet is yours: the runner leaves it alone. Closing records the session as one step.</p>
+  {% if st.taken_by %}<p class="err">Taken by {{ st.taken_by }}.</p>{% endif %}
+  <form method="post" action="{{ base }}/open"><input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <button class="go primary">{{ "Open studio (after the running step)" if st.taking else "Open studio" }}</button></form>
+  {% if st.sessions %}<p class="muted">{{ st.sessions|length }} earlier session{{ "s" if st.sessions|length != 1 }}; the canvas is kept.</p>{% endif %}
+</div>
+{% elif not mine %}
+<h1>Studio <span class="muted">{{ short }}</span></h1>
+<div class="panel"><p>{{ st.session.by }}'s studio is open on this packet (since {{ st.session.opened|epoch }}).
+Only they can work in it or close it.</p></div>
+{% else %}
+<div class="st-bar">
+  <strong>Studio</strong> <code>{{ short }}</code>
+  {% if st.taking and not st.taken_by %}<span class="state PAUSED">taking over after this step</span>{% endif %}
+  <span class="muted">in <code>{{ st.folder }}</code> · since {{ st.session.opened|epoch }}</span>
+  <label class="muted"><input type="checkbox" id="st-two"{% if st.layout.mode == "two-up" %} checked{% endif %}> two up</label>
+  <span class="sp"></span>
+  <button type="button" class="go" id="st-close-open">Close studio…</button>
+</div>
+<div class="st-wrap" id="studio" data-base="{{ base }}" data-csrf="{{ csrf or '' }}"
+  data-conv="{{ conv.id if conv else '' }}" data-folder="{{ st.folder if st else '' }}" data-agent="{{ '1' if agent_on else '' }}">
+  <section class="st-canvas" aria-label="Canvas">
+    <div class="st-tabs" id="st-tabs"></div>
+    <div class="st-tiles" id="st-tiles"><div class="st-empty">Nothing on the canvas yet. Ask for something, then Pin it.</div></div>
+  </section>
+  <section class="st-conv" aria-label="Conversation">
+    <div class="st-out" id="st-out" aria-live="polite"></div>
+    <div class="st-input">
+      <textarea id="st-text" placeholder="{{ 'Ask for a document, a change, a check… (Ctrl+Enter sends)' if agent_on else 'The agent is off on this board' }}"{% if not agent_on %} disabled{% endif %}></textarea>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <button type="button" class="go primary" id="st-send"{% if not agent_on %} disabled{% endif %}>Send</button>
+        <button type="button" class="mini" id="st-stop" hidden>Stop</button>
+      </div>
+    </div>
+    <div class="muted" id="st-state" style="font-size:12px;margin-top:4px"></div>
+  </section>
+</div>
+<dialog class="st-close" id="st-close">
+  <form method="post" action="{{ base }}/close">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <h2 style="margin-top:0">Close the studio</h2>
+    <p class="muted">The session is recorded as one step with this summary (drafted for you; edit it).</p>
+    <textarea name="summary" id="st-summary">…</textarea>
+    <p><label><input type="radio" name="how" value="resume" checked> Hand it back to the runner</label><br>
+       <label><input type="radio" name="how" value="hold"> Keep it paused (held)</label></p>
+    <div class="row" style="display:flex;gap:8px"><button class="go primary">Close and record</button>
+      <button type="button" class="go" id="st-close-cancel">Cancel</button></div>
+  </form>
+</dialog>
+<script src="/static/studio.js?v={{ asset_v }}"></script>
+{% endif %}
+{% endblock %}

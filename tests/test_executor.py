@@ -402,7 +402,8 @@ def test_state_files_env_and_outline_shown_up_to_first_max(tmp_path):
     (d / "notes.md").write_text("n" * (FILE_MAX + 500))
     got = state_files(str(d))
     assert "- `state/env.md`:\n\n```\n" in got
-    assert "- `state/outline.md` (%d bytes, not shown)" % (FIRST_MAX + 1) in got
+    assert "- `state/outline.md` (%d bytes, over the 8 KB limit, not shown: shrink it first)" \
+        % (FIRST_MAX + 1) in got
     assert "- `state/notes.md` (%d bytes, not shown)" % (FILE_MAX + 500) in got
 
 

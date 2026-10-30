@@ -6,3 +6,6 @@ Vendored for the browser shell (docs/dash-tasks.md §5); the board's CSP is
 
 To update: download the npm tarballs and copy `lib/xterm.js`,
 `css/xterm.css` and `lib/addon-fit.js` here.
+
+The studio's libraries (`vega/`, `draw/`, `manifest.json`) are built by
+`tools/vendor/build.mjs`; see `tools/vendor/README.md`.

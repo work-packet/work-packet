@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import ipaddress
 import logging
+import re
 import urllib.parse
 
 import anyio
@@ -29,6 +30,19 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 SECURITY_HEADERS = [
     (b"content-security-policy", CSP.encode()),
     (b"x-frame-options", b"DENY"),
+    (b"x-content-type-options", b"nosniff"),
+    (b"referrer-policy", b"same-origin"),
+]
+# Studio frames (docs/studio-plan.md P0.6): the studio page frames them, so they may
+# be framed by this origin; Vega, Mermaid and Excalidraw want blob: images and workers.
+FRAME_RX = re.compile(r"^/p/[^/]+/[^/]+/studio/frame(/|$)")
+FRAME_CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
+             "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+             "font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'self'; "
+             "form-action 'self'; base-uri 'none'")
+FRAME_HEADERS = [
+    (b"content-security-policy", FRAME_CSP.encode()),
+    (b"x-frame-options", b"SAMEORIGIN"),
     (b"x-content-type-options", b"nosniff"),
     (b"referrer-policy", b"same-origin"),
 ]
@@ -147,6 +161,8 @@ class Guard:
                 return await _refuse(send, 403, "this board was reached through a proxy; "
                                      "use its tailnet address instead", scope)
             user = self.local_user
+        elif self.kind == "network" and _content(scope):
+            user = None                 # a sandboxed frame sends no cookies: the token says
         elif self.kind == "network":
             user = self.gate.user_of(headers)
             if user is None:
@@ -158,6 +174,8 @@ class Guard:
             if user is None:
                 log.warning("refused: %s", why)
                 return await _refuse(send, 403, "not allowed: %s" % why, scope)
+        if _content(scope):
+            return await self._content(scope, receive, send)
         scope.setdefault("state", {})["user"] = user
         token = self.gate.csrf(user) if self.kind == "network" else self.token
         scope["state"]["csrf"] = token            # the pages put it in every form
@@ -200,6 +218,9 @@ class Guard:
                  for k, v in SECURITY_HEADERS]
         if ide:     # VS Code sends its own CSP, and frames its own pages
             extra = [(k, v) for k, v in SECURITY_HEADERS if k in IDE_HEADERS]
+        elif FRAME_RX.match(scope.get("path", "")):
+            extra = [(k, v + ws_src if k == b"content-security-policy" else v)
+                     for k, v in FRAME_HEADERS]
 
         async def send_with_headers(msg):
             if msg["type"] == "http.response.start":
@@ -209,6 +230,26 @@ class Guard:
             await send(msg)
 
         await self.app(scope, receive, send_with_headers)
+
+    async def _content(self, scope, receive, send):
+        """``/sc/<token>/...`` (``studio/content.py``): a live token or nothing;
+        reading only; the sandbox headers on the answer, and no cookies."""
+        from ..studio import content
+        token, _ = content.split(scope.get("path", ""))
+        if scope["type"] == "websocket" or scope.get("method") not in ("GET", "HEAD"):
+            return await _refuse(send, 405, "content is read-only", scope)
+        if content.TOKENS.resolve(token) is None:
+            return await _refuse(send, 403, "no such content, or it has expired", scope)
+        scope.setdefault("state", {}).update(user=None, csrf=None, listener=self.kind,
+                                             content_root=content.TOKENS.resolve(token))
+
+        async def send_sandboxed(msg):
+            if msg["type"] == "http.response.start":
+                drop = {b"set-cookie"} | {k for k, _ in content.HEADERS}
+                msg = dict(msg, headers=[(k, v) for k, v in msg.get("headers", [])
+                                         if k.lower() not in drop] + content.HEADERS)
+            await send(msg)
+        await self.app(scope, receive, send_sandboxed)
 
     async def _signed_out(self, scope, receive, send):
         """No session: ``/login`` itself, a redirect to it, or a refusal."""
@@ -265,6 +306,10 @@ class Guard:
             return {"type": "http.request", "body": body, "more_body": False}
         token = (urllib.parse.parse_qs(body.decode("latin-1")).get("csrf") or [None])[0]
         return replay, token
+
+
+def _content(scope):
+    return scope.get("path", "").startswith("/sc/")
 
 
 def _header(headers, name):

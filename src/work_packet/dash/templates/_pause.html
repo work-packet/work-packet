@@ -14,5 +14,6 @@
 {%- endmacro %}
 
 {% macro badge(c) -%}
+{% if c.studio %}<span class="state PAUSED studio" title="taken for the studio: the runner leaves it alone">IN STUDIO</span><span class="muted"> ({{ c.studio|join(", ") }})</span>{% endif %}
 {% if c.pausing %}<span class="state PAUSED" title="pauses when the running step ends">PAUSING</span>{% endif %}
 {%- endmacro %}

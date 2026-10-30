@@ -495,6 +495,151 @@ def cmd_admin(args) -> int:
     return code
 
 
+def cmd_take(args) -> int:
+    """take / release: one packet, for the studio (docs/studio-plan.md P0.1)."""
+    from . import executor, registry
+    try:
+        pkt = _packet(args.target)
+    except registry.LookupFailed as ex:
+        return _err(str(ex))
+    if args.cmd == "take":
+        out = executor.take(pkt)
+        if out.code == 0 and executor.taking(pkt) is None:
+            _cancel_pending(pkt.wpid)
+    else:
+        out = executor.release(pkt, how="hold" if args.hold else "resume", force=args.force)
+    print("wpk: %s" % out.msg, file=sys.stderr)
+    return out.code
+
+
+def cmd_studio(args) -> int:
+    """wpk studio open|close|status <packet> (docs/studio-plan.md S1.9);
+    wpk studio exec|query|datasets (S2.2)."""
+    from . import archived, executor, registry
+    from .studio import model
+    if args.op in ("exec", "query", "datasets"):
+        return _studio_kernel(args)
+    if not args.target and args.op == "status":
+        got = model.find(os.getcwd())          # in a studio's folder: that studio
+        if got is not None:
+            args.target = [got[1]]
+    if len(args.target) != 1:
+        return _err("wpk studio %s <packet>" % args.op)
+    try:
+        pkt = _packet(args.target[0])
+    except registry.LookupFailed as ex:
+        return _err(str(ex))
+    proj = os.path.dirname(os.path.dirname(pkt.path))
+    e = next((x for x in archived.entries() if os.path.realpath(x["path"]) ==
+              os.path.realpath(proj)), None)
+    if e is None:
+        return _err("%s is not in a registered project" % pkt.wpid[:8])
+    me = executor._who()
+    try:
+        if args.op == "open":
+            st = model.open_studio(e, pkt.wpid, me)
+            print("studio open on %s in %s (taken by %s)" % (pkt.wpid[:8], st["folder"],
+                                                            st["taken_by"] or me))
+            print("work in it on the board: /p/%s/%s/studio" % (e["name"], pkt.wpid))
+        elif args.op == "close":
+            out = model.close_studio(e, pkt.wpid, me, how="hold" if args.hold else "resume",
+                                     summary=args.summary, force=args.force)
+            print("wpk: %s%s" % (out["msg"], "; " + out["released"] if out["released"] else ""),
+                  file=sys.stderr)
+        else:
+            st = model.state(e, pkt.wpid)
+            s = st["session"]
+            print("folder:  %s" % st["folder"])
+            print("open:    %s" % ("yes, by %s" % s["by"] if s else "no"))
+            print("taken:   %s" % (st["taken_by"] or ("being taken by %s" % st["taking"]
+                                                       if st["taking"] else "no")))
+            print("canvas:  %s" % (", ".join(a["path"] for a in st["canvas"]) or "empty"))
+            print("before:  %d session%s" % (len(st["sessions"]),
+                                             "" if len(st["sessions"]) == 1 else "s"))
+    except model.StudioError as ex:
+        return _err(str(ex))
+    return 0
+
+
+def _studio_kernel(args) -> int:
+    """exec, query and datasets: through the kernel of the studio whose folder
+    holds the cwd."""
+    from . import archived
+    from .studio import data, kernel, model, render
+    got = model.find(os.getcwd())
+    if got is None:
+        return _err("not in an open studio's folder: run this in the studio's folder")
+    name, wpid, folder = got
+    cfg = render.config()
+    kw = dict(timeout=float(cfg["kernel_timeout_s"]), idle_s=60.0 * cfg["kernel_idle_minutes"])
+    try:
+        kernel.export_history(archived.get(name), folder)
+    except Exception:  # noqa: BLE001  (history is a nicety; the kernel works without it)
+        pass
+    try:
+        if args.op == "exec":
+            if args.reset:
+                kernel.call(folder, "reset", **kw)
+            if args.file:
+                with open(args.file, encoding="utf-8") as fp:
+                    code = fp.read()
+            else:
+                code = " ".join(args.target)
+                if code.strip() == "-":
+                    code = sys.stdin.read()
+            if not code.strip():
+                return 0 if args.reset else _err("no code: wpk studio exec '<python>' or -f FILE")
+            r = kernel.call(folder, "exec", code=code, **kw)
+            for k, stream in (("stdout", sys.stdout), ("value", sys.stdout),
+                              ("stderr", sys.stderr)):
+                if r.get(k):
+                    stream.write(r[k] if r[k].endswith("\n") else r[k] + "\n")
+            return 0 if r.get("ok") else 1
+        if args.op == "query":
+            sql = " ".join(args.target).strip()
+            if sql == "-":
+                sql = sys.stdin.read()
+            if not sql:
+                return _err("no SQL: wpk studio query '<select ...>'")
+            if args.out:
+                fmt = "(FORMAT parquet)" if args.out.lower().endswith(".parquet") else "(HEADER)"
+                r = kernel.call(folder, "query", sql="COPY (%s) TO %s %s" % (
+                    sql.rstrip().rstrip(";"), data._lit(args.out), fmt), **kw)
+                if not r.get("ok"):
+                    return _err(r.get("error") or "the query failed")
+                n = r["rows"][0][0] if r.get("rows") else "?"
+                print("wrote %s rows to %s" % (n, args.out))
+                return 0
+            r = kernel.call(folder, "query", sql=sql, limit=args.limit, **kw)
+            if not r.get("ok"):
+                return _err(r.get("error") or "the query failed")
+            if r["columns"]:
+                print(data.text_table(r["columns"], r["rows"]))
+                if r.get("more"):
+                    print("(the first %d rows; --limit for more, or aggregate)" % args.limit)
+            else:
+                print("done")
+            return 0
+        files = []
+        for dp, dns, fns in os.walk(folder):
+            dns[:] = [d for d in dns if not d.startswith(".") and d not in (
+                "packages", "node_modules", "__pycache__", "packets")]
+            files += [os.path.relpath(os.path.join(dp, f), folder) for f in fns]
+        r = kernel.call(folder, "datasets", files=files, **kw)
+        if not r.get("ok"):
+            return _err(r.get("error") or "datasets failed")
+        for d in r["datasets"]:
+            head = d["path"] + ("#" + d["table"] if d.get("table") else "")
+            if d.get("error"):
+                print("%s: %s" % (head, d["error"]))
+                continue
+            print("%s (%s rows)" % (head, d.get("rows", "?")))
+            print("  " + ", ".join("%s %s" % (c["name"], c["type"]) for c in d["columns"]))
+        return 0
+    except kernel.KernelError as ex:
+        return _err(str(ex))
+
+
 def _cancel_pending(wpid):
     """A paused packet's job that is still waiting in the batch queue is withdrawn."""
     from .sched import authz, control
@@ -1567,10 +1712,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print JSON")
     p.add_argument("--min", type=int, default=30, help="steps a group needs for advice")
     p.add_argument("--by", choices=("project", "packet", "item", "model", "route", "basis",
-                                    "day", "step"),
+                                    "worker", "day", "step"),
                    help="instead, a table of token use and cost per project, packet, "
                         "plan item (the memento's item), model, route (account@host), "
-                        "cost basis (harness, priced, plugin), day or step")
+                        "cost basis (harness, priced, plugin), worker (agent, studio), "
+                        "day or step")
     p.add_argument("--tools", nargs="?", const="tool", choices=("tool", "kind", "target"),
                    help="instead, what used up context inside steps: by tool (default), "
                         "by kind (a shell command's program) or by target (file or command)")
@@ -1642,6 +1788,42 @@ def build_parser() -> argparse.ArgumentParser:
                            help="resume a root held for setup even if doctor finds "
                                 "something missing")
         p.set_defaults(func=cmd_admin, force=False)
+
+    p = sub.add_parser("take", help="take a packet for yourself (the studio): the runner "
+                       "leaves it alone until you release it",
+                       description="An idle packet is PAUSED (reason studio) now; a running "
+                       "one after its step. NEEDS_INPUT, COMPLETED and FAILED packets keep "
+                       "their state. status.md names you in taken_by.")
+    p.add_argument("target", help="WPID (or unique prefix)")
+    p.set_defaults(func=cmd_take)
+
+    p = sub.add_parser("release", help="hand a taken packet back",
+                       description="A packet the take paused goes back to the runner, or "
+                       "with --hold stays PAUSED (reason held).")
+    p.add_argument("target", help="WPID (or unique prefix)")
+    p.add_argument("--hold", action="store_true", help="leave it PAUSED, reason held")
+    p.add_argument("--force", action="store_true", help="release someone else's take")
+    p.set_defaults(func=cmd_take)
+
+    p = sub.add_parser("studio", help="open, close or show a packet's studio; its kernel",
+                       description="The studio (docs/interaction.md §6b): open takes the "
+                       "packet and starts a session (work in it on the board); close "
+                       "records the session as one step and releases the packet. "
+                       "exec, query and datasets use the studio's kernel (Python and "
+                       "DuckDB in the studio's folder); run them in that folder.")
+    p.add_argument("op", choices=("open", "close", "status", "exec", "query", "datasets"))
+    p.add_argument("target", nargs="*",
+                   help="open/close/status: WPID (or unique prefix); exec: Python code; "
+                   "query: SQL")
+    p.add_argument("-f", "--file", help="exec: run this Python file")
+    p.add_argument("--limit", type=int, default=50, help="query: rows to show (default 50)")
+    p.add_argument("--out", help="query: write the result to this file (CSV or .parquet) "
+                   "instead of showing it")
+    p.add_argument("--reset", action="store_true", help="exec: start from a fresh namespace")
+    p.add_argument("--hold", action="store_true", help="close: leave it PAUSED, reason held")
+    p.add_argument("--summary", help="close: the step's summary (default: the facts)")
+    p.add_argument("--force", action="store_true", help="close someone else's studio")
+    p.set_defaults(func=cmd_studio)
 
     p = sub.add_parser("note", help="send a note to a packet, running or not",
                        description="Queue a note from the owner (docs/interaction.md §6a). "
@@ -2013,6 +2195,9 @@ def main(argv=None) -> int:
     args, rest = parser.parse_known_args(argv)
     if rest and getattr(args, "func", None) is cmd_start and all("=" in r for r in rest):
         args.values += rest           # key=value after an option
+    elif rest and getattr(args, "func", None) is cmd_studio \
+            and not any(r.startswith("-") for r in rest):
+        args.target += rest           # the packet, code or SQL after an option
     elif rest:
         parser.error("unrecognized arguments: %s" % " ".join(rest))
     if args.cmd is None:

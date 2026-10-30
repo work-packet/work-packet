@@ -36,7 +36,7 @@ def scope_of(path):
         sc.update(kind="project", project=parts[1])
         if len(parts) >= 3 and parts[2] not in _PROJECT_TABS:
             sc.update(kind="packet", wpid=parts[2])
-            if len(parts) >= 4 and parts[3] not in ("live", "file", "plan", "act"):
+            if len(parts) >= 4 and parts[3] not in ("live", "file", "plan", "act", "studio"):
                 sc["step"] = parts[3]
     elif len(parts) >= 2 and parts[0] == "runs":
         sc["run"] = parts[1]
@@ -340,6 +340,18 @@ def c_open(args, scope, ctx):
             "href": href, "go": True}
 
 
+def c_studio(args, scope, ctx):
+    from . import data
+    e, wpid = resolve(args[0] if args else None, scope, ctx)
+    wpid = wpid or e["root"]
+    if not data._studio_ok(e, wpid):
+        raise Usage("no studio on %s: only the root packet, or a child with a work/ folder"
+                    % wpid)
+    href = _href(e, wpid) + "/studio"
+    return {"ok": True, "cmd": "studio", "text": "opening the studio of %s" % wpid,
+            "lines": [], "href": href, "go": True}
+
+
 # --- the conversation (C2) ----------------------------------------------------
 
 def _agents(ctx):
@@ -472,6 +484,8 @@ COMMANDS = {c.name: c for c in [
     Cmd("show", c_show, "[target]", "state of a packet or project", False),
     Cmd("questions", c_questions, "[packet]", "a packet's open questions", False),
     Cmd("open", c_open, "<target>", "go to a project's or packet's page", False),
+    Cmd("studio", c_studio, "[packet]", "go to a packet's studio (the project's root packet"
+        " on a project page)", False),
     Cmd("pause", _pause_resume("pause"), "[target]",
         "pause a packet (after its step, if one runs) or a whole project", True),
     Cmd("resume", _pause_resume("resume"), "[target]",

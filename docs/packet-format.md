@@ -324,7 +324,8 @@ For each file, the spec gives its keys and a short example, taken from
   record type has a trailer form, so a packet can be raised to Level 1
   by rebuilding the journal from its commits (§2.4).
 - **`steps/NNNN/meta.json`, the metrics schema.** The metrics per task are
-  part of the format, not of wpk: start, end, duration, worker, model,
+  part of the format, not of wpk: start, end, duration, worker (`agent`
+  when absent; `studio` for a session recorded by wpk's studio), model,
   `cost_usd`, and a token breakdown. The breakdown must be neutral across
   providers: input, cache write, cache read, output, reasoning, plus
   context peak and calls. This makes "cost per packet" comparable across

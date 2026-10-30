@@ -7,6 +7,14 @@
 <style>
 .h2bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; }
 .h2bar h2 { margin: 0; }
+/* Spend by board (docs/stats-spend.md): a bar per board, longest = biggest. */
+.spend { display: grid; grid-template-columns: minmax(80px, max-content) minmax(0, 1fr) max-content;
+  gap: 4px 10px; align-items: center; margin: 4px 0 10px; }
+.spend .track { display: block; height: 16px; }
+.spend .track i { display: block; height: 100%; border-radius: 2px; min-width: 2px; }
+.spend a.track:hover i { opacity: .8; }
+.spend .fig { font-variant-numeric: tabular-nums; text-align: right; }
+.spend .fig .muted { display: inline-block; min-width: 3.5em; }
 </style>
 {% endblock %}
 {% block main %}
@@ -21,6 +29,7 @@
 {% if burn.total %}
 {{ tkm.summary(burn.total, burn.total.steps) }}
 {% if burn.total.chart %}{{ tkm.chart(burn.total.chart, "Context read per day") }}{% endif %}
+{% if burn.spend and burn.spend.chart and side|length <= 1 %}{{ tkm.chart(burn.spend.chart, "Spend per day", legend=False) }}<div class="tklegend">Spend per day</div>{% endif %}
 {% set top = 10 %}
 {% macro prow(r) -%}
   <tr><td><a href="/p/{{ r.name|urlencode }}/cost">{{ r.name }}</a></td>{% if side|length > 1 %}<td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>{% endif %}
@@ -50,7 +59,19 @@
 {% endif %}
 
 {% if burn.boards and side|length > 1 %}
-<h2>By board</h2>
+<h2 id="spend">By board</h2>
+{% set sp = burn.spend %}
+{% if sp %}
+<div class="spend" role="list" aria-label="Spend by board, {{ span }}">
+  {% for b in sp.bars %}
+  <a href="/b/{{ b.name|urlencode }}" role="listitem">{{ b.name }}</a>
+  <a class="track" href="/b/{{ b.name|urlencode }}" title="{{ b.name }}: {{ b.cost|money }}, {{ '%.0f'|format(b.share * 100) }}% of {{ sp.total|money }}"><i class="{{ b.cls }}" style="width: {{ '%.1f'|format(b.w * 100) }}%"></i></a>
+  <span class="fig">{{ b.cost|money }} <span class="muted">· {{ '%.0f'|format(b.share * 100) }}%</span></span>
+  {% endfor %}
+</div>
+<p class="muted">{{ sp.total|money }} spent {{ span }}{% if sp.idle %}; nothing on {{ sp.idle|join(", ") }}{% endif %}.</p>
+{% if sp.chart %}{{ tkm.chart(sp.chart, "Spend per day") }}{% endif %}
+{% endif %}
 <div class="wrap"><table>
   <tr><th>Board</th>{% if burn.days > 1 %}<th>Per day</th>{% endif %}<th class="num">Steps</th><th class="num">Cost</th><th class="num">Context</th><th class="num">Output</th></tr>
   {% for b in side %}{% set r = burn.boards.get(b.name) %}{% if r %}

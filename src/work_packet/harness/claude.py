@@ -133,7 +133,8 @@ class Claude(Harness):
         """
         exe = shlex.split(os.environ.get("WPK_CLAUDE") or "claude")
         argv = exe + ["-p", "--output-format", "stream-json", "--verbose",
-                      "--model", spec.model, "--session-id", spec.session_id,
+                      "--model", spec.model,
+                      "--resume" if spec.resume_same else "--session-id", spec.session_id,
                       "--permission-mode", spec.permission_mode,
                       "--max-budget-usd", "%.2f" % spec.budget_usd,
                       "--tools", ",".join(tool_names(spec.allowed_tools)),

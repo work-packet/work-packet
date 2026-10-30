@@ -263,6 +263,72 @@ New files in `$WPK_HOME`: `server.secret` (0600, CSRF HMAC key, made on
 first start), `server.token` (token mode), `tls/` (certificates), and
 `server.json` (pid, listeners, URLs; written at start, read by `wpk url`).
 
+## 6a. The studio's render service and content origin
+
+Built in docs/studio-plan.md P0.4–P0.6.
+
+**Render service** (`studio/render.py`). The studio turns pages into PNGs
+and PDFs (thumbnails, crops for comments, the agent looking at what it
+made) with one headless Chrome per server: `[studio] chrome`, else
+`google-chrome`, `google-chrome-stable`, `chromium` or `chromium-browser`
+on PATH. Snap Chromium cannot write the hidden `$WPK_HOME`, so Google
+Chrome is tried first. No browser: renders are off and the studio says
+so. The browser starts on first use (`--headless=new`, DevTools on a
+loopback port, profile in `$WPK_HOME/run/render-profile`) and stops after
+`[studio] render_idle_minutes` (10). wpk drives it over CDP with its own
+small client (no Playwright, no Node). A page that draws late sets
+`window.__studioReady = false`, then `true` when done. Renders queue one at
+a time, only the newest per artifact.
+
+```toml
+[studio]
+chrome = ""                  # a path or name; empty: found on PATH
+render_idle_minutes = 10
+kernel_idle_minutes = 30     # the studio's kernel exits after this long unused
+kernel_timeout_s = 120       # a kernel call that runs longer stops the kernel
+```
+
+**The kernel** (`studio/kernel.py`, `kernel_main.py`; studio-plan.md S2.1).
+One Python process per open studio, as the user, in the studio's folder:
+the packet's IVPM Python when it has DuckDB, else wpk's. It listens on a
+unix socket in `/tmp/wpk-<uid>/` (mode 0700) and answers one JSON request
+per connection. The board's table and chart routes and the agent's `wpk
+studio exec|query|datasets` share it; whichever comes first starts it.
+Two DuckDB connections: the agent's (anything the user can read, like a
+step's Bash) and the viewers' (`allowed_directories` = the folder,
+external access off, configuration locked, and one `SELECT` only), so the
+person's SQL box cannot read outside the folder or write. A kernel found
+on the socket whose working folder is not this folder (it was removed and
+made again) is replaced. Closing the studio stops it.
+
+**Studio frames.** Pages the board makes for the studio's canvas live
+under `/p/<project>/<wpid>/studio/frame/...`. Unlike every other page they
+may be framed by the board itself (`frame-ancestors 'self'`,
+`X-Frame-Options: SAMEORIGIN`), and allow what Vega, Mermaid and
+Excalidraw need: `blob:` images and workers, `'wasm-unsafe-eval'`. Still
+no `unsafe-eval`: Vega runs with `vega-interpreter`. Those libraries are
+vendored (`tools/vendor/README.md`) and served from `/static/vendor/`.
+
+**Content origin.** What the studio shows but did not write (pages the
+agent made, a deck tool's dev server, HTML in documents) must not run on
+the board's origin, where it could read the CSRF token and act as you. It
+is served under `/sc/<token>/<path>`:
+
+- `<token>` is a random capability for one folder (`studio/content.py`),
+  issued when a studio opens and revoked when it closes (12 h at most).
+  The guard checks it in place of a login: a sandboxed frame has no
+  cookies. Only GET and HEAD. Dot-directories (`.work-packet`, `.git`)
+  and links out of the folder are not served.
+- Every answer carries `Content-Security-Policy: sandbox allow-scripts
+  allow-popups allow-downloads; default-src 'self' data: blob:
+  'unsafe-inline'; ...`, so the page is an opaque origin even opened on its
+  own, plus `Referrer-Policy: no-referrer` (the token must not leak) and
+  `no-store`. `Set-Cookie` is removed.
+- The studio frames it in `<iframe sandbox="allow-scripts">`, without
+  `allow-same-origin`. Tested live: such a page cannot read
+  `document.cookie`, storage or its parent, and its POST to the board is
+  refused (Origin `null`).
+
 ## 7. Build plan
 
 Order relative to long-running.md §11: **S1 can start now**, against the

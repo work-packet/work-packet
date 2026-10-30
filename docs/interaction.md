@@ -184,6 +184,45 @@ and the owner wants to say "add a `pytest.ini` that limits collection to
   Claude Code's stream doesn't contain a hook's added context, so the log
   view can't place a note at its call.
 
+## 6b. Taking a packet (the studio)
+
+The studio (docs/interactive-tasks.md) is you working on a packet with an
+agent, live. While it is open the packet is **taken**: yours, and the
+runner leaves it alone. Built in docs/studio-plan.md P0.1–P0.3.
+
+- **`wpk take <packet>`** (`executor.take`). An idle `RUNNABLE` or
+  `SLEEPING` packet becomes `PAUSED` with reason `studio` at once. A
+  running one is taken when its step commits ("taking over after this
+  step"): the take is a pause request with `take: true` that lands at the
+  commit whatever state the step ends in, or at the next start, or at the
+  dispatcher's next pass. A `NEEDS_INPUT`, `COMPLETED`, `FAILED` or
+  `PAUSED` packet keeps its state. Either way `status.md` gets `taken_by`
+  and `taken`, and the journal an `admin` record with `op: take`.
+- **While taken**, everything but a pause is refused: resume, hand-off,
+  continue, wake and answers ("taken by matt; release it first"). Project
+  Resume skips it. The board shows **IN STUDIO (matt)** on the card and
+  the task page, and hides the hand-off form.
+- **`wpk release <packet> [--hold] [--force]`** (`executor.release`).
+  A packet the take paused goes back to `RUNNABLE`, or with `--hold`
+  stays `PAUSED` with reason `held` (resumable like a pause by hand).
+  Anything else keeps its state. Only the taker releases unless
+  `--force`; the CLI's `user@host` and a board login are different
+  names, so releasing a board take from the shell needs it. A take still
+  waiting for a step is withdrawn.
+- **What the session leaves**: one step, `worker: studio`
+  (`executor.record_step`): `steps/NNNN/` with the transcript, the
+  summary, cost and duration, journalled and committed like a model's
+  step, so the Steps tab, `wpk stats --by worker`, history and `wpk
+  check` all count it. The memento, `state/` and the wake time are not
+  changed.
+- **The studio's agent** runs with a step's command line (the project's
+  tools and Bash allowlist, the step's hooks, `acceptEdits`), in the
+  packet folder, only for the person who took the packet. The path hook
+  refuses its edits of `.work-packet/` (`WPK_PROTECT`).
+
+v1 uses `PAUSED` for the take; long-running.md's `HELD` state can replace it
+later without changing the studio.
+
 ## 7. Build plan
 
 - [x] **I1: structured `ask:`.** Schema, `questions.py` (normalise,

@@ -21,10 +21,13 @@ STATUS_FIELDS = (
     "wpk", "wpid", "project", "state", "step", "attempts", "parent",
     "spawn_key", "children", "resume_expr", "wake_at", "model", "reason",
     "updated", "next_size", "stopped", "seen", "children_seen", "waiting_on", "wait_mode",
+    "taken_by", "taken",
 )
 # next_size: docs/scheduler-plan.md decision 4; stopped, seen: docs/overview-recent.md §2;
-# children_seen, waiting_on, wait_mode: docs/waiting-v1.md §4
-STATUS_OPTIONAL = ("next_size", "stopped", "seen", "children_seen", "waiting_on", "wait_mode")
+# children_seen, waiting_on, wait_mode: docs/waiting-v1.md §4; taken_by, taken: the studio's
+# take (docs/studio-plan.md P0.1)
+STATUS_OPTIONAL = ("next_size", "stopped", "seen", "children_seen", "waiting_on", "wait_mode",
+                   "taken_by", "taken")
 
 MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item", "size")
 ITEM_MAX = 80
@@ -81,6 +84,12 @@ CONSOLE_DEFAULTS = {                  # docs/console.md §3
     "budget_usd": 0.5,                 # the most one reply may spend
     "max_running": 4,                  # replies at once, across conversations
     "timeout_s": 600,                  # a reply is stopped after this long
+}
+STUDIO_DEFAULTS = {                   # docs/studio-plan.md P0.4
+    "chrome": "",                      # the browser for renders; empty: found on PATH
+    "render_idle_minutes": 10,         # the headless browser is stopped after this long idle
+    "kernel_idle_minutes": 30,         # the kernel exits after this long with no call (S2.1)
+    "kernel_timeout_s": 120,           # a kernel call that runs longer stops the kernel
 }
 SCHED_DEFAULTS = {                    # docs/scheduler.md §10
     "backend": "local",                # local | slurm | lsf
@@ -801,6 +810,22 @@ def _validate_console(d):
     return out
 
 
+def _validate_studio(d):
+    t = d.get("studio")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("studio", "must be a table")]
+    out = _unknown(t, tuple(STUDIO_DEFAULTS), "studio")
+    if "chrome" in t and not isinstance(t["chrome"], str):
+        out.append(_err("studio.chrome", "must be a path or command name"))
+    for k in ("render_idle_minutes", "kernel_idle_minutes", "kernel_timeout_s"):
+        m = t.get(k, 1)
+        if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
+            out.append(_err("studio." + k, "must be a positive whole number"))
+    return out
+
+
 HARNESS_KEYS = ("env", "env_file")     # [harnesses.<name>] (docs/harness.md)
 
 
@@ -857,9 +882,11 @@ def _validate_site(d):
 
 def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
-                                                "console", "harnesses", "plugins", "site")) \
+                                                "console", "harnesses", "plugins", "site",
+                                                "studio")) \
         + _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d) \
-        + _validate_console(d) + _validate_forges(d.get("forge")) + _validate_harness(d) \
+        + _validate_console(d) + _validate_studio(d) + _validate_forges(d.get("forge")) \
+        + _validate_harness(d) \
         + _validate_plugins(d) + _validate_site(d)
     v = d.get("max_step_budget_usd", 1)
     if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):

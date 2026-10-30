@@ -52,6 +52,14 @@ removes it. On the board, each item has Accept / Reject (a comment: Remove).
 - An item is found again by its raw text and its count among identical items; a
   copy of the same raw text inside a code block can throw the count off.
 
+## In the studio
+
+The studio (docs/studio-guide.md) shows documents with the same markup, in
+a frame on its canvas (`/p/<project>/<wpid>/studio/frame/doc`). Edits go to
+`.../studio/markup` and are attributed to you in the studio's change list;
+**Ask Claude** sends the file's markup to the studio's agent at once,
+instead of queuing a note for the next step.
+
 ## Status
 
 Done (2026-10-26): `dash/markup.py`, `dash/markup.js`, `templates/doc.html`, routes

@@ -91,7 +91,13 @@ def state_files(state_dir):
             except (OSError, UnicodeDecodeError):
                 text = None
         if text is None:
-            out.append("- `state/%s` (%d bytes, not shown)" % (rel, size))
+            if rel in FIRST and size > FIRST_MAX:
+                # dv-solve-competitve-action-plan: an outline past the limit
+                # stayed hidden for 81 steps; say what to do about it.
+                out.append("- `state/%s` (%d bytes, over the %d KB limit, not shown: "
+                           "shrink it first)" % (rel, size, FIRST_MAX // 1024))
+            else:
+                out.append("- `state/%s` (%d bytes, not shown)" % (rel, size))
             continue
         left -= size
         shown += 1

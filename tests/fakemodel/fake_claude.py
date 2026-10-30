@@ -16,6 +16,11 @@ Runs the behaviour named by ``WPK_FAKE_BEHAVIOR`` (a module in
   forgetful    end the turn without writing .pending/, unless nudged
   silent       never write .pending/
 
+A behaviour returns the reply's text, or ``{"text": ..., "writes": [(path,
+content)]}``: each write is a Write tool call, passed through the
+PreToolUse hooks of ``--settings`` first as Claude Code would (exit 2 refuses
+it, and the refusal is the tool result), then done (the studio, P0.3).
+
 Spend knobs (docs/scheduler-plan.md T-c): ``WPK_FAKE_COST`` is the result's
 ``total_cost_usd``; ``WPK_FAKE_QUOTA`` is JSON ``{"seven_day": [first, last,
 resets_at], "five_hour": [...]}``, sent as two ``rate_limit_event``s.
@@ -25,6 +30,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -86,6 +92,10 @@ def main():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     text = mod.run(prompt=prompt, fault=fault, model=args.model) or "done"
+    if isinstance(text, dict):
+        for i, (path, content) in enumerate(text.get("writes") or ()):
+            write(args, "tu_w%d" % i, path, content)
+        text = text.get("text") or "done"
     hooked = post_tool_use(args.settings)
     if hooked:
         emit({"type": "user", "session_id": args.session_id, "fake_hook_context": hooked})
@@ -107,6 +117,38 @@ def main():
           "result": text,
           "usage": {"input_tokens": 1500, "output_tokens": 120}})
     return 0
+
+
+def write(args, tid, path, content):
+    """One Write tool call: the PreToolUse hooks, then the write."""
+    inp = {"file_path": path, "content": content}
+    emit({"type": "assistant", "session_id": args.session_id, "parent_tool_use_id": None,
+          "message": {"id": "msg_" + tid, "role": "assistant", "content": [
+              {"type": "tool_use", "id": tid, "name": "Write", "input": inp}]}})
+    try:
+        hooks = json.loads(args.settings or "{}").get("hooks", {}).get("PreToolUse", [])
+    except ValueError:
+        hooks = []
+    event = json.dumps({"tool_name": "Write", "tool_input": inp, "cwd": os.getcwd()})
+    for h in hooks:
+        if not re.fullmatch(h.get("matcher") or ".*", "Write"):
+            continue
+        for c in h.get("hooks", []):
+            p = subprocess.run(c["command"], shell=True, capture_output=True, text=True,
+                               input=event)
+            if p.returncode == 2:
+                emit({"type": "user", "session_id": args.session_id, "message": {
+                    "role": "user", "content": [{"type": "tool_result", "tool_use_id": tid,
+                                                 "is_error": True, "content": p.stderr}]}})
+                return False
+    full = os.path.join(os.getcwd(), path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w") as fp:
+        fp.write(content)
+    emit({"type": "user", "session_id": args.session_id, "message": {
+        "role": "user", "content": [{"type": "tool_result", "tool_use_id": tid,
+                                     "content": "File created successfully at: " + full}]}})
+    return True
 
 
 def post_tool_use(settings):

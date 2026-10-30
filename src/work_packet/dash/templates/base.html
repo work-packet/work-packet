@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>{% block title %}work-packet{% endblock %} · wpk dash</title>
 <style>
 :root {
@@ -12,6 +13,8 @@
   --NEEDS_INPUT: #dd6b20; --COMPLETED: #2f855a; --running: #0b8a9a; --unknown: #888;
   --add: #e6f4ea; --del: #fce8e6; --hunk: #e8eefc;
   --tk-read: #9db7e8; --tk-write: #e8a25c; --tk-new: #8a63d2; --tk-out: #3f9d6b; --tk-think: #9fd3b4;
+  --sp0: #4e79a7; --sp1: #f28e2b; --sp2: #59a14f; --sp3: #e15759;
+  --sp4: #76b7b2; --sp5: #edc948; --sp6: #b07aa1; --sp7: #9c755f;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -21,6 +24,8 @@
     --NEEDS_INPUT: #f6ad55; --COMPLETED: #5fc28f; --running: #39c3d3; --unknown: #999;
     --add: #1d3324; --del: #3a2022; --hunk: #1f2940;
     --tk-read: #4c6797; --tk-write: #c27b35; --tk-new: #a688e6; --tk-out: #4fb580; --tk-think: #2f6a4a;
+    --sp0: #6f9bd1; --sp1: #f5a04f; --sp2: #74bf69; --sp3: #ec7a7b;
+    --sp4: #8fcfca; --sp5: #e9cf63; --sp6: #c596b9; --sp7: #b8927a;
   }
 }
 * { box-sizing: border-box; }
@@ -139,6 +144,14 @@ svg.tk .tk-write, .tklegend .tk-write { fill: var(--tk-write); background: var(-
 svg.tk .tk-new, .tklegend .tk-new { fill: var(--tk-new); background: var(--tk-new); }
 svg.tk .tk-out, .tklegend .tk-out { fill: var(--tk-out); background: var(--tk-out); }
 svg.tk .tk-think, .tklegend .tk-think { fill: var(--tk-think); background: var(--tk-think); }
+svg.tk .sp0, .tklegend .sp0, .spend .sp0 { fill: var(--sp0); background: var(--sp0); }
+svg.tk .sp1, .tklegend .sp1, .spend .sp1 { fill: var(--sp1); background: var(--sp1); }
+svg.tk .sp2, .tklegend .sp2, .spend .sp2 { fill: var(--sp2); background: var(--sp2); }
+svg.tk .sp3, .tklegend .sp3, .spend .sp3 { fill: var(--sp3); background: var(--sp3); }
+svg.tk .sp4, .tklegend .sp4, .spend .sp4 { fill: var(--sp4); background: var(--sp4); }
+svg.tk .sp5, .tklegend .sp5, .spend .sp5 { fill: var(--sp5); background: var(--sp5); }
+svg.tk .sp6, .tklegend .sp6, .spend .sp6 { fill: var(--sp6); background: var(--sp6); }
+svg.tk .sp7, .tklegend .sp7, .spend .sp7 { fill: var(--sp7); background: var(--sp7); }
 svg.tk .failmark { fill: var(--FAILED); } svg.tk g.failed rect:not(.hit):not(.failmark) { opacity: .55; }
 .tklegend { font-size: 12px; color: var(--muted); margin: 2px 0 10px; display: flex; gap: 12px; flex-wrap: wrap; }
 .tklegend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
@@ -222,7 +235,8 @@ body.con-open main { padding-bottom: 46vh; }
 </style>
 {% block head %}{% endblock %}
 </head>
-<body>
+<body{% if frame %} class="frame"{% endif %}>
+{% if not frame %}
 <header>
   <a class="brand" href="/">wpk dash</a>
   <span class="crumbs">{% block crumbs %}{% endblock %}</span>
@@ -231,7 +245,9 @@ body.con-open main { padding-bottom: 46vh; }
   <a class="newtask" href="/new{% if here and here.name %}?board={{ here.name|urlencode }}{% endif %}"{% if here and here.name %} title="A new packet on {{ here.name }}"{% endif %}>New packet</a>
   <span class="muted ver" style="font-size:12px" title="{{ 'This server runs due packets' if runner else 'Nothing runs packets here: start with --run, or use wpk tick' }}">{{ 'runner on' if runner else 'runner off' }} · {% if user %}{{ user }}{% if signout %} <form method="post" action="/logout" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" class="linkish" style="font-size:12px;background:none;border:0;padding:0;color:inherit;text-decoration:underline;cursor:pointer">sign out</button></form>{% endif %} · {% endif %}work-packet {{ version }}</span>
 </header>
+{% endif %}
 <main id="main">{% if sched_mode %}<div class="modebar" role="status"><strong>Pool {{ "halted" if sched_mode.mode == "drain" else "stopped" }}</strong>{% if sched_mode.by %} by {{ sched_mode.by }}{% endif %}{% if sched_mode.at %} at {{ sched_mode.at }}{% endif %}{% if sched_mode.reason %}: {{ sched_mode.reason }}{% endif %}. No new agent step starts. <a href="/sched">Scheduler</a></div>{% endif %}{% if flash %}<div class="flash {{ 'ok' if flash_ok else 'bad' }}">{{ flash }}</div>{% endif %}{% block main %}{% endblock %}</main>
+{% if not frame %}
 <section id="console" hidden data-csrf="{{ csrf or '' }}" aria-label="Console">
   <div class="con-bar"><span>console · ask anything, or /help for commands · the page sets the target</span><span class="con-model" title="The agent's model: /model changes it"></span><span class="con-state" aria-live="polite"></span><button type="button" class="con-stop" hidden title="Stop the agent's reply (/cancel)">stop</button><button type="button" class="con-close" data-console title="Close (Esc)">close</button></div>
   <div class="con-out" aria-live="polite"></div>
@@ -239,6 +255,7 @@ body.con-open main { padding-bottom: 46vh; }
 </section>
 <script src="/static/pane.js"></script>
 <script src="/static/console.js?v={{ asset_v }}"></script>
+{% endif %}
 {% if live %}
 <script src="/static/live.js"></script>
 {% endif %}

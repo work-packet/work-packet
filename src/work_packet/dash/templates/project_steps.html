@@ -21,7 +21,7 @@
     <td style="white-space:nowrap">{{ s.start|when }}</td>
     <td><a href="{{ base }}/steps?task={{ t.key }}">{{ t.label }}</a></td>
     <td><a href="{{ base }}/{{ t.wpid }}/{{ s.dir }}">{{ s.n }}{% if s.outcome == "failed" %}.{{ s.attempt }}{% endif %}</a></td>
-    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span></td>
+    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span>{% if s.worker and s.worker != "agent" %} <span class="badge" title="done by a person in the {{ s.worker }}, not by a model's step">{{ s.worker }}</span>{% endif %}</td>
     <td class="num">{{ s.duration_s|secs }}</td>
     <td class="num">{{ s.cost_usd|money }}</td>
     <td>{% if s.why %}<span class="err">{{ s.why }}</span>{% else %}{{ s.summary }}{% endif %}</td>

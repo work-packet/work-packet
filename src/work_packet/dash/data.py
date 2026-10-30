@@ -110,7 +110,7 @@ def steps(pkt):
             "dir": name, "n": n, "attempt": attempt, "outcome": outcome,
             "start": _ts(meta.get("start")), "end": _ts(meta.get("end")),
             "cost_usd": meta.get("cost_usd"), "duration_s": meta.get("duration_s"),
-            "cost_basis": stats.basis_of(meta),
+            "cost_basis": stats.basis_of(meta), "worker": meta.get("worker") or "agent",
             "context_tokens": _context_tokens(meta.get("tokens")),
             "output_tokens": (meta.get("tokens") or {}).get("output_tokens"),
             "summary": _first_line(_read(os.path.join(sd, "summary.md"))),
@@ -171,7 +171,7 @@ def tree(entry, now=None):
     now = now or clock.now()
     tz = _zone(entry["path"])
     from ..actions import resumable
-    from ..executor import pause_request, stopped
+    from ..executor import stopped
     names = {}
     out = []
     for depth, pkt, meta, body in packets(entry["path"], entry["root"]):
@@ -192,7 +192,8 @@ def tree(entry, now=None):
             "updated": _ts(meta.get("updated")), "wake_at": _ts(meta.get("wake_at")),
             "stopped": _ts(meta.get("stopped")) if stopped(meta) else None,
             "seen": _ts(meta.get("seen")),
-            "pausing": pause_request(pkt) is not None, "resumable": resumable(meta),
+            "pausing": _pausing(pkt) is not None, "resumable": resumable(meta),
+            "taken_by": meta.get("taken_by"), "taking": _taking(pkt),
             "running": running(pkt, now),
             "steps": st, "cost_usd": sum(s["cost_usd"] or 0 for s in st), "path": pkt.path,
         })
@@ -359,6 +360,9 @@ def card(entry, now=None, nodes=None):
                         and not n.get("pausing")),
         "pausing": sum(1 for n in nodes if n.get("pausing")),
         "resumable": sum(1 for n in nodes if n.get("resumable")),
+        # In the studio (docs/studio-plan.md P0.1): who has taken which packets.
+        "studio": sorted({n["taken_by"] or n["taking"] for n in nodes
+                          if n.get("taken_by") or n.get("taking")}),
     }
 
 
@@ -571,8 +575,26 @@ def _tick_step(span):
 
 
 def _pausing(pkt):
+    """A pending pause request, not a take (``_taking``)."""
     from ..executor import pause_request
-    return pause_request(pkt)
+    req = pause_request(pkt)
+    return None if req is None or req.get("take") else req
+
+
+def _studio_ok(entry, wpid):
+    """The packet can have a studio (docs/studio-plan.md S1.9): the root, or a child
+    with a work/ folder."""
+    from ..studio import model
+    try:
+        model.folder(entry, wpid)
+        return True
+    except model.StudioError:
+        return False
+
+
+def _taking(pkt):
+    from ..executor import taking
+    return taking(pkt)
 
 
 def packet(entry, wpid, now=None):
@@ -619,6 +641,8 @@ def packet(entry, wpid, now=None):
     return {
         "wpid": wpid, "short": wpid[:8], "path": pkt.path, "meta": meta,
         "pausing": _pausing(pkt),
+        "taken_by": meta.get("taken_by"), "taken": _ts(meta.get("taken")),
+        "taking": _taking(pkt), "studio": _studio_ok(entry, wpid),
         "fields": [(k, meta.get(k)) for k in schema.STATUS_FIELDS if k in meta],
         "summary": body.strip(), "summary_html": md(body.strip()), "memento": memento, "files": files, "children": kids,
         "parent": parent, "steps": list(reversed(steps(pkt))), "running": running(pkt, now),

@@ -198,8 +198,9 @@ def _apply(pkt, st, rec):
         else:
             meta.pop("stopped", None)
         req = pause_request(pkt)
-        paused = _pause_for(pkt, meta, req, n) if req is not None and d["state"] in (
-            "RUNNABLE", "SLEEPING") else None       # asked for while this step ran
+        paused = _pause_for(pkt, meta, req, n) if req is not None and (
+            d["state"] in ("RUNNABLE", "SLEEPING") or req.get("take")) and \
+            not taken_by(meta) else None            # asked for while this step ran
         if d.get("size"):           # for the next step only (docs/scheduler.md §5.2)
             meta["next_size"] = d["size"]
         else:
@@ -545,7 +546,8 @@ def _carry_from(pkt, st, meta, n, a, now, limit, factor, asked=False):
     except (OSError, ValueError, KeyError, TypeError):
         return None
     if prev.get("model") != meta["model"] or not prev.get("session_id") or \
-            prev.get("harness", "claude") != st.harness:
+            prev.get("harness", "claude") != st.harness or \
+            prev.get("worker", "agent") != "agent":     # a studio session is not its chain
         return None
     ctx = prev.get("context") or {}
     peak, base = ctx.get("peak"), ctx.get("base")
@@ -597,13 +599,16 @@ def step(target, force=False, lost=None):
         meta, body = pkt.load_status()
         req = pause_request(pkt)
         if req is not None:             # asked for while the last attempt ran
-            if meta["state"] in ("RUNNABLE", "SLEEPING"):
+            if (meta["state"] in ("RUNNABLE", "SLEEPING") or req.get("take")) and \
+                    not taken_by(meta):
                 paused = _pause_for(pkt, meta, req, meta["step"])
                 pkt.save_status(meta, body)
                 journal.append(pkt.journal_path, paused)
                 _drop_pause_request(pkt)
                 return Outcome(NOT_RUNNABLE, "paused, as %s asked" % req.get("by", "someone"))
             _drop_pause_request(pkt)
+        if taken_by(meta):
+            return Outcome(NOT_RUNNABLE, "taken by %s" % meta["taken_by"])
         n, a = meta["step"] + 1, meta["attempts"] + 1
         lease.refresh(n, a)
         faults.at_step(n)
@@ -722,6 +727,18 @@ def _wait_for_leftovers(wpid, n, limit_s):
         time.sleep(5)
 
 
+def step_dirs(pkt):
+    """The ``--add-dir`` directories of a step (and of the studio's agent): the
+    ``identity/`` links, then ``work/`` entries that are links."""
+    add_dirs = []
+    if os.path.isdir(pkt.identity_dir):
+        for name in sorted(os.listdir(pkt.identity_dir)):
+            t = os.path.realpath(os.path.join(pkt.identity_dir, name))
+            if os.path.isdir(t):
+                add_dirs.append(t)
+    return add_dirs + [d for d in workspace.linked_dirs(pkt) if d not in add_dirs]
+
+
 def _run(pkt, st, meta, body, n, a, lease, now, prof):
     tz = clock.zone(st.tz)
     limit = profiles.value(st, prof, "step_context_tokens")
@@ -773,13 +790,7 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
     journal.append(pkt.journal_path, start)
     snap = _snapshot(pkt)
     # 8. The model.
-    add_dirs = []
-    if os.path.isdir(pkt.identity_dir):
-        for name in sorted(os.listdir(pkt.identity_dir)):
-            t = os.path.realpath(os.path.join(pkt.identity_dir, name))
-            if os.path.isdir(t):
-                add_dirs.append(t)
-    add_dirs += [d for d in workspace.linked_dirs(pkt) if d not in add_dirs]
+    add_dirs = step_dirs(pkt)
     h = harness.get(st.harness)
     system = os.path.join(sd, "system.md")
     system_text = prompt.system(tz, h.name, prof.sizing)
@@ -909,6 +920,83 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
         ": %s" % ask if ask else ""))
 
 
+# --- steps from outside the executor (docs/studio-plan.md P0.2) -------------------
+
+def record_step(pkt, worker, summary, meta=None, files=None, notes_seen=None, state=None):
+    """Record work done outside a model's step (``worker``: ``studio``) as the
+    packet's next step, so the Steps tab, cost totals, ``history.db`` and
+    ``wpk check`` see it like any other: ``steps/NNNN/`` with ``meta.json``
+    (``meta`` plus step, attempt and ``worker``), ``summary.md``, ``result.md``
+    (the memento, unchanged), an empty ``state.diff`` and ``files``
+    ({name in the step folder: source path}); then step-start, commit-begin
+    and ``_apply``, as a step commits. The memento, ``state/``, the wake time
+    and (unless ``state``) the state are unchanged. ``notes_seen``: queued
+    note ids the work dealt with; they are consumed. Returns (Outcome, n).
+    Takes the lease, so it never races a running step."""
+    try:
+        sm, body = pkt.load_status()
+    except (OSError, frontmatter.FrontMatterError) as e:
+        return Outcome(USAGE, str(e)), None
+    n = sm["step"] + 1
+    try:
+        lease = Lease(pkt.lease_path, n, 1, 300).acquire()
+    except LeaseHeld as e:
+        return Outcome(LEASED, str(e)), None
+    try:
+        if _scan(pkt.journal().records) != (None, None):
+            return Outcome(NOT_RUNNABLE, "%s: a step did not finish; `wpk recover` it "
+                           "first" % pkt.wpid[:8]), None
+        sm, body = pkt.load_status()
+        n = sm["step"] + 1
+        sd = pkt.step_dir(n)
+        _rmtree(sd)
+        os.makedirs(sd)
+        for name, src in sorted((files or {}).items()):
+            shutil.copyfile(src, os.path.join(sd, name))
+        now = _ts()
+        m = {"step": n, "attempt": 1, "worker": worker, "start": now, "end": now,
+             "model": sm["model"], "cost_usd": None, "tokens": {}}
+        m.update(meta or {})
+        m.update(step=n, attempt=1, worker=worker)
+        fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(m, indent=2) + "\n")
+        if os.path.isfile(pkt.memento_path):
+            shutil.copyfile(pkt.memento_path, os.path.join(sd, "result.md"))
+        fsutil.atomic_write(os.path.join(sd, "state.diff"), "")
+        fsutil.atomic_write(os.path.join(sd, "summary.md"), summary.rstrip() + "\n")
+        decision = {
+            "state": state or sm["state"], "resume_expr": sm.get("resume_expr"),
+            "wake_at": sm.get("wake_at") if not state else None,
+            "reason": sm.get("reason"), "model": sm["model"], "summary": summary.rstrip() + "\n",
+            "spawn": [], "worker": worker,
+        }
+        for k in ("waiting_on", "wait_mode"):       # still waiting on what it was
+            if k in sm and not state:
+                decision[k] = sm[k]
+        if "children_seen" in sm:
+            decision["children_seen"] = sm["children_seen"]
+        if sm.get("next_size"):
+            decision["size"] = sm["next_size"]
+        queued = {x["id"]: x for x in notes.queued(pkt)}
+        seen = [dict(queued[i], how=worker) for i in notes_seen or () if i in queued]
+        if seen:
+            decision["notes"] = seen
+        hd = workspace.heads(pkt)
+        if hd:
+            decision["heads"] = hd
+        journal.append(pkt.journal_path, {"type": "step-start", "t": m["start"], "step": n,
+                                          "attempt": 1, "model": sm["model"],
+                                          "session_id": m.get("session_id"),
+                                          "worker": worker})
+        rec = {"type": "commit-begin", "t": _ts(), "step": n, "decision": decision}
+        journal.append(pkt.journal_path, rec)
+        faults.point("after-commit-begin")
+        _apply(pkt, None, rec)
+        return Outcome(OK, "step %d recorded (%s)" % (n, worker)), n
+    finally:
+        lease.release()
+        livecard.flush()
+
+
 # --- pause and resume ------------------------------------------------------------
 
 def _who():
@@ -1005,7 +1093,10 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
     try:
         meta, body = pkt.load_status()
         old = meta["state"]
-        if op in ("pause", "resume", "handoff", "continue"):
+        if taken_by(meta) and op != "pause":
+            return Outcome(NOT_RUNNABLE, "%s is taken by %s; release it first" % (
+                pkt.wpid[:8], meta["taken_by"]))
+        if op in ("pause", "resume", "handoff", "continue") and not taking(pkt):
             _drop_pause_request(pkt)    # done now, or no longer wanted
         if op == "pause":
             if old not in ("RUNNABLE", "SLEEPING"):
@@ -1132,11 +1223,133 @@ def pause_reason(req, n=None):
 
 def _pause_for(pkt, meta, req, n):
     """Apply a pause request to ``meta``. Returns its ``admin`` record, which the
-    caller appends once ``meta`` is saved."""
+    caller appends once ``meta`` is saved. A take (``req["take"]``) also lands
+    on a step that ended NEEDS_INPUT, COMPLETED or FAILED: only the owner changes."""
     old = meta["state"]
+    if req.get("take"):
+        return _take_meta(meta, req.get("by") or _who(), requested=req.get("t"))
     meta.update(state="PAUSED", reason=pause_reason(req, n), wake_at=None, updated=_ts())
     return {"type": "admin", "t": _ts(), "op": "pause", "by": req.get("by") or _who(),
             "from": old, "to": "PAUSED", "requested": req.get("t")}
+
+
+# --- take and release (docs/studio-plan.md P0.1) ----------------------------------------
+# v1 of the take: PAUSED with reason ``studio`` until the HELD state of long-running.md.
+# ``taken_by`` in status.md names the owner; a taken packet that was not going to run
+# (NEEDS_INPUT, COMPLETED, FAILED, PAUSED) keeps its state.
+
+TAKE_REASON = "studio"
+HELD_REASON = "held"
+
+
+def taken_by(meta):
+    """Who has taken the packet (``status.md``), or None."""
+    return meta.get("taken_by") or None
+
+
+def _take_meta(meta, by, requested=None):
+    old = meta["state"]
+    t = _ts()
+    if old in ("RUNNABLE", "SLEEPING"):
+        meta.update(state="PAUSED", reason=TAKE_REASON, wake_at=None)
+    meta.update(taken_by=by, taken=t, updated=t)
+    rec = {"type": "admin", "t": t, "op": "take", "by": by, "from": old, "to": meta["state"]}
+    if requested:
+        rec["requested"] = requested
+    return rec
+
+
+def take(pkt, by=None):
+    """Take ``pkt`` for ``by`` (the studio): the runner leaves it alone until
+    ``release``. While a step runs, the take is a pause request that lands at
+    its commit (``taking`` until then). Taking it again is a no-op for the
+    owner and refused for anyone else."""
+    by = by or _who()
+    try:
+        meta, body = pkt.load_status()
+    except (OSError, frontmatter.FrontMatterError) as e:
+        return Outcome(USAGE, str(e))
+    if taken_by(meta):
+        return _taken_again(pkt, meta, by)
+    try:
+        lease = Lease(pkt.lease_path, meta["step"] + 1, 0, 60).acquire()
+    except LeaseHeld:
+        req = pause_request(pkt)
+        if req is not None and req.get("take") and req.get("by") != by:
+            return Outcome(NOT_RUNNABLE, "%s: %s is taking it" % (pkt.wpid[:8], req.get("by")))
+        fsutil.atomic_write(pkt.pause_path, json.dumps(
+            {"by": by, "t": _ts(), "reason": TAKE_REASON, "take": True}) + "\n")
+        return Outcome(OK, "%s: taking over after the running step" % pkt.wpid[:8])
+    try:
+        meta, body = pkt.load_status()
+        if taken_by(meta):
+            return _taken_again(pkt, meta, by)
+        _drop_pause_request(pkt)    # a take is a pause too
+        rec = _take_meta(meta, by)
+        pkt.save_status(meta, body)
+        journal.append(pkt.journal_path, rec)
+        return Outcome(OK, "%s: taken by %s" % (pkt.wpid[:8], by))
+    finally:
+        lease.release()
+        livecard.flush()
+
+
+def _taken_again(pkt, meta, by):
+    if meta["taken_by"] == by:
+        return Outcome(OK, "%s: already taken by %s" % (pkt.wpid[:8], by))
+    return Outcome(NOT_RUNNABLE, "%s: taken by %s" % (pkt.wpid[:8], meta["taken_by"]))
+
+
+def taking(pkt):
+    """Who is taking ``pkt`` after its running step, or None."""
+    req = pause_request(pkt)
+    return req.get("by") if req and req.get("take") else None
+
+
+def release(pkt, how="resume", by=None, force=False):
+    """Hand back a taken packet. ``resume``: one the take paused goes back to
+    the runner. ``hold``: it stays PAUSED, reason ``held``. Either way a packet
+    the take did not pause keeps its state. Only the owner releases, unless
+    ``force``. A take still waiting for the step to end is withdrawn."""
+    if how not in ("resume", "hold"):
+        raise ValueError(how)
+    by = by or _who()
+    try:
+        meta, body = pkt.load_status()
+    except (OSError, frontmatter.FrontMatterError) as e:
+        return Outcome(USAGE, str(e))
+    if not taken_by(meta):
+        if taking(pkt) in (by,) or (force and taking(pkt)):
+            _drop_pause_request(pkt)
+            return Outcome(OK, "%s: will not take it after all" % pkt.wpid[:8])
+        return Outcome(NOT_RUNNABLE, "%s is not taken" % pkt.wpid[:8])
+    if meta["taken_by"] != by and not force:
+        return Outcome(NOT_RUNNABLE, "%s: taken by %s" % (pkt.wpid[:8], meta["taken_by"]))
+    try:
+        lease = Lease(pkt.lease_path, meta["step"] + 1, 0, 60).acquire()
+    except LeaseHeld as e:
+        return Outcome(LEASED, str(e))
+    try:
+        meta, body = pkt.load_status()
+        if not taken_by(meta):
+            return Outcome(NOT_RUNNABLE, "%s is not taken" % pkt.wpid[:8])
+        old = meta["state"]
+        ours = old == "PAUSED" and meta.get("reason") == TAKE_REASON
+        if ours and how == "resume":
+            meta.update(state="RUNNABLE", reason=None, attempts=0)
+        elif ours:
+            meta["reason"] = HELD_REASON
+        meta.pop("taken_by", None)
+        meta.pop("taken", None)
+        meta["updated"] = _ts()
+        pkt.save_status(meta, body)
+        journal.append(pkt.journal_path, {"type": "admin", "t": _ts(), "op": "release",
+                                          "by": by, "how": how, "from": old, "to": meta["state"]})
+        return Outcome(OK, "%s: released: %s -> %s" % (pkt.wpid[:8], old, meta["state"]))
+    finally:
+        lease.release()
+        _ide_owner(pkt)
+        livecard.flush()
 
 
 def mark_seen(pkt, by=None):

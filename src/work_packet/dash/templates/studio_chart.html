@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{# A studio chart in the canvas's frame (docs/studio-plan.md S2.4): Vega-Lite (with
+   vega-interpreter: no eval under the frame's CSP), the spec panel, and Ask about a
+   selection. studio_chart.js draws it; the spec, themes and panel are JSON here. #}
+{% block title %}{{ rel }}{% endblock %}
+{% block head %}
+<style>
+body.frame main { max-width: none; margin: 0; padding: 10px 14px; }
+.docbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+#chart { width: 100%; min-height: 120px; }
+#chart .vega-embed { width: 100%; }
+.ch-sel { margin: 8px 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ch-sel input { flex: 1; min-width: 12em; font: inherit; padding: 4px 6px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); color: var(--ink); }
+#ch-panel { margin-top: 8px; }
+#ch-panel .grid { display: grid; grid-template-columns: auto repeat(3, minmax(0, 1fr)); gap: 4px 8px;
+  align-items: center; margin-top: 6px; max-width: 640px; }
+#ch-panel select, #ch-panel input { font: inherit; font-size: 13px; min-width: 0; }
+.ch-msg { font-size: 12px; }
+</style>
+{% endblock %}
+{% block main %}
+<div class="docbar muted"><code>{{ rel }}</code>
+  {% if source %}<span>data: <code>{{ source }}</code></span>{% endif %}
+  {% if not problems %}<span class="hint">Brush or click to select, then ask about those rows</span>{% endif %}
+</div>
+{% if problems %}
+<div class="panel"><strong>This chart can't be drawn:</strong>
+  <ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  {% if text %}<pre style="max-height:50vh;overflow:auto">{{ text }}</pre>{% endif %}</div>
+{% else %}
+<div id="ch" data-base="{{ base }}" data-path="{{ rel }}" data-csrf="{{ csrf or '' }}"
+  data-source="{{ source or '' }}">
+  <div id="chart"></div>
+  <div class="ch-msg muted" id="ch-msg"></div>
+  <div class="ch-sel" id="ch-sel" hidden>
+    <span class="muted" id="ch-sel-what"></span>
+    <input id="ch-q" placeholder="Ask about these rows… (Enter sends)">
+    <button type="button" class="mini" id="ch-ask">Ask</button>
+  </div>
+  {% if panel %}
+  <details id="ch-panel"><summary class="muted">Spec</summary>
+    <div class="grid">
+      <span>mark</span>
+      <select id="ch-mark">{% for m in marks %}<option{{ " selected" if m == panel.mark }}>{{ m }}</option>{% endfor %}</select>
+      <span>title</span><input id="ch-title" value="{{ panel.title or '' }}">
+      {% for ch in ("x", "y", "color") %}
+      <span>{{ ch }}</span>
+      <select data-ch="{{ ch }}" data-k="field"><option value="">(none)</option>{% if panel[ch].field %}<option selected>{{ panel[ch].field }}</option>{% endif %}</select>
+      <select data-ch="{{ ch }}" data-k="type">{% for t in ("", "quantitative", "nominal", "ordinal", "temporal") %}<option value="{{ t }}"{{ " selected" if t == panel[ch].type }}>{{ t or "(type)" }}</option>{% endfor %}</select>
+      <select data-ch="{{ ch }}" data-k="aggregate">{% for a in ("", "count", "sum", "mean", "median", "min", "max") %}<option value="{{ a }}"{{ " selected" if a == panel[ch].aggregate }}>{{ a or "(no aggregate)" }}</option>{% endfor %}</select>
+      {% endfor %}
+    </div>
+    <p><button type="button" class="mini" id="ch-save">Save to the spec</button> <span class="muted ch-msg" id="ch-save-msg"></span></p>
+  </details>
+  {% endif %}
+</div>
+<script type="application/json" id="ch-spec">{{ board|tojson }}</script>
+<script type="application/json" id="ch-theme">{{ themes|tojson }}</script>
+<script type="module" src="/static/studio_chart.js?v={{ asset_v }}"></script>
+{% endif %}
+{% endblock %}

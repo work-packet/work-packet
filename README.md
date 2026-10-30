@@ -84,6 +84,9 @@ for setup (docs/setup.md), `path`, `shell`, `add-input`,
   `docs/dash-history-v1.md` and `docs/run-binding-v1.md` track building it.
 - `docs/sites.md`: site packages: plugin entry points, the site config
   layer, `[plugins]`, job sizes.
+- `docs/studio-guide.md`: the studio: work on a packet live with an agent,
+  a canvas of what it makes, recorded as one step. `docs/interactive-tasks.md`
+  is its design and `docs/studio-plan.md` the build plan with status.
 - `docs/harness.md`: harness adapters (Claude Code now; Codex and OpenCode
   surveyed), model profiles, and `wpk stats` with advice.
 - `slides/work-packet.pptx`: overview deck (built from `slides/*.js`).

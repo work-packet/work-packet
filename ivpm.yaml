@@ -16,7 +16,7 @@ package:
       include: [dependencies]
 
   - name: default-dev
-    description: Runtime, the dash and tui extras, test tools, and dv-flow-mgr for co-development.
+    description: Runtime, the dash, tui and studio extras, test tools, and dv-flow-mgr for co-development.
     deps:
     - name: work-packet-deps
       src: pyproject.toml
@@ -24,6 +24,7 @@ package:
       - dependencies
       - optional-dependencies.dash
       - optional-dependencies.tui
+      - optional-dependencies.studio
     - name: pytest
       src: pypi
     - name: dv-flow-mgr
