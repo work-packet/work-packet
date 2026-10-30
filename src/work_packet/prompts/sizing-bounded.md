@@ -11,3 +11,7 @@ otherwise safe to leave: no half-made edits, no uncommitted files.
 - Hand on decisions and the exact next action, not research notes. "In
   `src/parse.c`, change `read_token` (line 212) to …" is worth more than a
   page on how the file works.
+- For open-ended items (tuning, profiling, "make X faster"), put a stop
+  rule on the item's outline line when you open it: a target number, or a
+  step limit. When it is reached, close the item with its result and go
+  on; if the owner should decide whether to go further, ask.

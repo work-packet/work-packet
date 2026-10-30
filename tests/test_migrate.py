@@ -113,6 +113,18 @@ def test_rebuild_from_archives(tmp_path, fake):
     con.close()
 
 
+def test_rows_from_another_version_still_read(tmp_path, fake):
+    finished(tmp_path)
+    migrate.migrate()
+    con = history.connect()
+    with con:
+        for rowid, st in con.execute("SELECT rowid, stats FROM step").fetchall():
+            d = dict(json.loads(st), route=None)
+            con.execute("UPDATE step SET stats = ? WHERE rowid = ?", (json.dumps(d), rowid))
+    assert history.steps(con) and all(s.dir is None for s in history.steps(con))
+    con.close()
+
+
 def test_active_project_is_provisional_and_resyncs(tmp_path, fake):
     proj, root = make_project(tmp_path / "p")
     for _ in range(3):

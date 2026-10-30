@@ -35,9 +35,11 @@ def _sum_values(steps):
     return tot
 
 
-def chart(cols, series, width=900, height=120, gap=2, label_h=16, left=40, bar_max=48):
+def chart(cols, series, width=900, height=120, gap=2, label_h=16, left=40, bar_max=48,
+          unit="tok"):
     """Stacked bars, one per column. ``cols``: [{label, title, link, failed,
-    values}]; ``series``: [(key, css class, legend)], bottom first."""
+    values}]; ``series``: [(key, css class, legend)], bottom first. ``unit``
+    (``tok`` or ``usd``) is how the axis label reads."""
     if not cols:
         return None
     top = max([sum(c["values"].get(k, 0) for k, _, _ in series) for c in cols] + [1])
@@ -59,7 +61,7 @@ def chart(cols, series, width=900, height=120, gap=2, label_h=16, left=40, bar_m
         if i % every:
             b["label"] = ""
     return {"width": width, "height": height, "plot_h": plot_h, "max": top, "bars": bars,
-            "left": left,
+            "left": left, "unit": unit,
             "legend": [(cls, name) for _, cls, name in series]}
 
 
@@ -289,7 +291,46 @@ def board(entries, now=None, days=7, on=None):
                      steps=sum(len(r["steps"]) for r in by_board.values()),
                      chart=chart(cols, CONTEXT, height=90) if days > 1 else None)
     return {"rows": out, "boards": boards, "total": total, "days": days,
-            "quota": quota(every, now)}
+            "quota": quota(every, now),
+            "spend": spend(by_board, [days_all[i][0] for i in sorted(days_all)], on)}
+
+
+SPEND_COLOURS = 8  # --sp0 .. --sp7 in base.html; boards past that reuse them
+
+
+def _usd(v):
+    return "$%.2f" % v
+
+
+def spend(by_board, dates, on=None):
+    """Spend by board (docs/stats-spend.md): a bar per board that spent
+    anything, biggest first, with its ``share`` of the whole and ``w``, its
+    length against the biggest (0..1); ``idle``, the boards in ``on`` that spent
+    nothing; ``chart``, spend per day stacked by board (None for one day).
+    ``by_board``: {board: {"steps", "days": {i: steps}}}; ``dates``: the day of
+    each index. None when nothing was spent."""
+    cost = {b: sum(s.cost or 0 for s in bb["steps"]) for b, bb in by_board.items()}
+    total = sum(cost.values())
+    if total <= 0:
+        return None
+    names = sorted([b for b in cost if cost[b] > 0], key=lambda b: (-cost[b], b))
+    top = cost[names[0]]
+    cls = {b: "sp%d" % (i % SPEND_COLOURS) for i, b in enumerate(names)}
+    bars = [{"name": b, "cost": cost[b], "share": cost[b] / total, "w": cost[b] / top,
+             "cls": cls[b]} for b in names]
+    idle = [b for b in (on or []) if b not in cls]
+    days_chart = None
+    if len(dates) > 1:
+        cols = []
+        for i, d in enumerate(dates):
+            v = {b: sum(s.cost or 0 for s in by_board[b]["days"].get(i, [])) for b in names}
+            day = sum(v.values())
+            parts = ", ".join("%s %s" % (b, _usd(v[b])) for b in names if v[b] > 0)
+            title = "%s: %s%s" % (d.isoformat(), _usd(day), " (%s)" % parts
+                                  if len(names) > 1 else "") if day else "%s: none" % d
+            cols.append({"label": d.strftime("%m-%d"), "values": v, "title": title})
+        days_chart = chart(cols, [(b, cls[b], b) for b in names], height=90, unit="usd")
+    return {"total": total, "bars": bars, "idle": idle, "chart": days_chart}
 
 
 def calls(transcript_path):

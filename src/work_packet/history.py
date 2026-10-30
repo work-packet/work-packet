@@ -124,8 +124,12 @@ def _step_json(s):
     return d
 
 
+_STEP_FIELDS = {f.name for f in dataclasses.fields(stats.Step)} - {"dir", "tools"}
+
+
 def _step_from(d, tools=None):
-    d = dict(d)
+    # Rows written by another wpk version may carry fields this one dropped.
+    d = {k: v for k, v in d.items() if k in _STEP_FIELDS}
     d["hook"] = tuple(d.get("hook") or ())
     return stats.Step(dir=None, tools=tools, **d)
 

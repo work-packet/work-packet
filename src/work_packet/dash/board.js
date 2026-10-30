@@ -1,11 +1,51 @@
 // The board page (board.html): dragging a card onto a board in the side tab
-// (docs/boards.md), and forms that ask first (data-confirm).
+// (docs/boards.md), cards that unfold and stay so, and forms that ask first (data-confirm).
 (function () {
   var h = document.documentElement;
   document.addEventListener("submit", function (e) {
     var f = e.target;
     if (f.dataset && f.dataset.confirm && !window.confirm(f.dataset.confirm)) e.preventDefault();
   });
+
+  // Cards are compact <details>; which are open is remembered per browser. live.js
+  // keeps them open across its swaps; this puts them back on a fresh load.
+  var KEY = "wpk-cards-open", opened = {};
+  try { opened = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) {}
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(opened)); } catch (e) {} }
+  function cards() { return document.querySelectorAll("details.card[data-project]"); }
+  function label() {
+    var b = document.getElementById("cards-all"); if (!b) return;
+    var all = cards(), n = 0;
+    all.forEach(function (d) { if (d.open) n++; });
+    b.textContent = all.length && n === all.length ? "Fold all" : "Expand all";
+  }
+  function restore() {
+    cards().forEach(function (d) { if (opened[d.dataset.project]) d.open = true; });
+    label();
+  }
+  document.addEventListener("toggle", function (e) {
+    var d = e.target;
+    if (!d.matches || !d.matches("details.card[data-project]")) return;
+    if (d.open) opened[d.dataset.project] = 1; else delete opened[d.dataset.project];
+    save(); label();
+  }, true);
+  // A click on an open card's body folds it, unless it hit a link, a button or a form,
+  // or was the end of selecting text.
+  document.addEventListener("click", function (e) {
+    var d = e.target.closest && e.target.closest("details.card[open] > .body");
+    if (!d || e.target.closest("a, button, form, input, select, textarea, label")) return;
+    var sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    d.parentNode.open = false;
+  });
+  document.addEventListener("click", function (e) {
+    if (!e.target.closest || !e.target.closest("#cards-all")) return;
+    var all = cards(), open = false;
+    all.forEach(function (d) { if (!d.open) open = true; });
+    all.forEach(function (d) { d.open = open; });
+  });
+  document.addEventListener("wpk:swap", restore);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", restore); else restore();
 
   // Drag a card onto a board in the side tab. live.js leaves the page alone meanwhile.
   var dragged = null;

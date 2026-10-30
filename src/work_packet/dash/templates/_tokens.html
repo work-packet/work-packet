@@ -24,7 +24,7 @@
 {% macro chart(c, title, legend=True) -%}
 {%- if c %}
 <svg class="tk" viewBox="0 0 {{ c.width }} {{ c.height }}" role="img" aria-label="{{ title }}">
-  {% if c.left %}<text class="axis" x="0" y="10">{{ c.max|tok }}</text>
+  {% if c.left %}<text class="axis" x="0" y="10">{{ c.max|money if c.unit == "usd" else c.max|tok }}</text>
   <line class="base" x1="{{ c.left }}" x2="{{ c.width }}" y1="{{ c.plot_h }}" y2="{{ c.plot_h }}"></line>{% endif %}
   {% for b in c.bars %}
   {% if b.link %}<a href="{{ b.link }}">{% endif %}<g class="{{ 'failed' if b.failed }}"><title>{{ b.title }}</title>

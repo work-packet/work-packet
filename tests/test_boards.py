@@ -139,3 +139,37 @@ def test_all_packets_moves_ticked_packets_to_a_board(home, client):
     r = client.post("/packets/bulk", data={"op": "board", "board": "nope", "pick": picks[:1]},
                     follow_redirects=False)
     assert "ok=0" in r.headers["location"] and _on("alpha") == "rtl"
+
+
+def _spent(name, cost, end):
+    from work_packet import stats
+    return stats.Step(project=name, wpid="w", step=1, attempt=None, failed=False, harness="fake",
+                      model="m", profile="p", cost=cost, input_tokens=100, end=end)
+
+
+def test_spend_by_board_on_stats(home, client, monkeypatch):
+    """Spend by board (docs/stats-spend.md): bars biggest first with share, idle
+    boards named, and spend per day stacked by board."""
+    from work_packet.dash import tokens
+    registry.new_board("rtl")
+    registry.new_board("idle")
+    registry.move("alpha", "rtl")
+    spent = {"alpha": [_spent("alpha", 3.0, "2026-10-21T10:00:00Z"),
+                       _spent("alpha", 1.0, "2026-10-20T10:00:00Z")],
+             "beta": [_spent("beta", 1.0, "2026-10-21T11:00:00Z")]}
+    monkeypatch.setattr(tokens, "project_steps", lambda e: spent.get(e["name"], []))
+    sp = tokens.board(registry.entries(), days=7, on=["main", "rtl", "idle"])["spend"]
+    assert [(b["name"], b["cost"], round(b["share"], 2), b["w"]) for b in sp["bars"]] == \
+        [("rtl", 4.0, 0.8, 1.0), ("main", 1.0, 0.2, 0.25)]
+    assert sp["total"] == 5.0 and sp["idle"] == ["idle"] and sp["chart"]["unit"] == "usd"
+    last = sp["chart"]["bars"][-1]
+    assert [s["cls"] for s in last["segs"]] == ["sp0", "sp1"] and "rtl $3.00, main $1.00" in last["title"]
+    assert tokens.board(registry.entries(), days=1, on=["main"])["spend"]["chart"] is None
+    html = client.get("/stats").text
+    assert 'id="spend"' in html and 'class="sp0" style="width: 100.0%"' in html
+    assert "$4.00 <span class=\"muted\">· 80%</span>" in html and "nothing on idle" in html
+    assert "Spend per day" in html and ">$4.00</text>" in html
+
+    spent.clear()
+    assert tokens.board(registry.entries(), on=["main"])["spend"] is None
+    assert "Spend per day" not in client.get("/stats").text

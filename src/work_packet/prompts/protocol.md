@@ -23,9 +23,11 @@ executor; if you change one, this step is thrown away.
 - Write `.pending/memento.md`: Markdown with YAML front matter. The body is
   the instruction for the next step, written for a reader who remembers
   nothing of this one. Keep it under about 2 KB: what is done, the exact
-  next action, the commands that worked, and which files (and line ranges)
-  to read. Mark anything you have not checked as a guess. The front matter
-  says when the next step runs:
+  next action, the commands that worked, and which files to read, naming
+  each place by function or symbol as well as line (`read_token` near
+  `parse.c:212`): line numbers move when the code is edited, names don't.
+  Mark anything you have not checked as a guess. The front matter says
+  when the next step runs:
 
   ```markdown
   ---
@@ -244,9 +246,13 @@ files beside it:
   answered questions. They are not shown in the prompt.
 
 `env.md` and `outline.md` are shown first under "State files" while they
-are under 8 KB; keep them well under that. Like every state file, change
-them only through their `.pending/state/` copies: a step that writes
-`state/` directly fails.
+are under 8 KB; keep them well under that. If the prompt lists either as
+"not shown", shrink it before anything else this step: collapse each
+finished item to one line (id, commit, one-line result) and move the
+detail to `state/notes/<item>.md` or `state/log.md`.
+
+Like every state file, change them only through their `.pending/state/`
+copies: a step that writes `state/` directly fails.
 
 ## Keeping the context small
 
@@ -257,6 +263,9 @@ later call, so read only what this step needs:
   the end of it or grep it for what matters.
 - Find what you need with a search first, then read only that part of the
   file (offset and limit). Do not read a large file whole, by any tool.
+- Read at most about 150 lines at a time. To read one function, find its
+  first line with `grep -n`, then read up to its end. Don't read a region
+  to get oriented: grep it for what you need.
 - When the instruction names the lines to read, read those, not the whole
   file.
 - Run every command in the foreground. Do not start a background task

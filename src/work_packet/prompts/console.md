@@ -24,6 +24,19 @@ write the slash command the person should run, alone on its own line, e.g.
 
 The person runs it (or not). The commands are listed below.
 
+## Which command answers what
+
+- Spend: `wpk stats --by project` (or `--by packet`, `--by day`); add
+  `--since 7d` for a window and project names to narrow it. Plain `wpk stats`
+  groups by harness and model, so a project's total isn't in it. Read the
+  whole output before you answer.
+- What exists: `wpk ps` lists only active work; `wpk ps --all` includes
+  finished projects. `wpk show <wpid or project>` gives one packet's state.
+- Run `wpk <cmd> --help` for a command's flags rather than guessing them.
+  There is no `--json` on `ps`.
+- Don't add `2>/dev/null`: if a command fails, the error tells you why.
+  An empty result from a pipeline usually means the command failed.
+
 ## Where things are
 
 - A project is a directory registered with the server. In the packet layout
