@@ -52,6 +52,7 @@ CONFIG_DEFAULTS = {
     "budget_quota_per_week": 0,       # share of the weekly quota per project; 0 = no cap
     "max_steps_per_hour": 0,          # per packet; 0 = no cap
     "max_step_budget_usd": 10.00,     # the most an answer's `sets` may raise step_budget_usd to
+    "clone_tool": "ivpm",             # what clones a new packet's repo: ivpm or git
 }
 SERVER_DEFAULTS = {                   # server.md §6
     "port": 7878,
@@ -899,6 +900,8 @@ def validate_config(d):
     v = d.get("max_step_budget_usd", 1)
     if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
         out.append(_err("max_step_budget_usd", "must be a number > 0"))
+    if d.get("clone_tool", "ivpm") not in ("ivpm", "git"):
+        out.append(_err("clone_tool", "must be ivpm or git"))
     if "sched" in d:
         out += validate_sched(d["sched"])
     return out

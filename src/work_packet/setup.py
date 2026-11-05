@@ -723,18 +723,37 @@ def packet_clone(copy=None, clone=None):
     return copy, (repos[0] if repos else None)
 
 
-def clone_packet(r, folder):
+def clone_packet(r, folder, on_line=None):
     """Clone repo ``r`` as the packet folder ``folder`` (absent or empty), with its
-    shared links. Returns the commands run."""
+    shared links. Returns the commands run. ``on_line(text, final)`` gets their
+    output as it comes (``progress.run_streamed``), git's progress included."""
+    from .progress import run_streamed
     if os.path.lexists(folder) and not (os.path.isdir(folder) and not os.listdir(folder)):
         raise SetupError("%s exists: to work in it, leave the repo empty" % tilde(folder))
     out = []
     for cmd in clone_commands(None, r, dst=folder):
-        res = run_fix(cmd)
-        if res.returncode:
-            raise SetupError("%s: %s" % (cmd, (res.stderr or res.stdout).strip()))
+        run = cmd.replace("git clone ", "git clone --progress ", 1) if on_line else cmd
+        rc, said = run_streamed(run, on_line)
+        if rc:
+            raise SetupError("%s: %s" % (cmd, said))
         out.append(cmd)
     return out
+
+
+def ivpm_clone(src, folder, args=(), on_line=None):
+    """``ivpm clone [args] src folder``: the clone and its dependencies in one
+    (dash-create-progress-design.md). ``src`` is a URL or a path."""
+    from .progress import run_streamed
+    exe = ivpm_exe()
+    if exe is None:
+        raise SetupError("ivpm is not installed: install it (pip install ivpm)")
+    p = os.path.expanduser(src)
+    rc, said = run_streamed([exe, "clone"] + list(args)
+                            + [p if os.path.exists(p) else src, folder], on_line)
+    if rc:
+        tail = "\n".join(said.splitlines()[-15:])
+        raise SetupError("ivpm clone %s failed:\n%s" % (src, tail))
+    return "ivpm clone %s" % " ".join(shlex.quote(a) for a in list(args) + [src, tilde(folder)])
 
 
 def ivpm_exe():
@@ -743,21 +762,49 @@ def ivpm_exe():
     return shutil.which("ivpm") or (near if os.access(near, os.X_OK) else None)
 
 
-def ivpm_update(folder):
+def ivpm_version():
+    """The installed ivpm's version, or None (asked once per process)."""
+    if "v" not in _IVPM_VERSION:
+        exe, v = ivpm_exe(), None
+        if exe:
+            try:
+                res = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                                     timeout=30)
+                v = (res.stdout.strip().splitlines() or [None])[-1] if not res.returncode \
+                    else None
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        _IVPM_VERSION["v"] = v
+    return _IVPM_VERSION["v"]
+
+
+_IVPM_VERSION = {}
+
+
+def ivpm_wanted(folder):
+    """Whether ``ivpm_update`` would run in ``folder``: an ``ivpm.yaml`` and no
+    ``packages/`` yet (a shared one is a link to another clone's)."""
+    return os.path.isfile(os.path.join(folder, "ivpm.yaml")) and \
+        not os.path.lexists(os.path.join(folder, "packages"))
+
+
+def ivpm_update(folder, on_line=None):
     """Fetch a new packet clone's dependencies (docs/run-binding-v1.md R3): ``ivpm
-    update`` when it has an ``ivpm.yaml`` and no ``packages/`` yet (a shared one is
-    a link to another clone's, not ours to update). Run after the branch is checked
-    out, since the deps are the branch's. Returns the command run, or None."""
-    if not os.path.isfile(os.path.join(folder, "ivpm.yaml")) or \
-            os.path.lexists(os.path.join(folder, "packages")):
+    update`` when ``ivpm_wanted``. Run after the branch is checked out, since the
+    deps are the branch's. Returns the command run, or None. ``on_line(text,
+    final)`` gets its output as it comes, then with ``-v``, which shows the
+    Python install's steps."""
+    from .progress import run_streamed
+    if not ivpm_wanted(folder):
         return None
     exe = ivpm_exe()
     if exe is None:
         raise SetupError("%s has an ivpm.yaml but ivpm is not installed: install it "
                          "(pip install ivpm), or clone the repo yourself" % tilde(folder))
-    res = subprocess.run([exe, "update"], cwd=folder, capture_output=True, text=True)
-    if res.returncode:
-        tail = "\n".join((res.stderr or res.stdout).strip().splitlines()[-15:])
+    rc, said = run_streamed([exe, "update"] + (["-v"] if on_line else []), on_line,
+                            cwd=folder)
+    if rc:
+        tail = "\n".join(said.splitlines()[-15:])
         raise SetupError("ivpm update in %s failed:\n%s" % (tilde(folder), tail))
     return "ivpm update"
 

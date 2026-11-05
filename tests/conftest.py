@@ -23,6 +23,14 @@ def _no_site_config(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _clone_with_git(monkeypatch):
+    """New packets clone with git unless a test asks for ivpm: the host's ivpm
+    (or none) must not decide what a test does."""
+    from work_packet import schema
+    monkeypatch.setitem(schema.CONFIG_DEFAULTS, "clone_tool", "git")
+
+
+@pytest.fixture(autouse=True)
 def _finish_livecard_flush():
     """The board updates cards in a thread after each request (dash/app.py); one
     still running would read the next test's state (it loads plugins, say)."""

@@ -171,11 +171,52 @@ def cmd_start(args) -> int:
             print(ln)
         if args.dry_run:
             return 0
-        plan = starters.make(recipe)
+        plan = starters.make(recipe, progress=_new_progress(sys.stderr))
     except (starters.StartError, ValueError, OSError) as e:
         return _err(str(e))
     print("Created %s: the card is %s" % (plan.name, layout_card(plan)))
     return 0
+
+
+def _new_progress(out):
+    """``wpk new``'s progress on ``out``: each step, each package as IVPM
+    finishes it, and (on a terminal) git's progress on one line."""
+    tty = out.isatty()
+    label, mark = {}, {"ok": "ok", "fail": "FAILED", "skip": "skipped"}
+    shown = [False]
+
+    def say(text):
+        if shown[0]:
+            out.write("\r\x1b[K")
+            shown[0] = False
+        out.write(text + "\n")
+        out.flush()
+
+    def on(ev):
+        k = ev["k"]
+        if k == "step":
+            if ev["state"] == "run":
+                label[ev["id"]] = ev["label"]
+                say("%s ..." % ev["label"])
+            else:
+                say("%s: %s%s%s" % (label.get(ev["id"]) or ev.get("label") or ev["id"],
+                                    mark.get(ev["state"], ev["state"]),
+                                    " (%ss)" % ev["secs"] if ev.get("secs") is not None else "",
+                                    ", " + ev["note"] if ev.get("note") else ""))
+        elif k == "pkg" and ev["name"] != "[clone]" and ev["state"] != "run":
+            say("  %s %s%s" % (ev["name"], mark[ev["state"]],
+                               ": " + ev["error"] if ev.get("error") else ""))
+        elif k == "task" and ev["state"] in ("ok", "fail") and not ev.get("pkg"):
+            say("  [%s] %s" % (ev["name"], mark[ev["state"]]))
+        elif k == "note":
+            say("  " + ev["text"])
+        elif k == "git" and tty:
+            out.write("\r\x1b[K  %s%s %d%%" % (ev["pkg"] + ": " if ev.get("pkg") and
+                                               ev["pkg"] != "[clone]" else "", ev["phase"],
+                                               ev["pct"]))
+            out.flush()
+            shown[0] = True
+    return on
 
 
 def layout_card(plan):

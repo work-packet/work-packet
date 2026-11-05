@@ -1,0 +1,23 @@
+>> [clone] (git)
+Cloning into '/W/c4'...
+fatal: '/W/nosuchroot' does not appear to be a git repository
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+<< [clone] ERROR: Git clone failed (git exit 128)
+fatal: git could not clone 'file:///W/nosuchroot' (git exit 128)
+  provider       : git
+  source         : file:///W/nosuchroot
+  interpreted as : file:// URL -- local path /W/nosuchroot
+  transport      : local (as spelled in the source)
+  command        : git clone file:///W/nosuchroot /W/c4
+  detected by    : 'git clone' exited non-zero (128); no workspace was created
+git reported:
+  Cloning into '/W/c4'...
+  fatal: '/W/nosuchroot' does not appear to be a git repository
+  fatal: Could not read from remote repository.
+  Please make sure you have the correct access rights
+  and the repository exists.
+hint: the remote refused authentication -- for a private repository, authenticate first (e.g. 'gh auth login', or add an SSH key) or verify you have access
+rc=1

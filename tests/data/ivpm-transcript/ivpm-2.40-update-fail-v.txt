@@ -1,0 +1,29 @@
+note: Reading ivpm.yaml from project /W/g2
+>> nosuch (git)
+note: loading package nosuch
+Cloning into '/W/g2/packages/nosuch'...
+fatal: '/W/nosuch' does not appear to be a git repository
+fatal: Could not read from remote repository.
+
+Please make sure you have the correct access rights
+and the repository exists.
+fatal: Failed to clone file:///W/nosuch (git exit 128)
+git reported:
+  Cloning into '/W/g2/packages/nosuch'...
+  fatal: '/W/nosuch' does not appear to be a git repository
+  fatal: Could not read from remote repository.
+  Please make sure you have the correct access rights
+  and the repository exists.
+hint: the remote refused authentication -- for a private repository, authenticate first (e.g. 'gh auth login', or add an SSH key) or verify you have access
+<< nosuch (/W/g2/ivpm.yaml:6:7) ERROR: Failed to clone file:///W/nosuch (git exit 128)
+git reported:
+  Cloning into '/W/g2/packages/nosuch'...
+  fatal: '/W/nosuch' does not appear to be a git repository
+  fatal: Could not read from remote repository.
+  Please make sure you have the correct access rights
+  and the repository exists.
+hint: the remote refused authentication -- for a private repository, authenticate first (e.g. 'gh auth login', or add an SSH key) or verify you have access
+/W/g2/ivpm.yaml:6:7: error: Failed to update package nosuch [src: git, url: file:///W/nosuch]
+    - name: nosuch
+      ^
+rc=1

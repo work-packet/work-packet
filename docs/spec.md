@@ -59,6 +59,7 @@ All keys are optional. Unknown keys are errors.
 | `step_context_tokens` | int ≥ 0 | 80000 | context at which a step is told to wrap up; 0 = off (context.md C3) |
 | `carry_session` | bool | false | resume the previous step's session when allowed (context.md C4) |
 | `max_step_budget_usd` | number > 0 | 10.00 | the most a question's `sets` may raise `step_budget_usd` to (docs/interaction.md §2); `wpk set` by hand is not limited |
+| `clone_tool` | `ivpm` or `git` | `ivpm` | what clones a new packet's repo: `ivpm clone`, or `git clone` then `ivpm update` (docs/starters-v1.md "Maker") |
 | `carry_ttl` | duration | `55m` | longest gap after which a session is carried over |
 | `carry_factor` | number > 1 | 4 | start fresh once a carried session's context reaches this multiple of its base |
 | `[profiles.<name>]` | table | built-ins | extra profiles, checked before the built-in ones (harness.md §4) |

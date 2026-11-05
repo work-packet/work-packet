@@ -228,7 +228,9 @@ Home directories are often severely limited, so nothing large goes to
     (2026-11-04: built as `git clone`, the branch checkout, then `ivpm
     update` when the clone has an `ivpm.yaml` and no `packages/` yet; the
     same as `ivpm clone`, but the deps are the branch's. A failed update
-    removes the clone, like any failed make. `setup.ivpm_update`.)
+    removes the clone, like any failed make. `setup.ivpm_update`.
+    2026-11-05: `ivpm clone` is now the default clone tool and `git` the other;
+    see docs/starters-v1.md "Maker".)
   - `wpk new "<title>"` with no repo makes `<name>/` holding the card and
     `.work-packet/`; files can be added before `wpk run`.
   - `wpk new <repo> <repo> …` (multi-repo) makes a plain folder with the

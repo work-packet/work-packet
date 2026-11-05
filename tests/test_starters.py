@@ -7,7 +7,7 @@ import urllib.parse
 
 import pytest
 
-from work_packet import forges, layout, project, registry, schema, starters
+from work_packet import forges, layout, project, registry, schema, setup, starters
 from work_packet.packet import Packet
 
 from test_setup import git, home, source                       # noqa: F401
@@ -402,24 +402,72 @@ def test_new_packet_on_a_board(forge, tmp_path):
     assert got.status_code == 303 and registry.get("a2")["board"] == "solver"
 
 
-FAKE_IVPM = """#!/bin/sh
-# Stand-in for ivpm: records where it ran and on which branch, then fills packages/.
-[ "$1" = update ] || exit 2
-git symbolic-ref --short HEAD > "%(log)s"
-[ -n "$IVPM_FAIL" ] && { echo "fetch failed: no route to host" >&2; exit 1; }
-mkdir -p packages/python && touch packages/python/marker
+FAKE_IVPM = r"""#!%(python)s
+# Stand-in for ivpm. `update` records the branch it ran on, then fills packages/;
+# `clone` records its arguments, clones and checks out as ivpm does, prints the
+# transcript ivpm does, and updates when there is an ivpm.yaml. IVPM_FAIL fails
+# the dependencies.
+import os, subprocess, sys
+a, log = sys.argv[1:], %(log)r
+def git(*args, cwd=None):
+    return subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True).returncode
+def deps(where):
+    with open(log, "w") as f:
+        f.write(subprocess.run(["git", "symbolic-ref", "--short", "HEAD"], cwd=where,
+                               capture_output=True, text=True).stdout)
+    print(">> dep (git)", flush=True)
+    if os.environ.get("IVPM_FAIL"):
+        print("fetch failed: no route to host", file=sys.stderr, flush=True)
+        print("<< dep (ivpm.yaml:3:5) ERROR: no route to host", flush=True)
+        sys.exit(1)
+    os.makedirs(os.path.join(where, "packages", "python"))
+    open(os.path.join(where, "packages", "python", "marker"), "w").close()
+    print("<< dep (0.1s)", flush=True)
+    print(">> [Installing Python packages]", flush=True)
+    print("   Installing package set 1/1 (1/1)", flush=True)
+    print("<< [Installing Python packages] (0.1s)", flush=True)
+if a == ["--version"]:
+    print("2.40.2")
+elif a[:1] == ["update"]:
+    deps(".")
+elif a[:1] == ["clone"]:
+    with open(log + ".clone", "a") as f:
+        f.write(" ".join(a[1:-2]) + "\n")
+    src, dst = a[-2:]
+    print(">> [clone] (git)", flush=True)
+    sys.stdout.write("Receiving objects:  50%% (1/2)\rReceiving objects: 100%% (2/2), done.\n")
+    if git("clone", "-q", src, dst):
+        print("<< [clone] ERROR: Git clone failed (git exit 128)", flush=True)
+        sys.exit(1)
+    if "-b" in a:
+        b = a[a.index("-b") + 1]
+        if git("switch", "-q", b, cwd=dst):
+            git("switch", "-q", "-c", b, cwd=dst)
+    rev = a[a.index("-r") + 1] if "-r" in a else None
+    if rev and git("checkout", "-q", "--detach", rev, cwd=dst) and \
+            git("checkout", "-q", "--detach", "origin/" + rev, cwd=dst):
+        print("<< [clone] ERROR: no such revision", flush=True)
+        sys.exit(1)
+    print("<< [clone] (0.1s)", flush=True)
+    if os.path.exists(os.path.join(dst, "ivpm.yaml")):
+        deps(dst)
+else:
+    sys.exit(2)
 """
 
 
 @pytest.fixture
 def fake_ivpm(tmp_path, monkeypatch):
-    """A fake ``ivpm`` first on PATH; returns the file it logs the branch to."""
+    """A fake ``ivpm`` first on PATH; returns the file it logs the branch to (and
+    ``<that>.clone``, the arguments of each clone)."""
+    import sys
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     log = tmp_path / "ivpm.log"
-    (bin_ / "ivpm").write_text(FAKE_IVPM % {"log": log})
+    (bin_ / "ivpm").write_text(FAKE_IVPM % {"log": str(log), "python": sys.executable})
     (bin_ / "ivpm").chmod(0o755)
     monkeypatch.setenv("PATH", "%s:%s" % (bin_, os.environ["PATH"]))
+    monkeypatch.delitem(setup._IVPM_VERSION, "v", raising=False)   # asked again
     return log
 
 
@@ -451,6 +499,237 @@ def test_a_failed_ivpm_update_leaves_nothing(home, source, tmp_path, fake_ivpm, 
     _ivpm_source(source)
     monkeypatch.setenv("IVPM_FAIL", "1")
     r = starters.from_values("clone", {"clone": str(source), "dir": str(tmp_path / "t")})
-    with pytest.raises(starters.StartError, match="ivpm update .* failed:\n.*no route to host"):
+    with pytest.raises(starters.StartError, match="(?s)ivpm update .* failed:\n.*no route to host"):
         starters.make(r)
     assert not (tmp_path / "t" / "dv-solve").exists()
+
+
+# --- the clone tool and progress (dash-create-progress-design.md) -----------------------
+
+def _make(r):
+    seen = []
+    plan = starters.make(r, progress=seen.append)
+    return plan, seen
+
+
+def _steps(seen):
+    return [(e["id"], e["state"]) for e in seen if e["k"] == "step"]
+
+
+def _head(folder):
+    import subprocess
+    return subprocess.run(["git", "-C", str(folder), "symbolic-ref", "-q", "--short", "HEAD"],
+                          capture_output=True, text=True).stdout.strip() or None
+
+
+def _with_ivpm(r):
+    r["clone"]["tool"] = "ivpm"
+    return r
+
+
+def test_ivpm_clone_fetches_the_dependencies_in_one(home, source, tmp_path, fake_ivpm):
+    _ivpm_source(source)
+    r = _with_ivpm(starters.from_values("clone", {"clone": str(source),
+                                                  "dir": str(tmp_path / "t")}))
+    assert "with ivpm" in " ".join(starters.preview(r))
+    plan, seen = _make(r)
+    folder = tmp_path / "t" / "dv-solve"
+    assert (folder / "packages" / "python" / "marker").exists()
+    assert (tmp_path / "ivpm.log.clone").read_text() == "\n"           # no ref options
+    assert _steps(seen) == [("clone", "run"), ("clone", "ok"), ("deps", "run"),
+                            ("deps", "ok"), ("files", "run"), ("files", "ok")]
+    assert {"k": "tool", "name": "ivpm", "version": "2.40.2"} in seen
+    pk = [(e["name"], e["state"], e["step"]) for e in seen if e["k"] == "pkg"]
+    assert pk == [("[clone]", "run", "clone"), ("[clone]", "ok", "clone"),
+                  ("dep", "run", "deps"), ("dep", "ok", "deps")]
+    g = [e for e in seen if e["k"] == "git"]
+    assert [(e["pct"], e["pkg"]) for e in g] == [(50, "[clone]"), (100, "[clone]")]
+    assert {"k": "line", "step": "clone", "text": ">> [clone] (git)"} in seen
+    tk = [(e["step"], e["at"], e["total"], e["state"]) for e in seen if e["k"] == "task"]
+    assert tk == [("deps", None, None, "run"), ("deps", 1, 1, "run"), ("deps", 1, 1, "ok")]
+    assert git(folder, "status", "--porcelain") == ""
+
+
+def test_ivpm_clone_of_a_repo_without_an_ivpm_yaml(home, source, tmp_path, fake_ivpm):
+    r = _with_ivpm(starters.from_values("clone", {"clone": str(source),
+                                                  "dir": str(tmp_path / "t")}))
+    plan, seen = _make(r)
+    assert _steps(seen)[:4] == [("clone", "run"), ("clone", "ok"), ("deps", "run"),
+                                ("deps", "skip")]
+    assert not fake_ivpm.exists()
+
+
+@pytest.mark.parametrize("ref,branch,args,head", [
+    (None, "try-it", "-b try-it", "try-it"),                     # a new branch
+    (None, "feat", "-b feat", "feat"),                           # carried on
+    ("feat", None, "-r feat", "feat"),                           # a branch as the ref
+    ("v1", None, "-r v1", None),                                 # a tag: detached
+    ("v1", "try-it", "-r v1", "try-it"),                         # a new branch at a ref
+    ("v1", "feat", "-b feat", "feat"),                           # the existing one wins
+])
+def test_ivpm_clone_ref_and_branch(home, source, tmp_path, fake_ivpm, ref, branch, args, head):
+    git(source, "branch", "feat")
+    git(source, "tag", "v1")
+    vals = {"clone": str(source), "dir": str(tmp_path / "t")}
+    vals.update({k: v for k, v in (("ref", ref), ("branch", branch)) if v})
+    r = _with_ivpm(starters.from_values("clone", vals))
+    plan, seen = _make(r)
+    folder = tmp_path / "t" / "dv-solve"
+    assert (tmp_path / "ivpm.log.clone").read_text().strip() == args
+    assert _head(folder) == head
+    # the same as the git tool does
+    r2 = starters.from_values("clone", dict(vals, name="git-" + "x"))
+    starters.make(r2)
+    assert _head(tmp_path / "t" / "git-x") == head
+
+
+def test_a_failed_ivpm_clone_leaves_nothing(home, source, tmp_path, fake_ivpm, monkeypatch):
+    _ivpm_source(source)
+    monkeypatch.setenv("IVPM_FAIL", "1")
+    r = _with_ivpm(starters.from_values("clone", {"clone": str(source),
+                                                  "dir": str(tmp_path / "t")}))
+    seen = []
+    with pytest.raises(starters.StartError, match="(?s)ivpm clone .* failed:\n.*no route"):
+        starters.make(r, progress=seen.append)
+    assert not (tmp_path / "t" / "dv-solve").exists()
+    assert _steps(seen) == [("clone", "run"), ("clone", "ok"), ("deps", "run"),
+                            ("deps", "fail")]
+    assert seen[-1] == {"k": "undo", "folder": str(tmp_path / "t" / "dv-solve")}
+    assert [e["error"] for e in seen if e["k"] == "pkg" and e["state"] == "fail"] == \
+        ["no route to host"]
+
+
+def test_the_clone_tool(home, source, tmp_path, fake_ivpm, monkeypatch):
+    c = {"url": str(source)}
+    assert starters.clone_tool(c) == ("git", None)          # the tests' default
+    monkeypatch.setitem(schema.CONFIG_DEFAULTS, "clone_tool", "ivpm")
+    assert starters.clone_tool(c) == ("ivpm", None)
+    os.makedirs(registry.home(), exist_ok=True)
+    with open(os.path.join(registry.home(), "config.toml"), "a") as fp:
+        fp.write('clone_tool = "git"\n')
+    assert starters.clone_tool(c) == ("git", None)
+    assert starters.clone_tool(dict(c, tool="ivpm")) == ("ivpm", None)
+    tool, why = starters.clone_tool(dict(c, tool="ivpm", share=["packages"]))
+    assert tool == "git" and "shares" in why
+    monkeypatch.setattr(setup, "ivpm_exe", lambda: None)
+    assert starters.clone_tool(dict(c, tool="ivpm")) == ("git", "ivpm is not installed")
+    with pytest.raises(starters.StartError, match="tool is one of"):
+        starters.check({"name": "x", "clone": {"url": "u", "tool": "svn"}})
+    assert [p.field for p in schema.validate_config({"clone_tool": "svn"})] == ["clone_tool"]
+
+
+def test_git_tool_progress(home, source, tmp_path, fake_ivpm):
+    _ivpm_source(source)
+    r = starters.from_values("clone", {"clone": str(source), "dir": str(tmp_path / "t"),
+                                       "branch": "try-it"})
+    plan, seen = _make(r)
+    assert _steps(seen) == [("clone", "run"), ("clone", "ok"), ("branch", "run"),
+                            ("branch", "ok"), ("deps", "run"), ("deps", "ok"),
+                            ("files", "run"), ("files", "ok")]
+    assert [e["name"] for e in seen if e["k"] == "pkg"] == ["dep", "dep"]
+    assert any(e["k"] == "line" and e["step"] == "clone" and "Cloning into" in e["text"]
+               for e in seen)
+
+
+@pytest.mark.skipif(setup.ivpm_exe() is None, reason="ivpm is not installed")
+def test_real_ivpm_clone(home, source, tmp_path, monkeypatch):
+    """The installed ivpm, on a repo without dependencies: its transcript reads."""
+    r = _with_ivpm(starters.from_values("clone", {"clone": str(source),
+                                                  "dir": str(tmp_path / "t"),
+                                                  "branch": "try-it"}))
+    plan, seen = _make(r)
+    folder = tmp_path / "t" / "dv-solve"
+    assert git(folder, "symbolic-ref", "--short", "HEAD") == "try-it"
+    assert ("[clone]", "ok") in [(e["name"], e["state"]) for e in seen if e["k"] == "pkg"]
+    assert _steps(seen)[:4] == [("clone", "run"), ("clone", "ok"), ("deps", "run"),
+                                ("deps", "skip")]
+
+
+def _guarded():
+    """A client through the guard, so sockets have a CSRF token; and the token."""
+    import warnings
+    from starlette.testclient import TestClient
+    from work_packet.dash.app import create_app
+    from work_packet.dash.guard import Guard, csrf_token
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    secret = b"k" * 32
+    base = "http://127.0.0.1:7878"
+    c = TestClient(Guard(create_app(), "loopback", secret, local_user="alice"),
+                   base_url=base, client=("127.0.0.1", 50000))
+    return c, csrf_token(secret), base
+
+
+def _job_events(c, token, base, ws):
+    with c.websocket_connect("ws://127.0.0.1:7878" + ws, headers={"origin": base}) as s:
+        s.send_text(json.dumps({"token": token}))
+        got = []
+        while not got or got[-1]["k"] != "done":
+            got.append(json.loads(s.receive_text()))
+    return got
+
+
+def test_dash_create_runs_as_a_job(home, source, tmp_path, fake_ivpm):
+    _ivpm_source(source)
+    c, token, base = _guarded()
+    hdr = {"origin": base, "x-csrf-token": token, "accept": "application/json"}
+    with c:
+        page = c.post("/new", data={"starter": "clone", "clone": str(source),
+                                    "dir": str(tmp_path / "t"), "action": "preview",
+                                    "csrf": token}, headers={"origin": base}).text
+        assert 'id="create-form"' in page and 'name="clone_tool"' in page
+        recipe = page.split('name="recipe" value="')[1].split('"')[0]
+        import html
+        form = {"starter": "clone", "recipe": html.unescape(recipe), "name": "dv-solve",
+                "objective": "", "action": "create", "clone_tool": "ivpm", "csrf": token}
+        r = c.post("/new", data=form, headers=hdr)
+        assert r.status_code == 200, r.text
+        job = r.json()
+        got = _job_events(c, token, base, job["ws"])
+        assert got[-1]["ok"] and got[-1]["url"].startswith("/p/dv-solve/compose?")
+        assert [e["n"] for e in got] == list(range(1, len(got) + 1))
+        assert ("deps", "ok") in _steps(got)
+        assert (tmp_path / "t" / "dv-solve" / "packages" / "python" / "marker").exists()
+        # replay from a point, then the page and the log
+        again = _job_events(c, token, base, job["ws"] + "?since=%d" % (len(got) - 2))
+        assert [e["n"] for e in again] == [len(got) - 1, len(got)]
+        assert 'data-job="%s"' % job["job"] in c.get("/new?job=" + job["job"]).text
+        log = c.get(job["log"]).text
+        assert "== Clone %s (ivpm clone) ok" % source in log and ">> [clone] (git)" in log
+        assert os.path.isfile(os.path.join(registry.home(), "runs", "create",
+                                           job["job"] + ".jsonl"))
+        # the same again: refused before any job starts
+        r = c.post("/new", data=form, headers=hdr)
+        assert r.status_code == 400 and "already registered" in r.json()["error"]
+
+
+def test_dash_create_job_failure(home, source, tmp_path, fake_ivpm, monkeypatch):
+    _ivpm_source(source)
+    monkeypatch.setenv("IVPM_FAIL", "1")
+    c, token, base = _guarded()
+    hdr = {"origin": base, "x-csrf-token": token, "accept": "application/json"}
+    with c:
+        r = c.post("/new", data={"starter": "clone", "clone": str(source), "clone_tool": "ivpm",
+                                 "dir": str(tmp_path / "t"), "action": "create",
+                                 "csrf": token}, headers=hdr)
+        got = _job_events(c, token, base, r.json()["ws"])
+        assert not got[-1]["ok"] and "no route to host" in got[-1]["error"]
+        assert any(e["k"] == "undo" for e in got)
+        assert not (tmp_path / "t" / "dv-solve").exists()
+        with c.websocket_connect("ws://127.0.0.1:7878" + r.json()["ws"],
+                                 headers={"origin": base}) as s:
+            from starlette.websockets import WebSocketDisconnect
+            s.send_text(json.dumps({"token": "nope"}))
+            with pytest.raises(WebSocketDisconnect) as ex:
+                s.receive_text()
+            assert ex.value.code == 1008
+    assert c.get("/new/job/nosuch/log").status_code == 404
+
+
+def test_cli_shows_the_steps(home, source, tmp_path, fake_ivpm, capsys):
+    from work_packet import cli
+    _ivpm_source(source)
+    assert cli.main(["start", "clone", "clone=%s" % source, "dir=%s" % (tmp_path / "t")]) == 0
+    err = capsys.readouterr().err
+    assert "Clone %s ..." % source in err and "Clone %s: ok (" % source in err
+    assert "Dependencies (ivpm update): ok" in err and "  dep ok" in err
+    assert "Receiving" not in err                     # git's progress only on a terminal

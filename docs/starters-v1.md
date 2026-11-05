@@ -25,7 +25,7 @@ A plain dict (JSON-able, so scripts can write one):
 |---|---|
 | `name` | project name |
 | `dir` | parent directory; the packet folder is `<dir>/<name>` (or `folder`, explicit) |
-| `clone` | `{url, ref?, branch?, share?[]}`: clone `url` as the folder, check out `ref`, make and switch to `branch` |
+| `clone` | `{url, ref?, branch?, share?[], tool?}`: clone `url` as the folder, check out `ref`, make and switch to `branch`; `tool` is `ivpm` or `git` (default: config `clone_tool`, else `ivpm`) |
 | `objective` | the first instruction (`prompt.md`); none: held for setup |
 | `inputs` | `[{name, text}]`: files put in the root's `state/` |
 | `origin` | `{kind, url, title, ...}`: where it came from, kept in `project.toml [origin]` and shown on the dashboard |
@@ -39,6 +39,24 @@ A plain dict (JSON-able, so scripts can write one):
 refusal), clone, check out, branch, `project.new(packet=True)`, inputs,
 origin. If anything fails after the clone, the clone it made is removed.
 `starters.preview(recipe)` says what `make` would do, without doing it.
+
+The clone tool (dash-create-progress-design.md, 2026-11-05):
+
+- `ivpm`, the default, runs `ivpm clone [-b branch | -r ref] url folder`: the clone
+  and its dependencies in one. A `ref` that is a branch on origin is then switched to
+  (as `git checkout` leaves it). A new `branch` at a `ref` is `-r ref` then
+  `git switch -c branch`, after asking `git ls-remote` whether the branch exists.
+- `git` runs `git clone`, the checkout, then `ivpm update` when the clone has an
+  `ivpm.yaml` and no `packages/`.
+- `ivpm` falls back to `git` when ivpm is not installed, when the recipe has `share`
+  links (they must exist before the update), or when `git ls-remote` cannot answer.
+
+`make(recipe, progress=fn)` calls `fn` with each step (`clone`, `branch`, `deps`,
+`files`, `board`), each line its commands print, git's progress, and IVPM's
+packages and tasks as read from its plain-text output (`progress.IvpmTranscript`).
+`wpk new` prints the steps on stderr. The dash's Create runs `make` as a background
+job (`dash/newjobs.py`) and shows them in a panel on the page; the job's log is
+`$WPK_HOME/runs/create/<id>.jsonl` (`/new/job/<id>/log`).
 
 ### Starters: ways to fill a recipe
 

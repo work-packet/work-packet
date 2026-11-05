@@ -23,7 +23,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import __about__, archived, clock, ide_sessions, layout, livecard, registry
-from . import data, dfmrun, markup, panels, plan, tokens, vendored
+from . import data, dfmrun, markup, newjobs, panels, plan, tokens, vendored
 from . import sched as dsched
 from ..sched.classes import CLASSES
 from .guard import split_host
@@ -154,6 +154,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                        asset_v="%s-%d" % (__about__.__version__, stamp),
                        columns=data.COLUMNS, ask_text=ask_text,
                        packet_layout=layout.is_packet_layout, packet_folder=layout.packet_folder)
+
+    jobs = newjobs.CreateJobs(home)       # New task's Create, in the background
 
     def render(request, name, status=200, **ctx):
         ctx["user"] = request.scope.get("state", {}).get("user")
@@ -1132,7 +1134,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     def compose_url(e, frag=""):
         return "/p/%s/compose%s" % (urllib.parse.quote(e["name"]), frag)
 
-    def new_page(request, starter, values, preview=None, recipe=None, error=None, status=200):
+    def new_page(request, starter, values, preview=None, recipe=None, error=None, status=200,
+                 job=None):
         from .. import starters
         es = archived.entries(home)
         recent = sorted(es, key=lambda x: x.get("created") or "", reverse=True)
@@ -1151,7 +1154,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                       starters=[starters.get(n) for n in starters.names()], starter=st,
                       fields=st.all_fields(), values=vals, preview=preview,
                       recipe=starters.dumps(recipe) if recipe else "", error=error,
-                      broken=starters.broken())
+                      broken=starters.broken(), job=job,
+                      clone=(recipe or {}).get("clone"), clone_tools=starters.CLONE_TOOLS,
+                      clone_tool=cfg.get("clone_tool") or "ivpm")
 
     def _starter_of(vals):
         from .. import starters
@@ -1161,7 +1166,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     async def new_form(request):
         q = dict(request.query_params)
         q.pop("msg", None), q.pop("ok", None)
-        return new_page(request, _starter_of(q), q)
+        job = jobs.get(q.pop("job", ""))      # a Create still going (or just gone): its panel
+        return new_page(request, _starter_of(q), q, job=job)
 
     async def new_search(request):
         from .. import starters
@@ -1182,6 +1188,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         starter = _starter_of(vals)
         go = vals.pop("go", "") == "1"
         rtext = vals.pop("recipe", "")
+        tool = vals.pop("clone_tool", "")
+        bg = "application/json" in request.headers.get("accept", "")   # new.js: a job
 
         def recipe_of():
             if rtext:                 # the previewed recipe, with your edits
@@ -1193,6 +1201,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                 r = starters.check(r)
             else:
                 r = starters.from_values(starter, vals, home)
+            if tool and r.get("clone"):
+                r["clone"]["tool"] = tool
+                r = starters.check(r)
             r["hold"] = not go
             return r
         try:
@@ -1202,20 +1213,91 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                 return new_page(request, starter, dict(vals, name=r["name"],
                                                        objective=r.get("objective", "")),
                                 preview=lines, recipe=r)
+            if bg:
+                await run_in_threadpool(starters.preview, r, home)   # refusals, at once
+                jid = jobs.start(r, starters.folder_of(r), lambda plan: made(plan, go), home)
+                return JSONResponse({"job": jid, "ws": "/new/job/%s/ws" % jid,
+                                     "log": "/new/job/%s/log" % jid})
             plan = await run_in_threadpool(starters.make, r, home)
         except (starters.StartError, registry.ConfigError, ValueError, OSError) as ex:
+            if bg:
+                return JSONResponse({"error": str(ex)}, status_code=400)
             if action == "preview" or rtext:
                 return new_page(request, starter, vals, error=str(ex))
             q = urllib.parse.urlencode({"msg": str(ex), "ok": "0", "name": vals.get("name", ""),
                                         "starter": starter})
             return RedirectResponse("/new?" + q, status_code=303)
-        e = {"name": plan.name}
+        return RedirectResponse(made(plan, go), status_code=303)
+
+    def made(plan, go):
+        """The page to go to once ``plan`` is made, as ``back`` sends you."""
         if go:
-            return back("/p/%s" % urllib.parse.quote(plan.name), executor.Outcome(
-                executor.OK, "created %s at %s; the runner has it" % (plan.name, plan.path)))
-        return back(compose_url(e), executor.Outcome(
-            executor.OK, "created %s at %s; held for setup" % (plan.name, plan.path)),
-            poke_runner=False)
+            poke()
+            url, msg = "/p/%s" % urllib.parse.quote(plan.name), \
+                "created %s at %s; the runner has it" % (plan.name, plan.path)
+        else:
+            url, msg = compose_url({"name": plan.name}), \
+                "created %s at %s; held for setup" % (plan.name, plan.path)
+        return "%s?%s" % (url, urllib.parse.urlencode({"msg": msg, "ok": "1"}))
+
+    async def new_job_ws(ws):
+        """A Create job's events (dash-create-progress-design.md): the CSRF token
+        first, as the console's; ``?since=`` (an event's ``n``) replays what came
+        after. Closes after the last (``done``)."""
+        import asyncio
+        import hmac
+        await ws.accept()
+        try:
+            first = await asyncio.wait_for(ws.receive_text(), 5)
+            token = (json.loads(first) or {}).get("token") or ""
+        except (asyncio.TimeoutError, ValueError, KeyError, TypeError, AttributeError,
+                WebSocketDisconnect):
+            token = ""
+        want = ws.scope.get("state", {}).get("csrf") or ""
+        jid = ws.path_params["jid"]
+        if not want or not hmac.compare_digest(token, want) or jobs.get(jid) is None:
+            return await ws.close(1008)
+        try:
+            since = int(ws.query_params.get("since") or 0)
+        except ValueError:
+            since = 0
+        queue = asyncio.Queue()
+        try:
+            for ev in jobs.subscribe(jid, asyncio.get_running_loop(), queue, since):
+                await ws.send_text(json.dumps(ev))
+                if ev["k"] == "done":
+                    return
+            rx = asyncio.ensure_future(ws.receive())
+            while True:
+                get = asyncio.ensure_future(queue.get())
+                done, _ = await asyncio.wait({rx, get}, return_when=asyncio.FIRST_COMPLETED)
+                if rx in done:
+                    get.cancel()
+                    if rx.result()["type"] == "websocket.disconnect":
+                        break
+                    rx = asyncio.ensure_future(ws.receive())
+                    continue
+                ev = get.result()
+                await ws.send_text(json.dumps(ev))
+                if ev["k"] == "done":
+                    break
+            rx.cancel()
+        except (WebSocketDisconnect, RuntimeError, OSError):
+            pass
+        finally:
+            jobs.unsubscribe(jid, queue)
+            if ws.client_state == WebSocketState.CONNECTED and \
+                    ws.application_state == WebSocketState.CONNECTED:
+                try:
+                    await ws.close()
+                except (WebSocketDisconnect, RuntimeError, OSError):
+                    pass
+
+    async def new_job_log(request):
+        text = await run_in_threadpool(jobs.log, request.path_params["jid"])
+        if text is None:
+            return not_found(request, "job %s" % request.path_params["jid"])
+        return PlainTextResponse(text)
 
     async def compose(request):
         from .. import setup
@@ -1714,6 +1796,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/new", new_form),
         Route("/new/search", new_search),
         Route("/new", new_create, methods=["POST"]),
+        Route("/new/job/{jid}/log", new_job_log),
+        WebSocketRoute("/new/job/{jid}/ws", new_job_ws),
         Route("/p/{project}/compose", compose),
         Route("/p/{project}/compose", compose_post, methods=["POST"]),
         Route("/p/{project}/compose/upload", compose_upload, methods=["POST"]),

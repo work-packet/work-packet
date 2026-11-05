@@ -10,7 +10,7 @@
 {% if error %}<p class="flash bad" style="max-width:640px">{{ error }}</p>{% endif %}
 {% for n, e in broken.items() %}<p class="muted" style="font-size:12px">Starter {{ n }} did not load: {{ e }}</p>{% endfor %}
 {% if preview %}
-<form class="act panel" method="post" action="/new" style="max-width:640px">
+<form class="act panel" method="post" action="/new" style="max-width:640px" id="create-form">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
   <input type="hidden" name="starter" value="{{ starter.name }}">
   <input type="hidden" name="recipe" value="{{ recipe }}">
@@ -20,6 +20,15 @@
   <label for="objective">Objective</label>
   <textarea id="objective" name="objective" rows="10" style="width:100%;font:inherit">{{ values.objective or '' }}</textarea>
   <label style="display:block;margin:8px 0"><input type="checkbox" name="go" value="1"> Hand it to the runner at once (else held: you look it over in Compose)</label>
+  {% if clone %}
+  <details style="margin:0 0 10px"><summary class="muted" style="font-size:12.5px;cursor:pointer">Advanced</summary>
+    <label for="clone_tool">Clone with</label>
+    <select id="clone_tool" name="clone_tool" style="font:inherit;padding:4px;display:block">
+      {% for t in clone_tools %}<option value="{{ t }}" {{ "selected" if t == (clone.tool or clone_tool) }}>{{ t }}{{ " (the default)" if t == clone_tool }}</option>{% endfor %}
+    </select>
+    <p class="muted" style="font-size:12px;margin:2px 0 0">ivpm: <code>ivpm clone</code>, the clone and its dependencies in one. git: <code>git clone</code>, then <code>ivpm update</code> if it has an ivpm.yaml.</p>
+  </details>
+  {% endif %}
   <div class="row"><button class="go primary" name="action" value="create">Create</button>
     <a href="/new?starter={{ starter.name }}{% if values.board %}&amp;board={{ values.board|urlencode }}{% endif %}">Start over</a></div>
 </form>
@@ -66,5 +75,38 @@
     <span class="muted" style="font-size:12px">Shows what it will make; nothing is made yet.</span></div>
 </form>
 {% endif %}
+<div id="new-job" class="panel" style="max-width:640px" hidden{% if job %} data-job="{{ job.id }}"{% endif %} data-csrf="{{ csrf or '' }}">
+  <div class="nj-head"><b class="nj-title">Creating {{ job.name if job else values.name }}</b><span class="nj-clock muted"></span></div>
+  <ol class="nj-steps"></ol>
+  <p class="nj-activity muted"></p>
+  <div class="nj-error flash bad" hidden></div>
+  <details class="nj-raw"><summary class="muted">Output <span class="nj-nlines"></span></summary><pre class="nj-log"></pre></details>
+  <p class="nj-links muted" style="font-size:12px"><a class="nj-loglink" href="#">the whole log</a></p>
+</div>
+<style>
+#new-job { margin-top: 12px; }
+#new-job .nj-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+#new-job .nj-clock { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 12px; }
+#new-job ol { list-style: none; padding: 0; margin: 0; }
+#new-job .nj-step { display: grid; grid-template-columns: 1.2em 1fr auto; gap: 2px 6px; padding: 3px 0; }
+#new-job .nj-step .ic { text-align: center; }
+#new-job .nj-step .t { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+#new-job .nj-step.run .ic { color: var(--running); } #new-job .nj-step.ok .ic { color: var(--COMPLETED); }
+#new-job .nj-step.fail .ic { color: var(--FAILED); } #new-job .nj-step.skip { color: var(--muted); }
+#new-job .nj-sub { grid-column: 2 / 4; font-size: 12.5px; }
+#new-job .nj-sub .meta { color: var(--muted); }
+#new-job .nj-pk { display: grid; grid-template-columns: 1.2em minmax(0, 14em) 1fr auto; gap: 0 6px; padding: 1px 0; }
+#new-job .nj-pk span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#new-job .nj-pk.fail { color: var(--FAILED); }
+#new-job .bar { display: inline-block; vertical-align: middle; width: 90px; height: 6px; border-radius: 3px;
+  background: var(--line); overflow: hidden; margin-left: 6px; }
+#new-job .bar i { display: block; height: 100%; background: var(--running); }
+#new-job .nj-activity { font-size: 12px; margin: 6px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#new-job .nj-raw summary { font-size: 12px; cursor: pointer; margin-top: 6px; }
+#new-job .nj-log { max-height: 300px; overflow: auto; font-size: 11.5px; white-space: pre-wrap; word-break: break-all; }
+#new-job .nj-error { margin: 8px 0 0; }
+@media (max-width: 520px) { #new-job .nj-pk { grid-template-columns: 1.2em minmax(0, 1fr) auto; }
+  #new-job .nj-pk .act { display: none; } }
+</style>
 <script src="/static/new.js?v={{ asset_v }}"></script>
 {% endblock %}

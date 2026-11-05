@@ -6,17 +6,20 @@ dict; ``make`` carries any recipe out the same way. Built-in starters are in
 (each entry point a Starter subclass).
 """
 
+import contextlib
 import copy as _copy
 import json
 import os
 import shutil
 import subprocess
+import time
 
 from .. import layout
 
 RECIPE_KEYS = ("name", "dir", "folder", "clone", "objective", "inputs", "origin", "model",
                "harness", "extra", "hold", "from", "board")
-CLONE_KEYS = ("url", "ref", "branch", "share")
+CLONE_KEYS = ("url", "ref", "branch", "share", "tool")
+CLONE_TOOLS = ("ivpm", "git")         # dash-create-progress-design.md: ivpm, the default
 
 
 class StartError(Exception):
@@ -159,6 +162,8 @@ def check(recipe):
         bad = sorted(set(c) - set(CLONE_KEYS))
         if bad:
             raise StartError("unknown clone keys: %s" % ", ".join(bad))
+        if c.get("tool") and c["tool"] not in CLONE_TOOLS:
+            raise StartError("clone: tool is one of %s" % ", ".join(CLONE_TOOLS))
     for i in r.get("inputs") or []:
         if not (isinstance(i, dict) and i.get("name") and isinstance(i.get("text"), str)) \
                 or os.path.basename(i["name"]) != i["name"] or i["name"].startswith("."):
@@ -230,8 +235,10 @@ def preview(recipe, h=None):
     if clone:
         if os.path.lexists(folder) and os.listdir(folder):
             raise StartError("%s exists and is not empty: it cannot be cloned into" % folder)
-        out.append("clone %s%s" % (clone["url"], " at %s" % clone["ref"]
-                                   if clone.get("ref") else ""))
+        tool, why = clone_tool(clone, h)
+        out.append("clone %s%s with %s%s" % (clone["url"], " at %s" % clone["ref"]
+                                             if clone.get("ref") else "", tool,
+                                             " (%s)" % why if why else ""))
         if clone.get("branch"):
             out.append("on branch %s" % clone["branch"])
     elif os.path.isdir(folder):
@@ -255,22 +262,172 @@ def _git(folder, *args):
     return res.stdout.strip()
 
 
+def _on_origin(folder, branch):
+    return subprocess.run(["git", "-C", folder, "rev-parse", "-q", "--verify",
+                           "refs/remotes/origin/" + branch], capture_output=True).returncode == 0
+
+
 def _branch(folder, ref, branch):
     if ref:
         _git(folder, "checkout", "-q", ref)
     if not branch:
         return
-    have = subprocess.run(["git", "-C", folder, "rev-parse", "-q", "--verify",
-                           "refs/remotes/origin/" + branch], capture_output=True).returncode == 0
-    if have:                           # started before: carry on with it
+    if _on_origin(folder, branch):     # started before: carry on with it
         _git(folder, "switch", "-q", branch)
     else:
         _git(folder, "switch", "-q", "-c", branch)
 
 
-def make(recipe, h=None):
+def clone_tool(clone, h=None):
+    """What clones ``clone`` (dash-create-progress-design.md): its ``tool``, else
+    the config's ``clone_tool``. Returns (tool, why another than asked, or None)."""
+    from .. import registry, setup
+    want = clone.get("tool")
+    if not want:
+        try:
+            want = registry.load_config(h).get("clone_tool") or "ivpm"
+        except registry.ConfigError:
+            want = "ivpm"
+    if want == "ivpm":
+        if clone.get("share"):
+            return "git", "it shares directories, which ivpm clone cannot yet"
+        if setup.ivpm_exe() is None:
+            return "git", "ivpm is not installed"
+    return want, None
+
+
+def _remote_head(url, branch):
+    """Whether ``url`` has branch ``branch``; None if it cannot be asked."""
+    p = os.path.expanduser(url)
+    try:
+        res = subprocess.run(["git", "ls-remote", "--exit-code", "--heads",
+                              p if os.path.exists(p) else url, "refs/heads/" + branch],
+                             capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return {0: True, 2: False}.get(res.returncode)
+
+
+class _Report:
+    """``make``'s progress (dash-create-progress-design.md): ``progress`` gets
+    each event, a dict: ``{"k": "step", id, label, state: run|ok|fail|skip,
+    secs, note}``, ``{"k": "line", step, text}`` for what a command printed,
+    and the events of ``progress.IvpmTranscript`` and git's progress with the
+    ``step`` they came in."""
+
+    def __init__(self, progress):
+        self.progress, self.cur, self.t0 = progress, None, 0.0
+
+    def emit(self, **ev):
+        if self.progress is not None:
+            self.progress(ev)
+
+    def begin(self, sid, label):
+        self.cur, self.t0 = sid, time.monotonic()
+        self.emit(k="step", id=sid, label=label, state="run")
+
+    def finish(self, state, **kw):
+        if self.cur is not None:
+            self.emit(k="step", id=self.cur, state=state,
+                      secs=round(time.monotonic() - self.t0, 1), **kw)
+            self.cur = None
+
+    def skip(self, sid, label, note):
+        self.emit(k="step", id=sid, label=label, state="skip", note=note)
+
+    @contextlib.contextmanager
+    def step(self, sid, label):
+        self.begin(sid, label)
+        try:
+            yield
+        except BaseException as e:
+            self.finish("fail", note=str(e).strip().splitlines()[0][:300] if str(e) else "")
+            raise
+        self.finish("ok")
+
+    def lines(self, ivpm_root=False):
+        """An ``on_line`` for ``run_streamed``: the raw lines, git's progress,
+        and IVPM's transcript read (``ivpm_root``: the folder ``ivpm clone``
+        clones, False for no IVPM)."""
+        from .. import progress as pg
+        t = pg.IvpmTranscript(ivpm_root or None) if ivpm_root is not False else None
+
+        def on_line(text, final):
+            if self.progress is None:
+                return
+            if final:
+                self.emit(k="line", step=self.cur, text=text)
+            if t is None:
+                g = pg.git_progress(text)
+                if g:
+                    self.emit(k="git", step=self.cur, pkg=None, **g)
+                return
+            for ev in t.feed(text, final):
+                self.emit(step=self.cur, **ev)
+                if ev["k"] == "pkg" and ev["name"] == pg.ROOT and self.cur == "clone":
+                    if ev["state"] == "ok":   # `ivpm clone`: on to the dependencies
+                        self.finish("ok")
+                        self.begin("deps", "Dependencies (ivpm)")
+        return on_line
+
+
+def _clone(rep, folder, clone, h):
+    """Clone, check out, and fetch the dependencies, with steps."""
+    from .. import setup
+    url, ref, branch = clone["url"], clone.get("ref"), clone.get("branch")
+    tool, why = clone_tool(clone, h)
+    existing = None
+    if tool == "ivpm" and ref and branch:
+        existing = _remote_head(url, branch)
+        if existing is None:
+            tool, why = "git", "could not ask %s for branch %s" % (url, branch)
+    if why:
+        rep.emit(k="note", text="cloning with %s: %s" % (tool, why))
+    if rep.progress is not None and (tool == "ivpm" or setup.ivpm_exe()):
+        rep.emit(k="tool", name="ivpm", version=setup.ivpm_version())
+    if tool == "git":
+        with rep.step("clone", "Clone %s" % url):
+            setup.clone_packet({"name": "", "from": url, "share": clone.get("share") or []},
+                               folder, rep.lines())
+        if ref or branch:
+            with rep.step("branch", "Check out %s" % (branch or ref)):
+                _branch(folder, ref, branch)
+        if setup.ivpm_wanted(folder):
+            with rep.step("deps", "Dependencies (ivpm update)"):
+                setup.ivpm_update(folder, rep.lines(ivpm_root=None))
+        else:
+            rep.skip("deps", "Dependencies", "no ivpm.yaml" if not os.path.isfile(
+                os.path.join(folder, "ivpm.yaml")) else "packages/ is shared")
+        return
+    if branch and (not ref or existing):
+        args = ["-b", branch]           # the branch's own dependencies
+    else:
+        args = ["-r", ref] if ref else []
+    rep.begin("clone", "Clone %s (ivpm clone)" % url)
+    try:
+        setup.ivpm_clone(url, folder, args, rep.lines(ivpm_root=folder))
+    except BaseException as e:
+        rep.finish("fail", note=str(e).strip().splitlines()[0][:300] if str(e) else "")
+        raise
+    if rep.cur == "deps" and not os.path.isfile(os.path.join(folder, "ivpm.yaml")):
+        rep.finish("skip", note="no ivpm.yaml")
+    rep.finish("ok")
+    after = []
+    if ref and args[:1] == ["-r"] and _on_origin(folder, ref):
+        after.append(("switch", "-q", ref))      # as `git checkout <branch>` leaves it
+    if branch and args[:1] != ["-b"]:
+        after.append(("switch", "-q", "-c", branch))   # at ref: its dependencies hold
+    if after:
+        with rep.step("branch", "Check out %s" % (branch or ref)):
+            for a in after:
+                _git(folder, *a)
+
+
+def make(recipe, h=None, progress=None):
     """Make the packet. Returns the project Plan. Nothing is left on a failure:
-    a clone made here is removed."""
+    a clone made here is removed. ``progress`` gets each step and what its
+    commands print, as events (``_Report``)."""
     from .. import fsutil, project, registry, setup
     from ..packet import Packet
     preview(recipe, h)                # every refusal before anything is made
@@ -278,45 +435,43 @@ def make(recipe, h=None):
     folder = folder_of(r)
     copy, clone = _setup_copy(r, h)
     extra = _extra(r, copy, h)
+    rep = _Report(progress)
     made = None
-    if clone:
-        made = "new" if not os.path.lexists(folder) else "empty"
-        try:
-            setup.clone_packet({"name": "", "from": clone["url"],
-                                "share": clone.get("share") or []}, folder)
-        except setup.SetupError as e:
-            _undo(folder, made)
-            raise StartError(str(e)) from None
     try:
         if clone:
-            _branch(folder, clone.get("ref"), clone.get("branch"))
-            setup.ivpm_update(folder)     # the branch's dependencies, as `ivpm clone` would
-        obj = r.get("objective") or None
-        held = r["hold"] or not obj
-        plan = project.new(r["name"], None if held else obj, path=folder,
-                           model=r.get("model"), extra=extra, packet=True, h=h)
-        if held and obj:
-            text = obj if obj.endswith("\n") else obj + "\n"
-            fsutil.atomic_write(os.path.join(plan.path, "prompt.md"), text)
-        root = Packet(layout.run_dir(plan.path, plan.root))
-        for i in r.get("inputs") or []:
-            fsutil.atomic_write(os.path.join(root.state_dir, i["name"]), i["text"])
+            made = "new" if not os.path.lexists(folder) else "empty"
+            _clone(rep, folder, clone, h)
+        with rep.step("files", "Packet files"):
+            obj = r.get("objective") or None
+            held = r["hold"] or not obj
+            plan = project.new(r["name"], None if held else obj, path=folder,
+                               model=r.get("model"), extra=extra, packet=True, h=h)
+            if held and obj:
+                text = obj if obj.endswith("\n") else obj + "\n"
+                fsutil.atomic_write(os.path.join(plan.path, "prompt.md"), text)
+            root = Packet(layout.run_dir(plan.path, plan.root))
+            for i in r.get("inputs") or []:
+                fsutil.atomic_write(os.path.join(root.state_dir, i["name"]), i["text"])
         if r.get("board"):
-            registry.move(plan.name, r["board"], h)
-    except (project.ProjectError, registry.BoardError, setup.SetupError, OSError) as e:
-        _undo(folder, made)
+            with rep.step("board", "Board %s" % r["board"]):
+                registry.move(plan.name, r["board"], h)
+    except (project.ProjectError, registry.BoardError, setup.SetupError, StartError,
+            OSError) as e:
+        _undo(folder, made, rep)
         raise StartError(str(e)) from None
     except BaseException:
-        _undo(folder, made)
+        _undo(folder, made, rep)
         raise
     return plan
 
 
-def _undo(folder, made):
+def _undo(folder, made, rep=None):
     if made:                          # only what this make cloned
         shutil.rmtree(folder, ignore_errors=True)
         if made == "empty":
             os.makedirs(folder, exist_ok=True)
+        if rep is not None:
+            rep.emit(k="undo", folder=folder)
 
 
 def from_values(starter, values, h=None):
