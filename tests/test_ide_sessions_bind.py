@@ -115,12 +115,19 @@ class World:
                            env=self.env)
 
     def close(self):
+        # SIGTERM first: ide_job stops its server (in a group of its own) on it, and a
+        # SIGKILL would leave that server running.
         for p in self.procs:
-            try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            p.wait()
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(p.pid, sig)
+                except ProcessLookupError:
+                    pass
+                try:
+                    p.wait(5)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
 
 
 @pytest.fixture

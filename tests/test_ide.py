@@ -353,7 +353,10 @@ def _web_client(home, tmp_path, kind="loopback", ts=None, **cfg):
     from test_server import SECRET, _client
     from work_packet.dash.app import create_app
     from work_packet.dash.guard import csrf_token
-    open(os.path.join(home, "config.toml"), "w").write("[ide]\nweb = true\n")
+    # The fake server is what runs; `code` need only be on PATH for the button (no
+    # VS Code on a CI runner).
+    open(os.path.join(home, "config.toml"), "w").write(
+        "[ide]\nweb = true\ncode = %s\n" % json.dumps(sys.executable))
     be = _backend(home, tmp_path, **cfg)
     host = "127.0.0.1:7878" if kind == "loopback" else "a9550:7878"
     peer = "127.0.0.1" if kind == "loopback" else "100.64.0.9"

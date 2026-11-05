@@ -176,6 +176,7 @@ def test_doctor_lists_plugins(fake):
     assert rows["tools.plugin.cli.gateway"].level == "ok"
     assert rows["tools.plugin.cli.acme"].level == "warn"      # no add_commands
     assert "is a wpk command" in rows["tools.plugin.cli.clash"].detail
+    assert "tools.plugin.harnesses.fake" in rows, (sorted(rows), harness.broken())
     assert rows["tools.plugin.harnesses.fake"].level == "ok"
     assert rows["tools.plugin.budget.broke"].level == "warn"
     assert "no module named acme_budget" in rows["tools.plugin.budget.broke"].detail
