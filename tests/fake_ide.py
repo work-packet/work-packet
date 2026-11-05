@@ -9,6 +9,8 @@ With ``-`` for the socket and ``--host H --port P --connection-token-file F``
 it serves over TCP, as a server in a job does (docs/scheduler-plan.md T-e),
 and refuses (403) any request without the token in the ``vscode-tkn`` cookie
 or a ``tkn`` query parameter.
+
+Each start also appends its ``WPK_IDE_*`` environment, as JSON, to ``<pids file>.env``.
 """
 
 import json
@@ -36,6 +38,8 @@ def has_token(conn):
 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
 with open(pids, "a") as fp:
     fp.write("%d %d\n" % (os.getpid(), child.pid))
+with open(pids + ".env", "a") as fp:           # what an extension or terminal would inherit
+    fp.write(json.dumps({k: v for k, v in os.environ.items() if k.startswith("WPK_IDE_")}) + "\n")
 
 
 async def page(request):

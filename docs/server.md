@@ -70,6 +70,11 @@ On every request, in middleware ahead of all routes:
    `allow`.
 4. **Record** the login name on the request (`request.state.user`) so
    actions can journal it.
+   `request.state.owner` is also set: true for anyone this listener lets act
+   (loopback, unix, an allowed tailnet login), and on the network listener
+   only for the board's owner. Owner-only views such as VS Code sessions
+   (`docs/vscode-plan.md` §4.5) check it in the handler, because the
+   read-only users of a network listener may still GET every page.
 
 A failed `whois` is cached for only 5 s, so a device that has just joined
 is not shut out for a minute.
@@ -256,6 +261,7 @@ loopback Host name, since it is the laptop's.
 | `wpk dash [--tailnet] [--port N] [--host ADDR]` | The board alone (S1, built). `--tailnet` overrides `[server] tailnet`; `--host` replaces both listeners with one, identity-checked unless loopback |
 | `wpk url` | Prints the running board's URLs (built); with `auth = "token"`, a fresh login link (S3) |
 | `wpk serve [-j N] [--detach] [--ensure]` | The daemon (§5): board and scheduler (built with the scheduler, docs/scheduler-plan.md Q4.6). `--detach` starts it in the background, log in `$WPK_HOME/log/wpkd.log`; `--ensure` does that only if no wpkd holds `wpkd.lease` (for cron on a login node) |
+| `wpk serve --stop [--wait S]` | Stops this home's wpkd (or, with none, a `wpk dash` board): SIGTERM, as systemd sends, then waits up to S seconds (30) for it to exit. Running steps are waited for (§4); if they outlast the wait it says so and leaves wpkd to finish (`wpk sched stop` kills them). A wpkd on another host sharing the home is named, not signalled. Under systemd use `systemctl --user stop wpkd` instead |
 | `wpk serve --install-unit` | Writes `wpkd.service`; prints the `enable-linger` and `systemctl --user enable --now` lines (S2) |
 | `wpk logout --all` | Clears sessions (token and pam modes, S3) |
 
@@ -300,6 +306,20 @@ external access off, configuration locked, and one `SELECT` only), so the
 person's SQL box cannot read outside the folder or write. A kernel found
 on the socket whose working folder is not this folder (it was removed and
 made again) is replaced. Closing the studio stops it.
+
+**Render listener** (`dash/render_gate.py`; studio-plan.md S3). The
+headless browser cannot sign in, and the board's listeners differ, so `wpk
+dash` also listens on a loopback port of its own (picked at start). Every
+request must carry `x-wpk-render: <secret>` (the browser sends it with each
+request of the page); only GET of the studio's frame, data and file routes
+and the static files is served, as the user `x-wpk-render-user` names (the
+studio's routes still require that user to have the studio open). `POST
+/_render/look` serves `wpk studio look`, which finds the port and secret in
+`$WPK_HOME/run/render.json` (mode 0600, removed at exit). Renders
+(`studio/renders.py`) are kept in `<run dir>/studio/renders/<key>/`
+(`full.png`, `thumb.png`, `full.N.png` for a tall page, `info.json` with the
+checks), keyed by the content of the file and what it reads; versions in
+`<run dir>/studio/versions/vNNNN.json`, their files in the blob store.
 
 **Studio frames.** Pages the board makes for the studio's canvas live
 under `/p/<project>/<wpid>/studio/frame/...`. Unlike every other page they

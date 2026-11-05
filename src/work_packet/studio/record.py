@@ -155,7 +155,7 @@ def record(entry, wpid, session, summary=None, home=None, now=None):
         "tokens": res.tokens or {}, "api_s": res.api_s,
         "studio": {"by": session["by"], "turns": f["turns"], "conversation": session.get("conv"),
                    "created": f["created"], "modified": f["modified"], "deleted": f["deleted"],
-                   "versions": [], "comments": 0},
+                   "versions": _versions(entry, wpid, session), "comments": 0},
     }
     if res.context:
         meta["context"] = model.context_summary(res.context)
@@ -169,3 +169,9 @@ def record(entry, wpid, session, summary=None, home=None, now=None):
 def _utc(t):
     import datetime
     return datetime.datetime.fromtimestamp(t, datetime.timezone.utc)
+
+
+def _versions(entry, wpid, session):
+    """The versions made in this session (docs/studio-plan.md S3.2)."""
+    from . import versions
+    return versions.since(entry, wpid, session["opened"])

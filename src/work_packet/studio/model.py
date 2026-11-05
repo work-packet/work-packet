@@ -24,6 +24,7 @@ DIR = ".studio"
 STATE = "studio.json"
 BASELINE = "baseline.json"
 LAYOUTS = ("tabs", "two-up")
+WP_MARK = "wp:"             # in a baseline: it has the run's state/ (tree.WP)
 
 
 class StudioError(Exception):
@@ -118,14 +119,19 @@ def open_studio(entry, wpid, user, conv=None, now=None):
     if out.code != 0:
         raise StudioError(out.msg)
     if s is None:
-        w = watch.Watcher(root)
         sd = studio_dir(entry, wpid)
         os.makedirs(sd, exist_ok=True)
-        fsutil.atomic_write(os.path.join(sd, BASELINE), json.dumps(w.hashes_now()) + "\n")
+        base = dict(watcher(entry, wpid).hashes_now(), **{WP_MARK: "v2"})
+        fsutil.atomic_write(os.path.join(sd, BASELINE), json.dumps(base) + "\n")
         _exclude_from_git(root)
         d["project"] = entry["name"]           # for wpk studio exec|query in the folder
         d["session"] = {"by": user, "opened": now or time.time(), "conv": conv,
                         "step": pkt.load_status()[0]["step"]}
+        from . import versions
+        try:                            # the files as the session found them
+            versions.snapshot(entry, wpid, root, user, note="at open")
+        except OSError:
+            pass
     elif conv and not s.get("conv"):
         s["conv"] = conv
     _save(entry, wpid, d)
@@ -158,15 +164,24 @@ def find(start):
         d = up
 
 
+def watcher(entry, wpid, **kw):
+    """A watcher on the studio's folder and the run's ``state/`` (``wp:state/``)."""
+    from . import tree
+    return watch.Watcher(folder(entry, wpid), extra=tree.watch_extra(entry, wpid), **kw)
+
+
 def changed(entry, wpid):
-    """(created, modified, deleted) since the session opened."""
-    root = folder(entry, wpid)
+    """(created, modified, deleted) since the session opened. A baseline from
+    before ``state/`` was watched leaves ``wp:`` paths out."""
     try:
         with open(os.path.join(studio_dir(entry, wpid), BASELINE), encoding="utf-8") as fp:
             before = json.load(fp)
     except (OSError, ValueError):
         before = {}
-    return watch.diff(before, watch.Watcher(root).hashes_now())
+    after = watcher(entry, wpid).hashes_now()
+    if not before.pop(WP_MARK, None):
+        after = {p: h for p, h in after.items() if not p.startswith(WP_MARK)}
+    return watch.diff(before, after)
 
 
 def _artifact(root, rel):
@@ -182,13 +197,28 @@ def _artifact(root, rel):
     return rel
 
 
-def pin(entry, wpid, path, by, now=None):
-    """Put ``path`` (relative to the folder) on the canvas."""
+def _tab_path(entry, wpid, path):
+    """``(rel, absolute path)`` of a file a tab may show: an artifact in the
+    folder, or a ``wp:`` path (``studio/tree.py``)."""
+    from . import tree
+    if str(path).startswith(tree.WP):
+        try:
+            p, _ = tree.resolve(entry, wpid, path)
+        except tree.TreeError as ex:
+            raise StudioError(str(ex))
+        return str(path), p
     root = folder(entry, wpid)
     rel = _artifact(root, path)
-    if not os.path.isfile(os.path.join(root, rel)):
+    return rel, os.path.join(root, rel)
+
+
+def pin(entry, wpid, path, by, now=None):
+    """Put ``path`` (relative to the folder, or a ``wp:`` path) on the canvas:
+    open it in a tab."""
+    rel, p = _tab_path(entry, wpid, path)
+    if not os.path.isfile(p):
         raise StudioError("no file %s" % rel)
-    k = kinds.kind_of(rel)
+    k = kinds.kind_of(p)                    # wp:card is the card's .wp.md
     d = _load(entry, wpid)
     if not any(a["path"] == rel for a in d["canvas"]):
         d["canvas"].append({"path": rel, "kind": k.name if k else None, "by": by,
@@ -201,8 +231,7 @@ def pin(entry, wpid, path, by, now=None):
 
 
 def unpin(entry, wpid, path):
-    root = folder(entry, wpid)
-    rel = _artifact(root, path)
+    rel, _ = _tab_path(entry, wpid, path)
     d = _load(entry, wpid)
     d["canvas"] = [a for a in d["canvas"] if a["path"] != rel]
     d["layout"]["open"] = [p for p in d["layout"]["open"] if p != rel]
@@ -239,6 +268,12 @@ def close_studio(entry, wpid, user, how="resume", summary=None, force=False, hom
     if s["by"] != user and not force:
         raise StudioError("%s's studio: only they can close it" % s["by"])
     pkt = packet(entry, wpid)
+    from . import versions
+    try:
+        versions.snapshot(entry, wpid, folder(entry, wpid), s["by"], note="at close", home=home,
+                          now=now)
+    except OSError:
+        pass                            # the step is recorded all the same
     n = record.record(entry, wpid, s, summary=summary, home=home, now=now)
     out = executor.release(pkt, how=how, by=s["by"], force=True)
     d["sessions"].append(dict(s, closed=now or time.time(), step=n, how=how))

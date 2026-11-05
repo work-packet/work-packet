@@ -57,7 +57,7 @@ KILL_AFTER_S = 5
 
 # The studio agent's tools, whatever the project allows besides (P0.3).
 STUDIO_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep") + tuple(
-    "Bash(wpk studio %s *)" % c for c in ("exec", "query", "datasets")) + (
+    "Bash(wpk studio %s *)" % c for c in ("exec", "query", "datasets", "look")) + (
     "Bash(wpk studio datasets)",)               # the kernel (docs/studio-plan.md S2.2)
 
 
@@ -309,8 +309,11 @@ class Agents:
         from .. import harness
         out = harness.get("claude").env(self._studio_spec(meta, os.devnull))
         out.update(WPK_PROTECT=protected(meta["project_dir"]), WPK_STUDIO=meta["id"])
-        if os.path.normpath(meta["cwd"]) != os.path.normpath(_packet(meta).path):
-            out["WPK_PROTECT_ALLOW"] = meta["cwd"]      # a child's work/, not its run dir
+        pkt = _packet(meta)
+        allow = [pkt.state_dir]                         # the plan (docs/studio-v2.md §3)
+        if os.path.normpath(meta["cwd"]) != os.path.normpath(pkt.path):
+            allow.append(meta["cwd"])                   # a child's work/, not its run dir
+        out["WPK_PROTECT_ALLOW"] = os.pathsep.join(allow)
         return out
 
     def _say(self, cid, text, propose, auto):

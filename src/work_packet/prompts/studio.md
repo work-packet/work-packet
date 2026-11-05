@@ -68,7 +68,8 @@ the studio, wpk records the session as one step.
 - **Charts are Vega-Lite** in `charts/<name>.vl.json`, naming their data by
   path relative to the spec, like a link: `"data": {"url":
   "../data/runs.csv"}` (a table file or a `.sql`), never inline values or a
-  web URL. Aggregate in a
+  web URL. The board runs Vega-Lite 6: `"$schema":
+  "https://vega.github.io/schema/vega-lite/v6.json"`. Aggregate in a
   `.sql` when the data is large (a chart gets at most 20,000 rows).
 - **Chart style**: the studio's theme sets colours and fonts; do not set
   your own. Bars for comparing amounts, lines for change over time, points
@@ -79,3 +80,21 @@ the studio, wpk records the session as one step.
   `"params": [{"name": "pick", "select": {"type": "interval", "encodings":
   ["x"]}}]` for a range, or `{"type": "point", "fields": ["test"]}` to
   click. Their question then arrives with the selected rows.
+
+## Look at what you made
+
+- **Before you end a turn that made or changed a document, chart or
+  table, look at it**: `wpk studio look <path>` renders it as the person
+  sees it, writes the picture under `.studio/look/` and prints its path
+  and any checks it flagged; then `Read` the picture. A tall page comes in
+  parts (`--part N`). Images are their own picture: `Read` them directly.
+- Look for the usual faults: text running out of its box or off the
+  chart, clipped or overlapping labels, an unreadable colour, an empty or
+  blank render, an axis that hides the effect, a title that says nothing.
+  Fix them before you hand back, and say in a line what you checked.
+- The checks are cheap and literal (overflow, text outside the chart,
+  broken images, Vega warnings, console errors); the picture is what
+  counts. "Checks on what you changed last turn" below lists any the board
+  found after your last turn.
+- Each turn that changes files is kept as a **version**; the person can
+  view, compare and restore them. You do not need to make backups.

@@ -8,7 +8,8 @@ small PDF, a load event after ``Page.navigate`` and a console error.
 ``FAKECHROME_LOG``: a file each call's method (and URL, for navigations) is
 appended to. ``FAKECHROME_NOT_READY=1``: ``window.__studioReady`` never
 becomes true. ``FAKECHROME_SLOW``: seconds each screenshot takes.
-``FAKECHROME_NO_START=1``: exit without listening.
+``FAKECHROME_NO_START=1``: exit without listening. ``FAKECHROME_CHECKS``: the
+JSON the page's checks (``__studioChecks``) return.
 """
 
 import base64
@@ -33,7 +34,9 @@ def handler(ws):
     for raw in ws:
         m = json.loads(raw)
         meth, p, sid = m["method"], m.get("params") or {}, m.get("sessionId")
-        log(meth + (" " + p["url"] if meth == "Page.navigate" else ""))
+        log(meth + (" " + p["url"] if meth == "Page.navigate" else "") +
+            (" " + json.dumps(p["headers"], sort_keys=True)
+             if meth == "Network.setExtraHTTPHeaders" else ""))
         res = {}
         events = []
         if meth == "Target.createTarget":
@@ -52,7 +55,9 @@ def handler(ws):
                            "params": {"timestamp": 1}}]
         elif meth == "Runtime.evaluate":
             expr = p["expression"]
-            if "__studioReady" in expr:
+            if "__studioChecks" in expr:
+                val = json.loads(os.environ.get("FAKECHROME_CHECKS") or "[]")
+            elif "__studioReady" in expr:
                 val = os.environ.get("FAKECHROME_NOT_READY") != "1"
             elif "querySelector" in expr:
                 val = None if "#none" in expr else [10, 20, 30, 40]

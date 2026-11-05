@@ -1,15 +1,48 @@
 {% extends "base.html" %}
-{# The studio (docs/interactive-tasks.md, docs/studio-plan.md S1.5): the canvas and the
-   conversation with the studio's agent. studio.js does the rest. #}
+{# The studio (docs/studio-v2.md §2): the file tree, the tabs (editors and viewers) and
+   the conversation with the studio's agent. studio.js and studio_files.js do the rest. #}
 {% set q = e.name|urlencode %}
 {% block title %}studio · {{ short }} · {{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ q }}">{{ e.name }}</a> / <a href="/p/{{ q }}/{{ wpid }}"><code>{{ short }}</code></a> / studio{% endblock %}
 {% block head %}
 <style>
 main#main { max-width: none; }
-.st-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 34%); gap: 12px;
-  height: calc(100vh - 96px); }
-.st-canvas, .st-conv { display: flex; flex-direction: column; min-height: 0; }
+.st-wrap { display: grid; grid-template-columns: minmax(180px, 17%) minmax(0, 1fr) minmax(300px, 30%);
+  gap: 10px; height: calc(100vh - 96px); }
+.st-files, .st-canvas, .st-conv { display: flex; flex-direction: column; min-height: 0; }
+.st-files .ft-head { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; font-size: 12px; }
+.st-files .ft-head .sp { margin-left: auto; }
+#st-tree { flex: 1; overflow: auto; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 4px 0; font-size: 13px; }
+.ft-sec + .ft-sec { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+.ft-row { display: flex; gap: 4px; align-items: center; padding: 1px 6px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; }
+.ft-row:hover { background: var(--hunk); }
+.ft-row .ft-name { overflow: hidden; text-overflow: ellipsis; }
+.ft-row.on { background: color-mix(in srgb, var(--link) 14%, transparent); }
+.ft-group { font-weight: 600; color: var(--ink); }
+.ft-packet { color: var(--link); }
+.ft-dir, .ft-muted, .ft-hidden { color: var(--muted); }
+.ft-muted { cursor: default; font-style: italic; }
+.ft-ro { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+.ft-count { font-size: 10px; background: var(--PAUSED, #b80); color: #fff; border-radius: 8px; padding: 0 5px; }
+.ft-fresh { color: var(--link); } .ft-dirty, .st-tab .dirty { color: var(--FAILED); margin-left: 4px; }
+.ft-ed, .ft-doc { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+.ft-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 4px 8px;
+  border-bottom: 1px solid var(--line); font-size: 12px; }
+.ft-bar .sp { margin-left: auto; }
+.ft-state { color: var(--muted); } .ft-state.dirty { color: var(--FAILED); }
+.ft-body { flex: 1; min-height: 0; overflow: auto; }
+.ft-body .cm-editor { height: 100%; }
+.ft-plain { width: 100%; height: 100%; box-sizing: border-box; border: 0; resize: none; padding: 6px;
+  font: 13px ui-monospace, monospace; background: var(--panel); color: var(--ink); }
+.ft-merge { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--panel); }
+.ft-merge-plain { display: grid; grid-template-columns: 1fr 1fr; height: 100%; }
+.ft-merge-plain textarea { font: 13px ui-monospace, monospace; }
+.ft-seg { display: flex; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.ft-seg .on { font-weight: 600; border-color: var(--link); }
+.ft-slot { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.ft-slot iframe { flex: 1; border: 0; width: 100%; background: var(--bg); }
 .st-tabs { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
 .st-tab { border: 1px solid var(--line); background: var(--panel); border-radius: 6px 6px 0 0;
   padding: 3px 8px; cursor: pointer; font: inherit; font-size: 13px; color: var(--ink); }
@@ -55,9 +88,25 @@ main#main { max-width: none; }
 .st-table .tb-sql textarea { flex: 1 1 100%; min-height: 4em; font: 12.5px ui-monospace, monospace; padding: 4px;
   border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
 .st-table .tb-stats { max-height: 30%; overflow: auto; margin-bottom: 6px; }
+.st-strip { display: flex; gap: 6px; overflow-x: auto; padding: 6px 0 2px; align-items: stretch; min-height: 0; }
+.st-strip:empty { display: none; }
+.st-chip { flex: none; border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+  padding: 3px; cursor: pointer; font: inherit; font-size: 11px; color: var(--muted); width: 92px;
+  display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.st-chip.on { border-color: var(--link); box-shadow: 0 0 0 1px var(--link); }
+.st-chip.pick { border-style: dashed; border-color: var(--link); }
+.st-chip .th { height: 52px; background: var(--bg) center top / cover no-repeat; border-radius: 3px; }
+.st-chip .flag { color: var(--FAILED); }
+.st-ver { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 8px 10px; }
+.st-ver .vbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.st-ver .cols { display: grid; gap: 10px; }
+.st-ver .cols.two { grid-template-columns: 1fr 1fr; }
+.st-ver img { max-width: 100%; border: 1px solid var(--line); border-radius: 4px; display: block; }
+.st-ver .checks { color: var(--FAILED); font-size: 12px; margin: 2px 0 6px; }
 dialog.st-close textarea { width: 100%; min-height: 8em; font: inherit; box-sizing: border-box; }
 @media (max-width: 900px) { .st-wrap { grid-template-columns: 1fr; height: auto; }
-  .st-tiles { min-height: 60vh; } .st-out { min-height: 40vh; } }
+  #st-tree { max-height: 40vh; } .st-tiles { min-height: 60vh; } .st-out { min-height: 40vh; } }
 </style>
 {% endblock %}
 {% block main %}
@@ -87,9 +136,17 @@ Only they can work in it or close it.</p></div>
 </div>
 <div class="st-wrap" id="studio" data-base="{{ base }}" data-csrf="{{ csrf or '' }}"
   data-conv="{{ conv.id if conv else '' }}" data-folder="{{ st.folder if st else '' }}" data-agent="{{ '1' if agent_on else '' }}">
-  <section class="st-canvas" aria-label="Canvas">
+  <section class="st-files" id="st-files" aria-label="Files">
+    <div class="ft-head"><strong>Files</strong>
+      <label class="muted" title="Show .git, packages, node_modules and the like (read-only)"><input type="checkbox" id="st-hidden"> hidden</label>
+      <span class="sp"></span><button type="button" class="mini" id="st-new" title="New file">+ new</button></div>
+    <div id="st-tree" role="tree"><div class="st-empty">loading…</div></div>
+  </section>
+  <section class="st-canvas" aria-label="Tabs">
     <div class="st-tabs" id="st-tabs"></div>
-    <div class="st-tiles" id="st-tiles"><div class="st-empty">Nothing on the canvas yet. Ask for something, then Pin it.</div></div>
+    <div class="st-tiles" id="st-tiles"><div class="st-empty">Open a file from the tree, or ask for something.</div></div>
+    <div class="st-ver" id="st-ver" hidden></div>
+    <div class="st-strip" id="st-strip" aria-label="Versions"></div>
   </section>
   <section class="st-conv" aria-label="Conversation">
     <div class="st-out" id="st-out" aria-live="polite"></div>
@@ -116,5 +173,6 @@ Only they can work in it or close it.</p></div>
   </form>
 </dialog>
 <script src="/static/studio.js?v={{ asset_v }}"></script>
+<script src="/static/studio_files.js?v={{ asset_v }}"></script>
 {% endif %}
 {% endblock %}

@@ -78,6 +78,9 @@ IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
     "idle_minutes": 60,
     "max_servers": 8,                  # one server per open target; LRU idle one makes room
     "workspace_trust": False,          # V0 finding 4: the runner already runs this code
+    "sessions": True,                  # Claude/Codex sessions in web VS Code on the board
+    "sessions_poll_s": 5,              # docs/vscode-monitor-plan.md §2.4
+    "sessions_keep_days": 30,
 }
 CONSOLE_DEFAULTS = {                  # docs/console.md §3
     "model": "haiku",                  # the agent's model; /model changes one conversation's
@@ -611,7 +614,7 @@ def _validate_ide(d):
     if not isinstance(t, dict):
         return [_err("ide", "must be a table")]
     out = _unknown(t, tuple(IDE_DEFAULTS), "ide")
-    for k in ("desktop", "web", "workspace_trust"):
+    for k in ("desktop", "web", "workspace_trust", "sessions"):
         if k in t and not isinstance(t[k], bool):
             out.append(_err("ide." + k, "must be true or false"))
     for k in ("code", "ssh_host"):
@@ -621,7 +624,8 @@ def _validate_ide(d):
         out.append(_err("ide.desktop_link", "must be auto, remote or local"))
     if t.get("backend", "serve-web") not in IDE_BACKENDS:
         out.append(_err("ide.backend", "must be one of %s" % ", ".join(IDE_BACKENDS)))
-    for k, dflt in (("idle_minutes", 60), ("max_servers", 8)):
+    for k, dflt in (("idle_minutes", 60), ("max_servers", 8), ("sessions_poll_s", 5),
+                    ("sessions_keep_days", 30)):
         m = t.get(k, dflt)
         if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
             out.append(_err("ide." + k, "must be a positive whole number"))

@@ -1,8 +1,12 @@
-"""The studio's vendored JavaScript (docs/studio-plan.md P0.5): what
+"""The dash's vendored JavaScript (docs/studio-v2.md §7): what
 ``tools/vendor/build.mjs`` wrote under ``dash/vendor/<lib>/``, served by
 ``vendor/manifest.json`` (only the files it lists, with long cache headers and
 the sha as the ETag). Too many files for ``app.STATIC``: Excalidraw's chunks
 and fonts alone are ~200.
+
+``dash/vendor/`` is build output, not committed: in a fresh checkout nothing
+is built until ``ivpm update`` and ``node tools/vendor/build.mjs`` run, and
+pages that need a library say so (``NOT_BUILT``) instead of failing.
 """
 
 import functools
@@ -18,6 +22,8 @@ TYPES = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css"
          ".txt": "text/plain; charset=utf-8", ".json": "application/json",
          ".png": "image/png", ".svg": "image/svg+xml", ".wasm": "application/wasm"}
 CACHE = "public, max-age=604800"
+NOT_BUILT = ("the board's JavaScript is not built: run `ivpm update` and "
+             "`node tools/vendor/build.mjs` in the wpk checkout")
 
 
 @functools.lru_cache(maxsize=1)
@@ -44,6 +50,11 @@ def lookup(rel, m=None):
     if ent is None or mt is None:
         return None
     return os.path.join(ROOT, *rel.split("/")), mt, ent["sha256"]
+
+
+def built(lib, m=None):
+    """True when ``lib`` (vega, draw, codemirror, term) is in the manifest."""
+    return lib in libs(m)
 
 
 def libs(m=None):

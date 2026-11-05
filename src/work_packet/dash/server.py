@@ -160,6 +160,8 @@ class Board:
         self.agents = Agents(self.home)
         self.app = create_app(home, runner=runner, shells=self.shells, ide_backend=self.ide,
                               agents=self.agents)
+        from ..studio import renders
+        self.renders = renders.install(renders.Service(self.home))
         self.secret = load_secret(self.home)
         self.user = getpass.getuser()
         self.network = cfg["auth"] == "unix" and (
@@ -203,6 +205,20 @@ class Board:
                                      # otherwise hold shutdown open for good
                                      timeout_graceful_shutdown=GRACE_S, **kw))
         return srv, asyncio.ensure_future(srv.serve(sockets=socks))
+
+    def _start_render(self):
+        """The studio's render listener (dash/render_gate.py): loopback, a port
+        of its own, for the headless browser and ``wpk studio look``."""
+        from ..studio import renders
+        from .render_gate import RenderGate
+        sock = _bind("127.0.0.1", 0)
+        port = sock.getsockname()[1]
+        srv = _Server(uvicorn.Config(RenderGate(self.app, self.renders), log_level="warning",
+                                     lifespan="off", proxy_headers=False, server_header=False,
+                                     timeout_graceful_shutdown=GRACE_S))
+        self.renders.base_url = "http://127.0.0.1:%d" % port
+        renders.write_listener(self.home, self.renders.base_url, self.renders.secret)
+        return srv, asyncio.ensure_future(srv.serve(sockets=[sock]))
 
     def _write_state(self):
         fsutil.atomic_write(state_path(self.home), json.dumps({
@@ -350,6 +366,10 @@ class Board:
                     self.urls["loopback"] = [_url(ip, self.port)]
                 if self.tailnet is not None:
                     tasks.append(asyncio.ensure_future(self._tailnet()))
+            try:
+                servers.append(self._start_render())
+            except OSError as e:
+                log.warning("the studio will have no renders: cannot listen on loopback: %s", e)
             try:            # before the runner, so its steps inherit DFM_EVENT_SINK
                 await self.events.start()
             except OSError as e:
@@ -380,6 +400,11 @@ class Board:
             if self.sock:
                 with contextlib.suppress(OSError):
                     os.unlink(self.sock)
+            from ..studio import renders
+            with contextlib.suppress(OSError):
+                if (renders.read_listener(self.home) or {}).get("pid") == os.getpid():
+                    os.unlink(renders.listener_file(self.home))
+            self.renders.stop()
             for sig in (signal.SIGINT, signal.SIGTERM):
                 loop.remove_signal_handler(sig)
 

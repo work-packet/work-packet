@@ -1,5 +1,6 @@
-"""The vendored JavaScript (docs/studio-plan.md P0.5): what the manifest lists
-is there, unchanged, and served with the right type; nothing else is."""
+"""The vendored JavaScript (docs/studio-v2.md §7): what the manifest lists
+is there, unchanged, and served with the right type; nothing else is. The
+bundles are build output: without a build, the tests that need them skip."""
 
 
 import pytest
@@ -7,19 +8,24 @@ import pytest
 from test_dash_tasks import _client
 from work_packet.dash import vendored
 
+needs_build = pytest.mark.skipif(not vendored.libs(), reason=vendored.NOT_BUILT)
+
 
 @pytest.fixture(autouse=True)
 def _cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
 
+@needs_build
 def test_the_manifest_matches_the_files():
     m = vendored.manifest()
-    assert set(vendored.libs(m)) == {"vega", "draw"}
+    assert set(vendored.libs(m)) == {"vega", "draw", "codemirror", "term"}
     assert {"vega", "vega-lite", "vega-embed", "vega-interpreter", "mermaid", "react",
             "@excalidraw/excalidraw"} <= set(m["versions"])
     assert [p for p in vendored.check(m) if p[0] == "error"] == []
-    for want in ("vega/vega.js", "draw/mermaid.js", "draw/excalidraw.js",
+    assert {"codemirror", "@codemirror/view", "@xterm/xterm"} <= set(m["versions"])
+    for want in ("codemirror/codemirror.js", "term/xterm.js", "term/xterm.css", "term/addon-fit.js",
+                 "vega/vega.js", "draw/mermaid.js", "draw/excalidraw.js",
                  "draw/excalidraw.css", "draw/mermaid-to-excalidraw.js"):
         assert want in m["files"], want
     assert any(p.startswith("draw/fonts/") and p.endswith(".woff2") for p in m["files"])
@@ -45,6 +51,7 @@ def test_check_finds_a_half_done_rebuild(tmp_path):
     assert "lib/a.js" not in text
 
 
+@needs_build
 def test_every_file_is_served_with_its_type(tmp_path, fake):
     c = _client()
     m = vendored.manifest()
@@ -61,12 +68,18 @@ def test_every_file_is_served_with_its_type(tmp_path, fake):
 
 def test_nothing_else_is_served(tmp_path, fake):
     c = _client()
-    for bad in ("vendor/vega/nope.js", "vendor/manifest.json", "vendor/../app.py",
+    for bad in ("vendor/xterm.js", "vendor/vega/nope.js", "vendor/manifest.json", "vendor/../app.py",
                 "vendor/vega/../../app.py", "vendor/draw", "vendor/"):
         assert c.get("/static/" + bad).status_code == 404, bad
-    assert c.get("/static/vendor/xterm.js").status_code == 200       # STATIC as before
 
 
+def test_unbuilt_is_empty_not_an_error(tmp_path):
+    m = vendored.manifest.__wrapped__(str(tmp_path / "manifest.json"))
+    assert m["files"] == {} and vendored.libs(m) == [] and not vendored.built("vega", m)
+    assert vendored.check(m, root=str(tmp_path)) == []
+
+
+@needs_build
 def test_budget():
     m = vendored.manifest()
     over = [p for p in vendored.check(m) if p[0] == "warning"]

@@ -22,14 +22,17 @@ def req_path(key, h=None):
     return os.path.join(req_dir(h), key + ".json")
 
 
-def request(key, size, argv, by, target, h=None):
-    """Ask for an IDE job (once: an existing request is kept)."""
+def request(key, size, argv, by, target, h=None, launch=None):
+    """Ask for an IDE job (once: an existing request is kept). ``launch``: the
+    id the server's processes get (``ide_launch``), so the job's ID can be
+    added to it."""
     os.makedirs(req_dir(h), exist_ok=True)
     p = req_path(key, h)
     if os.path.exists(p):
         return False
     fsutil.atomic_write(p, json.dumps({
         "key": key, "size": size, "argv": list(argv), "by": by, "target": target,
+        "launch": launch,
         "t": schema.format_timestamp(clock.now())}) + "\n")
     return True
 

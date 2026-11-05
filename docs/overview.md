@@ -93,6 +93,14 @@ note when the runner is off), then the wake-ups, soonest first: project,
 packet, wakes at, board. (Sleepers are already sorted by `wake_at` in
 `data.board()`.)
 
+### 5a. Recent VS Code sessions
+
+The owner only, when there are any: the 8 most recently active Claude Code
+and Codex sessions started in the board's web VS Code. Each row has the
+harness, a short session id, its packet (linked), the model, the last event,
+the last activity, the tokens, and where it ran. See `docs/vscode-plan.md`
+§4.5. These sessions are not counted in the token tiles or on Statistics.
+
 ### 6. Tokens, last N days: on Statistics (`/stats`)
 
 Moved off the Overview on 2026-10-28 (docs/overview-recent.md §3) to its

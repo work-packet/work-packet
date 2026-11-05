@@ -105,6 +105,36 @@ kernel uses when it has it.
   and aggregate) and the title. **Save to the spec** writes them into the
   file; anything else, edit the JSON or ask the agent.
 
+## Versions
+
+- Each turn of the agent that changes the studio's files is kept as a
+  **version** (and so are your own edits, taken before your next question,
+  the folder when the studio opens and again when it closes). A version
+  holds the files of a kind the studio knows (documents, images, tables,
+  charts) up to 20 MB each, in the board's blob store, with a picture of
+  each changed one. Not a git commit: the packet need not be a git repo.
+- **The strip** under the canvas shows them, newest on the right, with a
+  thumbnail, who made it and when; ⚑ marks one whose pictures the checks
+  flagged (below). Click one to **view** it: the pictures of what it
+  changed. **Back to now** returns to the canvas.
+- **Compare with…** then another version shows the two side by side;
+  **Flip** shows one in place of the other, which is the best way to see a
+  small change.
+- **Restore** writes that version's files back (files made since are
+  removed) and keeps the result as a new version, so nothing is lost.
+- **Keep** marks the versions worth showing first (★).
+
+## What the agent sees
+
+The board renders each document, chart and table the way you see it (a
+headless Chrome or Chromium on the board's host; without one there are no
+pictures, and the strip says so). The agent runs `wpk studio look <path>`
+to get the picture of what it made and reads it before handing back, so it
+can catch a title running off the chart or a table too wide for the page.
+Cheap checks run on every picture and are shown on the strip and given to
+the agent at its next turn: text wider than its box, text outside a chart,
+broken images, Vega warnings and console errors.
+
 ## Closing
 
 **Close studio…** shows a summary for the step: drafted from the

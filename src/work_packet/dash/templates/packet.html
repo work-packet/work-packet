@@ -4,6 +4,7 @@
 {% import "_sched.html" as schm with context %}
 {% import "_report.html" as rpm %}
 {% import "_console.html" as cv %}
+{% import "_vscode.html" as vsm %}
 {% import "_answer.html" as ans with context %}
 {% block title %}{{ p.short }} · {{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <code>{{ p.short }}</code>{% endblock %}
@@ -73,8 +74,14 @@
   {% if st in ("RUNNABLE", "SLEEPING") %}<button class="go" name="pause" value="1"{% if p.running %} disabled title="a step is running: pause after it ends"{% endif %}>Pause and open</button>
   {% endif %}<button class="go" name="go" value="desktop">Open in VS Code</button>
   {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
-  <span class="muted" style="font-size:12px">{% if p.running or st in ("RUNNABLE", "SLEEPING") %}The runner owns it: files open read-only until you pause it.{% else %}Its worktrees, <code>state/</code> and the packet folder.{% endif %}</span>
+  <span class="muted ide-hint" style="font-size:12px">{% if packet_layout(e.path) %}{% if p.running or st in ("RUNNABLE", "SLEEPING") %}The runner works in this folder: pause it before you edit.{% else %}The packet folder, <code>{{ packet_folder(e.path) }}</code>.{% endif %}{% elif p.running or st in ("RUNNABLE", "SLEEPING") %}The runner owns it: files open read-only until you pause it.{% else %}Its worktrees, <code>state/</code> and the packet folder.{% endif %}</span>
 </form>
+{% endif %}
+{% if vsc and (vsc[0] or vsc[1]) %}
+<h2 id="vscode-sessions">VS Code sessions</h2>
+{% if vsc[0] %}{{ vsm.table(vsc[0]) }}{% endif %}
+{% if vsc[1] %}<p class="muted" style="margin:8px 0 4px">Shared editor (packet not determined): another packet opened the same folder.</p>
+{{ vsm.table(vsc[1]) }}{% endif %}
 {% endif %}
 {{ box(e, p.wpid, st, p.running, p.notes) }}
 <p>{% if not p.running %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live">Live view</a>: the last step's activity, the outline and the steps done. {% endif %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/plan">Plan</a>: the outline as a tree, and how it changed step by step.</p>

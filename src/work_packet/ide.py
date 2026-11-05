@@ -1,12 +1,16 @@
 """VS Code on a packet or a work folder (docs/vscode-plan.md).
 
-What to open (``resolve``), the workspace file wpk keeps for a packet
-(``ensure_workspace``), and the links that open it: desktop VS Code through a
-``vscode://`` URL, web VS Code under the board's ``/ide/``.
+What to open (``resolve``), the workspace file wpk keeps for a legacy
+project's packet (``ensure_workspace``), and the links that open it: desktop
+VS Code through a ``vscode://`` URL, web VS Code under the board's ``/ide/``.
 
 The workspace file is shared with VS Code, so wpk merges: it owns its folders,
 its tasks (labels starting ``wpk: ``) and a few settings, and keeps anything
 else you added. It writes only when its part changed.
+
+A packet-layout packet (docs/run-binding-v1.md) opens as its packet folder,
+the one holding ``.work-packet/``: steps work in it, so it is what you edit.
+wpk writes no workspace file for it.
 """
 
 import getpass
@@ -22,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import quote
 
-from . import registry, setup, workspace
+from . import layout, registry, setup, workspace
 from .fsutil import atomic_write
 from .packet import Packet
 
@@ -44,7 +48,7 @@ class IdeError(Exception):
 @dataclass
 class Open:
     """One thing to open in VS Code."""
-    kind: str                   # packet | root | clone | worktree | plain
+    kind: str                   # folder | packet | root | clone | worktree | plain
     path: str                   # the workspace file, or the folder
     label: str
     project: str
@@ -97,6 +101,8 @@ def resolve(t, repo=None, packet=False):
         raise IdeError(str(e)) from None
     pkt = _packet_of(t, tg)
     who = owner(pkt)
+    if layout.is_packet_layout(tg.proj):
+        return _packet_folder(tg, pkt, who, repo)
     if repo is None:
         if pkt.path == tg.packet.path and not tg.started():
             ws, folders = ensure_root_workspace(tg)
@@ -122,6 +128,18 @@ def resolve(t, repo=None, packet=False):
                        % (pkt.wpid[:8], repo))
     return Open("worktree", tree, "%s work/%s (packet: %s)" % (tg.name, repo, tg.branch),
                 tg.name, pkt.wpid, owner=who)
+
+
+def _packet_folder(tg, pkt, who, repo):
+    """The packet layout: the packet folder itself, before and after the first
+    step and for a child running in it. No workspace file: VS Code opens the
+    folder as it is, with your own ``.vscode/`` if it has one."""
+    folder = layout.packet_folder(tg.proj)
+    if repo is not None:
+        raise IdeError("%s is a packet folder: steps work in it, not in work/%s; "
+                       "`wpk ide %s` opens it" % (setup.tilde(folder), repo, tg.name))
+    return Open("folder", folder, "%s packet folder" % tg.name, tg.name, pkt.wpid,
+                owner=who, folders=[(os.path.basename(folder), folder)])
 
 
 # --- the workspace file ------------------------------------------------------------

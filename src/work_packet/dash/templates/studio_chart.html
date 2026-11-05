@@ -4,6 +4,7 @@
    selection. studio_chart.js draws it; the spec, themes and panel are JSON here. #}
 {% block title %}{{ rel }}{% endblock %}
 {% block head %}
+{% if not problems %}<script src="/static/studio_wait.js?v={{ asset_v }}"></script>{% endif %}
 <style>
 body.frame main { max-width: none; margin: 0; padding: 10px 14px; }
 .docbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
@@ -20,17 +21,17 @@ body.frame main { max-width: none; margin: 0; padding: 10px 14px; }
 </style>
 {% endblock %}
 {% block main %}
-<div class="docbar muted"><code>{{ rel }}</code>
+{% if not rendering %}<div class="docbar muted"><code>{{ rel }}</code>
   {% if source %}<span>data: <code>{{ source }}</code></span>{% endif %}
   {% if not problems %}<span class="hint">Brush or click to select, then ask about those rows</span>{% endif %}
-</div>
+</div>{% endif %}
 {% if problems %}
 <div class="panel"><strong>This chart can't be drawn:</strong>
   <ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
   {% if text %}<pre style="max-height:50vh;overflow:auto">{{ text }}</pre>{% endif %}</div>
 {% else %}
 <div id="ch" data-base="{{ base }}" data-path="{{ rel }}" data-csrf="{{ csrf or '' }}"
-  data-source="{{ source or '' }}">
+  data-source="{{ source or '' }}" data-render="{{ '1' if rendering else '' }}">
   <div id="chart"></div>
   <div class="ch-msg muted" id="ch-msg"></div>
   <div class="ch-sel" id="ch-sel" hidden>
@@ -38,7 +39,7 @@ body.frame main { max-width: none; margin: 0; padding: 10px 14px; }
     <input id="ch-q" placeholder="Ask about these rows… (Enter sends)">
     <button type="button" class="mini" id="ch-ask">Ask</button>
   </div>
-  {% if panel %}
+  {% if panel and not rendering %}
   <details id="ch-panel"><summary class="muted">Spec</summary>
     <div class="grid">
       <span>mark</span>

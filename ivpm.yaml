@@ -27,6 +27,14 @@ package:
       - optional-dependencies.studio
     - name: pytest
       src: pypi
+    - name: wpk-vendor-js
+      description: The dash's JavaScript libraries, bundled by tools/vendor/build.mjs.
+      doc: |
+        Installed into packages/node/node_modules. tools/vendor/build.mjs
+        bundles them into src/work_packet/dash/vendor/, which is build
+        output and not committed (docs/studio-v2.md §7).
+      src: package.json
+      path: tools/vendor/package.json
     - name: dv-flow-mgr
       description: Co-developed; not needed to run wpk.
       doc: |

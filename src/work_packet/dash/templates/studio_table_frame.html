@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{# A studio table as a page (docs/studio-plan.md S3.1): its first rows, for the
+   table's render (a thumbnail, what the agent looks at). The canvas's live table
+   viewer is in studio.js. #}
+{% block title %}{{ rel }}{% endblock %}
+{% block head %}
+<style>
+body.frame main { max-width: none; margin: 0; padding: 10px 14px; }
+table.st-rows { border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+table.st-rows th { text-align: left; color: var(--muted); }
+table.st-rows td, table.st-rows th { border-bottom: 1px solid var(--line); padding: 3px 10px;
+  max-width: 28em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.st-rows td.num { text-align: right; } table.st-rows td.null { color: var(--muted); font-style: italic; }
+</style>
+{% endblock %}
+{% block main %}
+<p class="muted"><code>{{ rel }}</code>{% if got.ok %} · {{ got.total }} row{{ "s" if got.total != 1 }}{% if got.total > got.rows|length %} (the first {{ got.rows|length }}){% endif %}{% endif %}</p>
+{% if got.ok %}
+<table class="st-rows">
+  <tr>{% for c in got.columns %}<th title="{{ c.type }}">{{ c.name }}</th>{% endfor %}</tr>
+  {% for r in got.rows %}<tr>{% for v in r %}{% if v is none %}<td class="null">null</td>{% elif v is number %}<td class="num">{{ v }}</td>{% else %}<td>{{ v }}</td>{% endif %}{% endfor %}</tr>{% endfor %}
+</table>
+{% else %}
+<div class="panel">This table can't be shown: {{ got.error }}</div>
+{% endif %}
+{% endblock %}

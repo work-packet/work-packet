@@ -1,0 +1,13 @@
+{"timestamp": "2026-11-04T11:00:00.000Z", "type": "session_meta", "payload": {"id": "019a4f2e-1c2d-7e3f-8a9b-0c1d2e3f4a5b", "session_id": "019a4f2e-1c2d-7e3f-8a9b-0c1d2e3f4a5b", "timestamp": "2026-11-04T11:00:00Z", "cwd": "/w/pkt", "originator": "codex-tui", "cli_version": "0.147.0", "source": "vscode", "base_instructions": {"text": "SENTINEL-INSTR"}, "git": {"branch": "SENTINEL-BRANCH"}}}
+{"timestamp": "2026-11-04T11:00:01.000Z", "type": "turn_context", "payload": {"cwd": "/w/pkt", "model": "gpt-5.5-codex", "approval_policy": "on-request", "user_instructions": "SENTINEL-INSTR"}}
+{"timestamp": "2026-11-04T11:00:02.000Z", "type": "event_msg", "payload": {"type": "task_started"}}
+{"timestamp": "2026-11-04T11:00:03.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "SENTINEL-PROMPT do it"}}
+{"timestamp": "2026-11-04T11:00:04.000Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "SENTINEL-PROMPT"}]}}
+{"timestamp": "2026-11-04T11:00:05.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": null, "rate_limits": {}}}
+{"timestamp": "2026-11-04T11:00:06.000Z", "type": "response_item", "payload": {"type": "function_call", "name": "shell", "arguments": "{\"command\":[\"echo\",\"SENTINEL-ARG\"]}", "call_id": "c1"}}
+{"timestamp": "2026-11-04T11:00:07.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": "SENTINEL-OUT"}}
+{"timestamp": "2026-11-04T11:00:08.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 50, "reasoning_output_tokens": 20, "total_tokens": 1050}, "last_token_usage": {"input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 50, "reasoning_output_tokens": 20, "total_tokens": 1050}}}}
+{"timestamp": "2026-11-04T11:00:09.000Z", "type": "event_msg", "payload": {"type": "exec_approval_request", "command": ["rm", "SENTINEL-ARG"]}}
+{"timestamp": "2026-11-04T11:00:10.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 2500, "cached_input_tokens": 2000, "output_tokens": 90, "reasoning_output_tokens": 40, "total_tokens": 2590}, "last_token_usage": {"input_tokens": 1500, "cached_input_tokens": 1200, "output_tokens": 40, "reasoning_output_tokens": 20, "total_tokens": 1540}}}}
+{"timestamp": "2026-11-04T11:00:11.000Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "SENTINEL-REPLY"}}
+{"timestamp": "2026-11-04T11:00:12.000Z", "type": "event_msg", "payload": {"type": "task_complete", "last_agent_message": "SENTINEL-REPLY"}}

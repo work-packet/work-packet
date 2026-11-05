@@ -32,6 +32,7 @@ class Runner:
         self._stopping = threading.Event()
         self._thread = None
         self._watcher = None
+        self._sessions = None
         self.watch_tick = watch_tick
         self._lease = None
         self.dispatcher = None
@@ -63,6 +64,10 @@ class Runner:
             self._watcher = threading.Thread(target=self._watch_loop, name="wpk-watch",
                                              daemon=True)
             self._watcher.start()
+        if self.watch_tick:
+            self._sessions = threading.Thread(target=self._sessions_loop,
+                                              name="wpk-ide-sessions", daemon=True)
+            self._sessions.start()
 
     def poke(self):
         """Look for due packets now."""
@@ -74,8 +79,9 @@ class Runner:
         self._poke.set()
         if self._thread is not None:
             self._thread.join(timeout)
-        if self._watcher is not None:
-            self._watcher.join(timeout)
+        for t in (self._watcher, self._sessions):
+            if t is not None:
+                t.join(timeout)
         if self._lease is not None:
             self._lease.release()
             self._lease = None
@@ -103,6 +109,32 @@ class Runner:
             self.dispatcher.run(self._stopping, self._poke, max_wait=self.max_wait)
         except Exception:                      # say why the pool stopped
             log.exception("runner stopped")
+
+    def _sessions_loop(self):
+        """Claude and Codex sessions in the board's own web VS Code servers
+        (docs/vscode-monitor-plan.md §2.4); a server in a job watches its own.
+        Off with ``[ide] web = false`` or ``[ide] sessions = false``."""
+        import time
+        from .. import ide, ide_sessions
+        collectors, pruned = {}, 0.0
+        while not self._stopping.is_set():
+            try:
+                cfg = ide.load_config(self.home)
+            except Exception:
+                cfg = {}
+            every = float(cfg.get("sessions_poll_s") or 5)
+            if cfg.get("web") and cfg.get("sessions", True):
+                try:
+                    ide_sessions.local_pass(self.home, collectors)
+                    if time.time() - pruned > 3600:
+                        ide_sessions.prune(self.home, time.time(),
+                                           keep_days=cfg.get("sessions_keep_days") or 30)
+                        pruned = time.time()
+                except Exception:              # keep watching; say why
+                    log.exception("VS Code session pass failed")
+            else:
+                collectors.clear()
+            self._stopping.wait(every)
 
     def _watch_loop(self):
         """Poll the boards' watchers that are due; poke the dispatcher when one

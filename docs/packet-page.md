@@ -191,7 +191,9 @@ The packet page (§2) is built; the task page (§3) is next, not started.
       templates `project_*.html`, the task table in
       `_project_tasks.html`
 - [x] Overview (`project.html`): snapshot, running panel, report,
-      tasks. Old anchors redirect by script; `overview.html` links to
+      tasks. Since 2026-11-04 there is also **VS Code sessions** above
+      Tasks: the project's Claude Code and Codex sessions in web VS Code,
+      owner only, linked to each packet (`docs/vscode-plan.md` §4.5). Old anchors redirect by script; `overview.html` links to
       `/p/E/cost`
 - [x] Settings forms (permissions, limits, scheduling, board) come
       back to the Settings tab

@@ -34,6 +34,24 @@ today. Before the seed, the packet target opens the **project root**
 instead (dash-tasks §5.4: before the seed you set up at the root, and the
 packet is empty).
 
+**The packet layout** (`docs/run-binding-v1.md`): the packet folder, the one
+holding the card and `.work-packet/`, is the work, so there is one target.
+`wpk ide <name>` (or the folder, or any of its runs) and the board's button
+open **the packet folder itself**, as a plain folder: before and after the
+first step, for the root and for a child running in it. wpk writes no
+workspace file and nothing in the folder; your own `.vscode/` applies. A
+`<repo>` argument is refused (there is no `work/` to pick from). The table
+above and §2 are for legacy projects.
+
+What the packet layout gives up, and why that is fine:
+
+- the read-only guard (§5): Q7 of run-binding-v1 has opening the IDE pause
+  the packet first instead (the board's "Pause and open"); the runner and
+  you share the folder, so a guard on a workspace file would not cover a
+  plain-folder window anyway;
+- the `wpk: ` tasks, the window title and the `WPK_*` terminal variables;
+  the folder's name is the title.
+
 ## 2. The packet's workspace file
 
 ```
@@ -232,6 +250,85 @@ does not care which one runs. Differences that matter:
 code-server (Coder) is the other open-source option. It has its own CLI and
 login, so it would need a different argv and its auth turned off; not built.
 
+### 4.5 Claude Code and Codex sessions in the editor
+
+You can start Claude Code or Codex in a packet's web VS Code, either from
+the extension or in an integrated terminal. The board then lists each
+session. The design, tests and open questions are in
+`docs/vscode-monitor-plan.md`.
+
+**Where to look**
+- **The project page** (`/p/<project>`, Overview tab): **VS Code sessions**,
+  above Tasks. It lists every session of the project, each with its packet.
+- **A packet's page** (`/p/<project>/<wpid>`): **VS Code sessions**, under the
+  Open in VS Code buttons. Rows whose packet could not be told apart are
+  listed separately.
+- **The Overview** (`/`): **Recent VS Code sessions**, the 8 most recently
+  active across packets, each linked to its packet.
+
+Both refresh with the page, and only the board's owner sees them. Other
+users signed in on a network listener get neither the section nor the data.
+
+**One row per conversation**, newest activity first:
+- The harness, and whether it ran in the extension or a terminal.
+- A short session id (hover for the full one).
+- The model.
+- The last event and how long ago it happened.
+- Total tokens (hover for the breakdown).
+- Where it ran: the job and host for an editor in a job, or "this board".
+  Each of these also says whether the process is still running.
+
+A model or usage the harness did not write shows as **unreported**.
+
+**Last events:**
+- Prompt submitted.
+- Read requested, Shell command requested, Edit requested, Web request,
+  Sub-agent requested, Planning, Tool requested.
+- Asked for input.
+- Working.
+- Turn started, Turn finished, Turn interrupted.
+
+They come from the harness's own records, by record type and tool *name*
+only. "Waiting for input" and "turn finished" appear only when the harness
+said so. An idle editor or a closed browser tab is not reported as either.
+
+**How a session is tied to a packet:**
+- Every editor server gets a launch id, `WPK_IDE_LAUNCH`. Its extension host,
+  its extensions and its terminals inherit it.
+- A collector finds `claude` and `codex` processes under the server that
+  carry this launch's id, and reads their session ids. For Claude it uses
+  `~/.claude/sessions/<pid>.json`; for Codex, the rollout file the process
+  holds open.
+- **Confirmed** means a process made the link.
+- **Workspace match** means only a VS Code session's file says so: the
+  harness's VS Code marker, a cwd in the editor's folder, and activity while
+  the editor ran. Nothing else is shown.
+  - That covers terminal sessions that ended before the collector saw them,
+    unrelated sessions in the same folder, and scheduled steps.
+- **Shared editor:** when two packets opened the same folder, a session the
+  collector cannot place stays under "Shared editor (packet not
+  determined)".
+- **Who runs the collector:** the board's own thread for a local editor
+  (every `sessions_poll_s`), or the IDE job itself, on its host, for an editor
+  in a job. The job writes into the shared `$WPK_HOME`, which a job-hosted
+  editor already needs for its endpoint and token.
+
+**What is kept:** `$WPK_HOME/ide/sessions/` holds, for each session, only
+identifiers, event categories, times and token counts, plus a reader cursor.
+- Prompts, replies, tool arguments and output, environment values and raw
+  transcript lines are never stored or shown.
+- Records idle longer than `sessions_keep_days` are dropped.
+- None of this enters the scheduled-step ledger, budgets or Statistics.
+- It needs no model call, budget provider or extra listener.
+
+Launch history is kept in `ide/servers/<key>/launches.jsonl` and
+`opens.jsonl`, and outlives an IDE job's record.
+
+**Limits:**
+- Linux only (`/proc`). Elsewhere, sessions can only be workspace matches.
+- The Claude pid file is Claude Code's own, undocumented. Tested with
+  2.1.280.
+
 ## 5. Opening a packet the runner owns
 
 This plan does not build take-back. It builds only the protection that
@@ -266,6 +363,9 @@ code         = ""              # empty: "code" (serve-web) or "openvscode-server
 ssh_host     = ""              # empty: this node's MagicDNS name
 idle_minutes = 60
 max_servers  = 8               # one server per open target
+sessions     = true            # list Claude/Codex sessions (§4.5)
+sessions_poll_s    = 5
+sessions_keep_days = 30
 ```
 
 ## 7. Build plan
@@ -391,6 +491,10 @@ open question 2).
 
 ## Open questions
 
+- Session monitoring (§4.5) has its own open items, for the downstream
+  checkout and the farm: `docs/vscode-monitor-plan.md`, "Questions for the
+  remote agent".
+
 1. **Repo name vs packet name collisions** in `wpk ide <project> <x>`:
    does `<x>` mean a repo or a wpid? Proposed: a repo, and use
    `<project>/<wpid>` for a packet.
@@ -499,3 +603,32 @@ second opens, the cookies sit on `/ide/<key>`, and stopping the board stops
 both servers. A server from the old single-server layout
 (`$WPK_HOME/ide/serve.pid`) is not adopted; one left by a crashed board
 must be stopped by hand.
+
+### 2026-11-04: the packet layout opens the packet folder
+
+`ide.resolve` returns kind `folder`, path the packet folder, for any
+target in a packet-layout project (§1). Before, it wrote
+`.work-packet/.vscode/project.code-workspace` (before the first step, with
+the empty `.work-packet/work/` and `state/`) or
+`.work-packet/runs/<id>/.vscode/packet.code-workspace` (with
+`work/<folder>`, `state` and the run directory as roots), so VS Code opened
+inside `.work-packet/`. The board's hint under the button names the folder;
+the open page's warning says the runner works in it. Tests:
+`tests/test_ide.py` (packet layout section). The page-equivalence crawl
+(`tests/test_packet_layout.py`) masks that hint. Not done: `wpk ide`
+pausing first (run-binding Q7; the board already offers it), and sibling
+worktrees as extra roots (R7).
+
+### 2026-11-04: Claude Code and Codex sessions (§4.5)
+
+Built from `docs/vscode-monitor-plan.md` S0–S5:
+- the launch id and its env
+- launch and open history
+- the Claude and Codex readers
+- the collector (board thread for local editors, `ide_job --collect` for jobs)
+- the allowlisted store
+- the packet-page and Overview sections, owner only
+
+Tests: `tests/test_ide_launch.py`, `test_ide_sessions.py`,
+`test_ide_sessions_bind.py`, `test_ide_sessions_dash.py`, and one in
+`test_sched_ide.py`.

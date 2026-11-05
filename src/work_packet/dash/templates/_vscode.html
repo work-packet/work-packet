@@ -1,0 +1,17 @@
+{#- Claude Code and Codex sessions in web VS Code (docs/vscode-monitor-plan.md §2.6).
+    Only identifiers, event categories, times and usage: never what was said. -#}
+{% macro table(rows, where=False) -%}
+<table class="vsc">
+  <tr><th>Harness</th><th>Session</th>{% if where %}<th>Packet</th>{% endif %}<th>Model</th><th>Last event</th><th>Last activity</th><th class="num">Tokens</th><th>Where</th></tr>
+  {% for r in rows %}
+  <tr><td>{{ r.harness }}{% if r.client %} <span class="muted">({{ r.client }})</span>{% endif %}</td>
+    <td><code title="{{ r.session }}">{{ r.short }}</code></td>
+    {% if where %}<td>{% if r.project %}<a href="/p/{{ r.project|urlencode }}{% if r.wpid %}/{{ r.wpid }}#vscode-sessions{% endif %}">{{ r.project }}{% if r.wpid %} / <code>{{ r.wpid[:8] }}</code>{% endif %}</a>{% else %}<span class="muted">not determined</span>{% endif %}</td>{% endif %}
+    <td>{% if r.model == "unreported" %}<span class="muted">unreported</span>{% else %}{{ r.model }}{% endif %}</td>
+    <td>{{ r.event or "—" }}{% if r.event_ago %} <span class="muted">{{ r.event_ago }}</span>{% endif %}{% if r.turn %}<br><span class="muted">{{ r.turn }}</span>{% endif %}</td>
+    <td class="muted" title="{{ r.activity_t|epoch }}">{{ r.activity_ago }}</td>
+    <td class="num"{% if r.usage %} title="{{ r.usage }}"{% endif %}>{% if r.tokens is none %}<span class="muted">unreported</span>{% else %}{{ r.tokens|tok }}{% endif %}</td>
+    <td>{% if r.workspace %}<span class="state SLEEPING" title="no running process tied it to this editor: its file says VS Code wrote it, in this editor's folder, while it ran">workspace match</span>{% else %}{% if r.job_ref %}job <code>{{ r.job_ref }}</code>{% if r.host %} on {{ r.host }}{% endif %}{% else %}this board{% endif %}{% if r.process %} <span class="muted">· {{ r.process }}</span>{% endif %}{% endif %}</td></tr>
+  {% endfor %}
+</table>
+{%- endmacro %}

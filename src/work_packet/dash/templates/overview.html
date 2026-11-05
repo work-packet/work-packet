@@ -3,6 +3,7 @@
 {% import "_panels.html" as xpm %}
 {% import "_tokens.html" as tkm %}
 {% import "_pause.html" as pz with context %}
+{% import "_vscode.html" as vsm %}
 {#- How every board is doing, what needs you, and token use (docs/overview.md). -#}
 {% block title %}Overview{% endblock %}
 {% block head %}
@@ -220,6 +221,11 @@ ul.list button.x:hover { color: var(--FAILED); }
 {% else %}<p class="muted">Nothing is ready or asleep.</p>{% endif %}
 </div>
 </div>
+
+{% if vsc %}
+<h2 id="vscode-sessions">Recent VS Code sessions</h2>
+{{ vsm.table(vsc, where=True) }}
+{% endif %}
 
 {% endif %}
 

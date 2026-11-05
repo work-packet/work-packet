@@ -27,10 +27,10 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import fsutil, schema
-from ..studio import chart, kernel, kinds, model, primer, record, watch
+from ..studio import chart, kernel, kinds, model, primer, record, renders, tree, versions, watch
 from ..studio import data as sdata
 from ..studio import render as studio_render
-from . import data, markup
+from . import data, markup, vendored
 
 FILE_MAX = 16 << 20
 # Raw files for the viewers are served on the board's origin: never as a page
@@ -43,6 +43,17 @@ def _int(v, default):
         return int(v)
     except (TypeError, ValueError):
         return default
+
+
+def gone_marked(ev, folder):
+    """An output card from the transcript, with the files deleted since then
+    marked ``gone`` (the page shows no preview for them)."""
+    if ev.get("k") != "output":
+        return ev
+    files = [dict(f, gone=True) if not f["path"].startswith(tree.WP)
+             and not os.path.isfile(os.path.join(folder, f["path"])) else f
+             for f in ev.get("files") or []]
+    return dict(ev, files=files)
 
 
 def selection_ask(rel, src, sel, got, question):
@@ -71,8 +82,8 @@ class Live:
     changes the person made since the agent's last turn, the agent's changes
     in this turn, and when the last output card was made."""
 
-    def __init__(self, root):
-        self.watcher = watch.Watcher(root)
+    def __init__(self, watcher):
+        self.watcher = watcher
         self.yours = []
         self.turn = []
         self.carded = 0.0
@@ -100,7 +111,7 @@ def routes(home, agents, render, entry, who, not_found):
         key = (e["name"], wpid)
         with lives_lock:
             if key not in lives:
-                lives[key] = Live(model.folder(e, wpid))
+                lives[key] = Live(model.watcher(e, wpid))
             return lives[key]
 
     def drop(e, wpid):
@@ -204,10 +215,9 @@ def routes(home, agents, render, entry, who, not_found):
     def canvas_json(e, wpid, st):
         out = []
         for a in st["canvas"]:
-            p = os.path.join(st["folder"], a["path"])
             try:
-                m = os.stat(p).st_mtime
-            except OSError:
+                m = os.stat(model._tab_path(e, wpid, a["path"])[1]).st_mtime
+            except (OSError, model.StudioError):
                 m = None
             out.append(dict(a, missing=m is None, mtime=m))
         return {"canvas": out, "layout": st["layout"], "open": st["open"],
@@ -252,6 +262,19 @@ def routes(home, agents, render, entry, who, not_found):
         p = os.path.join(st["folder"], rel)
         return (p, rel) if os.path.isfile(p) else (None, None)
 
+    def tab_path(e, wpid, st, rel, write=False):
+        """The file a tab shows: an artifact of the folder or a ``wp:`` path
+        (``studio/tree.py``); with ``write``, only one the studio may change."""
+        if not str(rel).startswith(tree.WP):
+            return artifact_path(st, rel)
+        try:
+            p, access = tree.resolve(e, wpid, rel)
+        except tree.TreeError:
+            return None, None
+        if write and access != "edit":
+            return None, None
+        return (p, rel) if os.path.isfile(p) else (None, None)
+
     async def raw(request):
         e, wpid, st = lookup(request)
         if e is None:
@@ -259,7 +282,7 @@ def routes(home, agents, render, entry, who, not_found):
         bad = mine(request, st)
         if bad:
             return bad
-        p, rel = artifact_path(st, request.query_params.get("path") or "")
+        p, rel = tab_path(e, wpid, st, request.query_params.get("path") or "")
         if p is None:
             return PlainTextResponse("not found\n", status_code=404)
         if os.path.getsize(p) > FILE_MAX:
@@ -281,7 +304,7 @@ def routes(home, agents, render, entry, who, not_found):
         bad = mine(request, st)
         if bad:
             return bad
-        p, rel = artifact_path(st, request.query_params.get("path") or "")
+        p, rel = tab_path(e, wpid, st, request.query_params.get("path") or "")
         if p is None or not p.lower().endswith((".md", ".markdown")):
             return PlainTextResponse("not a document of this studio\n", status_code=404)
         if os.path.getsize(p) > FILE_MAX:
@@ -296,9 +319,10 @@ def routes(home, agents, render, entry, who, not_found):
                                                "#" + frag if frag else "")
         html = data.md(text, link, lines=True)
         return render(request, "studio_frame.html", frame=True, e=e, wpid=wpid, rel=rel,
-                      html=html,
+                      html=html, rendering=request.query_params.get("render") == "1",
                       text=text if html is None else None, sha=markup.sha(text),
-                      writable=os.access(p, os.W_OK), base=base(e, wpid),
+                      writable=os.access(p, os.W_OK) and tab_path(e, wpid, st, rel, True)[0]
+                      is not None, base=base(e, wpid),
                       items=sum(text.count(t) for t in ("{++", "{--", "{~~", "{>>", "{==")))
 
     async def markup_post(request):
@@ -311,7 +335,7 @@ def routes(home, agents, render, entry, who, not_found):
         if bad:
             return bad
         f = await body_json(request)
-        p, rel = artifact_path(st, str(f.get("path") or ""))
+        p, rel = tab_path(e, wpid, st, str(f.get("path") or ""), write=f.get("op") != "ask")
         if p is None or not p.lower().endswith((".md", ".markdown")):
             return JSONResponse({"error": "not a document of this studio"}, status_code=404)
         op = f.get("op")
@@ -330,11 +354,11 @@ def routes(home, agents, render, entry, who, not_found):
                 fn = lambda t: markup.mark(t, lines, str(f.get("sel") or ""),  # noqa: E731
                                            int(f.get("at") or 0), op, str(f.get("text") or ""))
             w = live(e, wpid).watcher
-            w.saved(rel)                    # before the write: a poll may come between
+            w.saved(p)                      # before the write: a poll may come between
             try:
                 sha = await run_in_threadpool(markup.edit, p, str(f.get("sha") or ""), fn)
             except BaseException:
-                w.forget(rel)
+                w.forget(p)
                 raise
         except markup.Stale as ex:
             return JSONResponse({"error": str(ex), "stale": True}, status_code=409)
@@ -342,6 +366,79 @@ def routes(home, agents, render, entry, who, not_found):
             return JSONResponse({"error": str(ex)}, status_code=400)
         except OSError as ex:
             return JSONResponse({"error": "cannot write %s: %s" % (rel, ex.strerror)},
+                                status_code=500)
+        return JSONResponse({"sha": sha})
+
+    # -- the file tree and the editor (docs/studio-v2.md V1) ----------------------
+
+    def guarded_open(request):
+        """(entry, wpid, state) for whoever has the studio open, else (None, None,
+        the response)."""
+        e, wpid, st = lookup(request)
+        if e is None:
+            return None, None, st
+        bad = mine(request, st)
+        if bad:
+            return None, None, bad
+        return e, wpid, st
+
+    async def tree_get(request):
+        """The tree: the Packet section and the folder's top level; with
+        ``dir``, one directory of the folder."""
+        e, wpid, st = guarded_open(request)
+        if e is None:
+            return st
+        hidden = request.query_params.get("hidden") == "1"
+        d = request.query_params.get("dir") or ""
+        try:
+            if d:
+                got = {"dir": d, "files": await run_in_threadpool(tree.listing, e, wpid, d,
+                                                                  hidden)}
+            else:
+                got = await run_in_threadpool(tree.tree, e, wpid, hidden)
+        except (tree.TreeError, model.StudioError) as ex:
+            return JSONResponse({"error": str(ex)}, status_code=404)
+        return JSONResponse(got)
+
+    async def fs_get(request):
+        """A file for an editor tab: its text and sha (``tree.read``)."""
+        e, wpid, st = guarded_open(request)
+        if e is None:
+            return st
+        try:
+            got = await run_in_threadpool(tree.read, e, wpid,
+                                          request.query_params.get("path") or "")
+        except (tree.TreeError, model.StudioError) as ex:
+            return JSONResponse({"error": str(ex)}, status_code=404)
+        return JSONResponse(got)
+
+    async def fs_save(request):
+        """Save an editor tab: ``{path, text, sha, create?}``. 409 with what the
+        file holds now when it changed under you (the page shows a merge)."""
+        e, wpid, st = guarded_open(request)
+        if e is None:
+            return st
+        f = await body_json(request)
+        path = str(f.get("path") or "")
+        try:
+            p, _ = await run_in_threadpool(tree.resolve, e, wpid, path)
+        except tree.TreeError as ex:
+            return JSONResponse({"error": str(ex)}, status_code=404)
+        w = live(e, wpid).watcher
+        w.saved(p)                          # before the write: a poll may come between
+        try:
+            _, sha = await run_in_threadpool(tree.save, e, wpid, path, f.get("text"),
+                                             str(f.get("sha") or ""), bool(f.get("create")))
+        except tree.Stale as ex:
+            w.forget(p)
+            return JSONResponse({"error": str(ex), "stale": True, "text": ex.text,
+                                 "sha": ex.sha}, status_code=409)
+        except tree.TreeError as ex:
+            w.forget(p)
+            return JSONResponse({"error": str(ex)}, status_code=400)
+        except OSError as ex:
+            w.forget(p)
+            return JSONResponse({"error": "cannot write %s: %s" % (path, ex.strerror)},
                                 status_code=500)
         return JSONResponse({"sha": sha})
 
@@ -502,9 +599,12 @@ def routes(home, agents, render, entry, who, not_found):
                 board = chart.for_board(spec, rel, lambda x: chart.data_url(b, x))
         except chart.ChartError as ex:
             problems = [str(ex)]
+        if not problems and not vendored.built("vega"):
+            problems = [vendored.NOT_BUILT]
         src = chart.first_source(spec, rel) if spec and not problems else None
         return render(request, "studio_chart.html", frame=True, e=e, wpid=wpid, rel=rel,
                       base=b, problems=problems, board=board,
+                      rendering=request.query_params.get("render") == "1",
                       panel=chart.summary(spec) if spec and not problems else None,
                       source=src, marks=chart.MARKS,
                       themes={"light": chart.theme("light"), "dark": chart.theme("dark")},
@@ -567,6 +667,156 @@ def routes(home, agents, render, entry, who, not_found):
         text = selection_ask(rel, src, sel, r, q)
         return await ask_agent(request, e, wpid, st, text)
 
+    # -- renders and versions (S3) ------------------------------------------------
+
+    def render_version(e, wpid, st, v):
+        """Note each changed file's render key in version ``v`` and queue the
+        renders that are not made yet."""
+        keys = {}
+        for rel in v["changed"]:
+            k = kinds.kind_of(rel)
+            if k is not None and k.name in renders.KINDS:
+                keys[rel] = renders.key(st["folder"], rel, k.name)
+        if keys:
+            v["renders"] = dict(v.get("renders") or {}, **keys)
+            versions._save(e, wpid, v)
+        svc = renders.current()
+        if svc is None or svc.available() is not None:
+            return v
+        for rel in keys:
+            try:
+                svc.render(e, wpid, rel, st["taken_by"], wait=False)
+            except (renders.RenderUnavailable, OSError):
+                pass
+        return v
+
+    def take_version(e, wpid, st, by, turn=None, note=None):
+        """A version of the studio's files if they changed since the last one."""
+        try:
+            v = versions.snapshot(e, wpid, st["folder"], by, turn=turn, note=note, home=home)
+        except OSError:
+            return None
+        return render_version(e, wpid, st, v) if v else None
+
+    def last_checks(e, wpid):
+        """The checks the renders of the agent's last version flagged."""
+        out = []
+        for v in reversed(versions.all_(e, wpid)):
+            if v["by"] != "agent":
+                continue
+            for rel, key in sorted((v.get("renders") or {}).items()):
+                for c in (renders.info(e, wpid, key) or {}).get("checks") or []:
+                    out.append(dict(c, path=rel))
+            break
+        return out
+
+    def version_json(e, wpid, v):
+        out = []
+        for rel in v["changed"]:
+            k = kinds.kind_of(rel)
+            key = (v.get("renders") or {}).get(rel)
+            inf = renders.info(e, wpid, key) if key else None
+            out.append({"path": rel, "kind": k.name if k else None, "key": key,
+                        "ready": bool(inf), "checks": (inf or {}).get("checks") or []})
+        return {"n": v["n"], "at": v["at"], "by": v["by"], "note": v.get("note"),
+                "keep": v.get("keep", False), "parent": v.get("parent"), "changed": out,
+                "deleted": v.get("deleted") or [], "files": sorted(v["files"]),
+                "skipped": v.get("skipped") or []}
+
+    async def versions_list(request):
+        e, wpid, st, bad = guarded(request)
+        if bad:
+            return bad
+        vs = await run_in_threadpool(versions.all_, e, wpid)
+        svc = renders.current()
+        why = "the board has no renderer" if svc is None else \
+            await run_in_threadpool(svc.available)
+        return JSONResponse({"versions": [version_json(e, wpid, v) for v in vs],
+                             "renders": why or "on"})
+
+    async def render_file(request):
+        """A render's picture: ``/render/<key>/<thumb.png | full.png | full.N.png>``."""
+        e, wpid, st, bad = guarded(request)
+        if bad:
+            return bad
+        key, name = request.path_params["key"], request.path_params["name"]
+        if not (len(key) == 32 and all(c in "0123456789abcdef" for c in key)) or \
+                not (name in ("thumb.png", "full.png") or
+                     (name.startswith("full.") and name[5:-4].isdigit() and name.endswith(".png"))):
+            return PlainTextResponse("not found\n", status_code=404)
+        p = os.path.join(renders.render_dir(e, wpid), key, name)
+        if not os.path.isfile(p):
+            return PlainTextResponse("not rendered (yet)\n", status_code=404)
+        return FileResponse(p, media_type="image/png", headers={
+            "content-security-policy": RAW_CSP, "cache-control": "private, max-age=86400"})
+
+    async def version_file(request):
+        """A file as it was in version ``n`` (for images and comparing text)."""
+        e, wpid, st, bad = guarded(request)
+        if bad:
+            return bad
+        try:
+            v = await run_in_threadpool(versions.get, e, wpid, int(request.path_params["n"]))
+        except (versions.VersionError, ValueError):
+            return PlainTextResponse("no such version\n", status_code=404)
+        rel = request.query_params.get("path") or ""
+        sha = v["files"].get(rel)
+        if not sha:
+            return PlainTextResponse("not in that version\n", status_code=404)
+        from .. import blobs
+        from ..studio import content
+        mt = content.media_type(rel)
+        if mt.startswith("text/html") or mt.startswith("application/xhtml"):
+            mt = "text/plain; charset=utf-8"
+        return FileResponse(blobs.path_of(sha, home), media_type=mt, headers={
+            "content-security-policy": RAW_CSP, "cache-control": "private, max-age=86400"})
+
+    async def restore_post(request):
+        e, wpid, st, bad = guarded(request)
+        if bad:
+            return bad
+        b = await body_json(request)
+        try:
+            n = int(b.get("n"))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "which version?"}, status_code=400)
+        w = live(e, wpid).watcher
+        try:
+            v = await run_in_threadpool(versions.restore, e, wpid, n, st["folder"],
+                                        who(request), home, w.saved)
+        except versions.VersionError as ex:
+            return JSONResponse({"error": str(ex)}, status_code=400)
+        if v is not None:
+            await run_in_threadpool(render_version, e, wpid, st, v)
+        return JSONResponse({"version": version_json(e, wpid, v) if v else None})
+
+    async def keep_post(request):
+        e, wpid, st, bad = guarded(request)
+        if bad:
+            return bad
+        b = await body_json(request)
+        try:
+            v = await run_in_threadpool(versions.keep, e, wpid, int(b.get("n")),
+                                        bool(b.get("keep", True)))
+        except (versions.VersionError, TypeError, ValueError):
+            return JSONResponse({"error": "no such version"}, status_code=400)
+        return JSONResponse({"version": version_json(e, wpid, v)})
+
+    async def frame_table(request):
+        """A table's first rows as a page (what its render shows)."""
+        e, wpid, st, bad = guarded(request)
+        if bad:
+            return PlainTextResponse("not open for you\n", status_code=403)
+        src = table_src(st, request.query_params)
+        if src is None:
+            return PlainTextResponse("not a table of this studio\n", status_code=404)
+        try:
+            r = await run_in_threadpool(kcall, e, st, "page", src=src, limit=30)
+        except kernel.KernelError as ex:
+            r = {"ok": False, "error": str(ex)}
+        return render(request, "studio_table_frame.html", frame=True, e=e, wpid=wpid,
+                      rel=src["path"], got=r)
+
     # -- the conversation -------------------------------------------------------
 
     async def ask_agent(request, e, wpid, st, text):
@@ -580,6 +830,7 @@ def routes(home, agents, render, entry, who, not_found):
                                 status_code=409)
         lv = live(e, wpid)
         await run_in_threadpool(lv.poll)
+        await run_in_threadpool(take_version, e, wpid, st, st["taken_by"])
         with lv.lock:
             yours, lv.yours, lv.turn = list(lv.yours), [], []
         files = sorted(lv.watcher.stats)
@@ -594,8 +845,9 @@ def routes(home, agents, render, entry, who, not_found):
                 sets = r.get("datasets") if r.get("ok") else None
             except kernel.KernelError:
                 pass                                # the primer goes without
+        flags = await run_in_threadpool(last_checks, e, wpid)
         text_p = primer.build(e, wpid, st, files=files, yours=yours, memento=memento,
-                              datasets=sets)
+                              datasets=sets, checks=flags)
         try:
             await run_in_threadpool(agents.ask, cid, text, who(request), text_p)
         except agent.Busy as ex:
@@ -650,6 +902,12 @@ def routes(home, agents, render, entry, who, not_found):
             lv.turn = []
         if files:
             agents.append(cid, {"k": "output", "files": files})
+        try:
+            st = model.state(e, wpid)
+        except model.StudioError:
+            return
+        if st["open"]:
+            take_version(e, wpid, st, "agent", turn={"conv": cid, "t": end_t})
 
     async def ws(sock):
         await sock.accept()
@@ -685,7 +943,7 @@ def routes(home, agents, render, entry, who, not_found):
             await sock.send_text(json.dumps({"k": "busy", "on": agents.busy(cid)}))
             for ev in await run_in_threadpool(agents.transcript, cid, 100000):
                 if ev.get("t", 0) > since:
-                    await sock.send_text(json.dumps(ev))
+                    await sock.send_text(json.dumps(gone_marked(ev, st["folder"])))
             rx = asyncio.ensure_future(sock.receive())
             while True:
                 get = asyncio.ensure_future(queue.get())
@@ -736,6 +994,9 @@ def routes(home, agents, render, entry, who, not_found):
         Route(p + "/cancel", cancel, methods=["POST"]),
         Route(p + "/markup", markup_post, methods=["POST"]),
         Route(p + "/file", raw),
+        Route(p + "/tree", tree_get),
+        Route(p + "/fs", fs_get),
+        Route(p + "/fs", fs_save, methods=["POST"]),
         Route(p + "/frame/doc", frame_doc),
         Route(p + "/table", table),
         Route(p + "/table/stats", table_stats),
@@ -746,5 +1007,11 @@ def routes(home, agents, render, entry, who, not_found):
         Route(p + "/frame/chart", frame_chart),
         Route(p + "/chart", chart_save, methods=["POST"]),
         Route(p + "/select", chart_select, methods=["POST"]),
+        Route(p + "/frame/table", frame_table),
+        Route(p + "/versions", versions_list),
+        Route(p + "/render/{key}/{name}", render_file),
+        Route(p + "/version/{n}/file", version_file),
+        Route(p + "/restore", restore_post, methods=["POST"]),
+        Route(p + "/keep", keep_post, methods=["POST"]),
         WebSocketRoute(p + "/ws", ws),
     ]

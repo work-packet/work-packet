@@ -222,3 +222,32 @@ def test_project_page_and_console(board):
     assert r["href"] == base
     _open(c, base, tok)
     assert "Return to the studio" in c.get("/p/a").text
+
+
+def test_cards_of_deleted_files(board):
+    """Reloading the page replays the output cards; a file deleted since is
+    marked gone, so the page does not load a preview of it (a 404)."""
+    c, e, pkt, ag, tok, base = board
+    _open(c, base, tok)
+    cid = model.state(e, pkt.wpid)["session"]["conv"]
+    _post(c, base + "/ask", tok, {"text": "write docs/findings.md"})
+    ag.wait(cid)
+    url = "ws://127.0.0.1:7878" + base + "/ws"
+
+    def card():
+        with c.websocket_connect(url, headers={"origin": BASE}) as ws:
+            ws.send_text(json.dumps({"token": tok}))
+            while True:
+                ev = json.loads(ws.receive_text())
+                if ev.get("k") == "output":
+                    return ev["files"][0]
+    from work_packet.dash import studio as dstudio
+    folder = layout.packet_folder(e["path"])
+    # The card is in the transcript once a socket saw the turn end.
+    if not [x for x in ag.transcript(cid) if x["k"] == "output"]:
+        ag.append(cid, {"k": "output", "files": [{"path": "docs/findings.md",
+                                                  "change": "created", "kind": "document"}]})
+    assert "gone" not in card()
+    os.unlink(os.path.join(folder, "docs", "findings.md"))
+    assert card()["gone"] is True
+    assert dstudio.gone_marked({"k": "say", "text": "x"}, folder) == {"k": "say", "text": "x"}

@@ -180,6 +180,8 @@ class Guard:
         token = self.gate.csrf(user) if self.kind == "network" else self.token
         scope["state"]["csrf"] = token            # the pages put it in every form
         scope["state"]["listener"] = self.kind
+        # who may act here, as below: the owner's views (VS Code sessions) need it
+        scope["state"]["owner"] = self.kind != "network" or user == self.gate.owner
         if self.kind == "network" and user != self.gate.owner:
             method = scope.get("method", "GET")
             if ws or scope.get("path", "").startswith(IDE_PREFIX) or \

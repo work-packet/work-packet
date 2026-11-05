@@ -290,6 +290,7 @@ def make(recipe, h=None):
     try:
         if clone:
             _branch(folder, clone.get("ref"), clone.get("branch"))
+            setup.ivpm_update(folder)     # the branch's dependencies, as `ivpm clone` would
         obj = r.get("objective") or None
         held = r["hold"] or not obj
         plan = project.new(r["name"], None if held else obj, path=folder,
@@ -302,7 +303,7 @@ def make(recipe, h=None):
             fsutil.atomic_write(os.path.join(root.state_dir, i["name"]), i["text"])
         if r.get("board"):
             registry.move(plan.name, r["board"], h)
-    except (project.ProjectError, registry.BoardError, OSError) as e:
+    except (project.ProjectError, registry.BoardError, setup.SetupError, OSError) as e:
         _undo(folder, made)
         raise StartError(str(e)) from None
     except BaseException:

@@ -737,6 +737,31 @@ def clone_packet(r, folder):
     return out
 
 
+def ivpm_exe():
+    """``ivpm`` on PATH, else next to this interpreter (wpk's own IVPM venv), or None."""
+    near = os.path.join(os.path.dirname(sys.executable), "ivpm")
+    return shutil.which("ivpm") or (near if os.access(near, os.X_OK) else None)
+
+
+def ivpm_update(folder):
+    """Fetch a new packet clone's dependencies (docs/run-binding-v1.md R3): ``ivpm
+    update`` when it has an ``ivpm.yaml`` and no ``packages/`` yet (a shared one is
+    a link to another clone's, not ours to update). Run after the branch is checked
+    out, since the deps are the branch's. Returns the command run, or None."""
+    if not os.path.isfile(os.path.join(folder, "ivpm.yaml")) or \
+            os.path.lexists(os.path.join(folder, "packages")):
+        return None
+    exe = ivpm_exe()
+    if exe is None:
+        raise SetupError("%s has an ivpm.yaml but ivpm is not installed: install it "
+                         "(pip install ivpm), or clone the repo yourself" % tilde(folder))
+    res = subprocess.run([exe, "update"], cwd=folder, capture_output=True, text=True)
+    if res.returncode:
+        tail = "\n".join((res.stderr or res.stdout).strip().splitlines()[-15:])
+        raise SetupError("ivpm update in %s failed:\n%s" % (tilde(folder), tail))
+    return "ivpm update"
+
+
 def repo_entries(proj):
     """``[[setup.repo]]`` entries read from a project's ``work/``: each git clone, its
     ``origin``, and the top-level links git does not track (shared directories)."""

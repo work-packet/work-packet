@@ -41,6 +41,22 @@ def _last_line(path):
     return msg[5:] if msg.startswith("wpk: ") else msg
 
 
+def _launch(h, key, launch_id, **fields):
+    """Add an IDE job's ID to its launch: the launch outlives the job record."""
+    from .. import ide_launch
+    try:
+        ide_launch.update(h, key, launch_id, **fields)
+    except OSError as e:
+        log.warning("ide launch %s: %s", key, e)
+
+
+def _launch_ended(h, key, ref):
+    from .. import ide_launch
+    cur = ide_launch.current(h, key)
+    if cur is not None and cur.get("job_ref") == ref and not cur.get("ended"):
+        _launch(h, key, cur["launch_id"], ended=time.time())
+
+
 class Dispatcher:
     def __init__(self, home=None, backend=None, now=None, cfg=None, jobs=None,
                  report=None, entries=None, by=None):
@@ -225,6 +241,7 @@ class Dispatcher:
         if r.kind == "ide":                 # closed, idle or out of time: asked for again
             from . import ide                # when someone opens it
             ide.withdraw(r.wpid, self.h)
+            _launch_ended(self.h, r.wpid, r.ref)
             try:
                 os.unlink(ide.endpoint_path(r.wpid, self.h))
             except OSError:
@@ -402,6 +419,8 @@ class Dispatcher:
             if not self.backend.holds_room_while_pending:
                 rec.state, rec.started = RUNNING, _ts(now)
             jobs.save(rec, self.h)
+            _launch(self.h, rq["key"], rq.get("launch"), job_ref=rec.ref, job_id=rec.id,
+                    batch=self.backend.name)
             ctx.usage.add("ide", z.cpus, z.mem_mb, z.name, "ide")
             events.append("submitted", h=self.h, job=rec.id, ref=rec.ref, kind="ide",
                           key=rq["key"], size=z.name, by=rec.by)

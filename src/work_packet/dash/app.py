@@ -22,8 +22,8 @@ from starlette.middleware import Middleware
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from .. import __about__, archived, clock, layout, livecard, registry
-from . import data, dfmrun, markup, panels, plan, tokens
+from .. import __about__, archived, clock, ide_sessions, layout, livecard, registry
+from . import data, dfmrun, markup, panels, plan, tokens, vendored
 from . import sched as dsched
 from ..sched.classes import CLASSES
 from .guard import split_host
@@ -36,11 +36,9 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "live.js"), "
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pane.js"), "rb") as _fp:
     PANE_JS = _fp.read()   # scroll panes and log buttons, on every page
 HERE = os.path.dirname(os.path.abspath(__file__))
-# Served from the package: compose.js, shell.js and the vendored xterm.js (no CDN, the CSP
-# is script-src 'self'). Name -> media type.
-STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript",
-          "vendor/xterm.js": "text/javascript", "vendor/addon-fit.js": "text/javascript",
-          "vendor/xterm.css": "text/css"}
+# Served from the package: compose.js, shell.js and the other scripts (no CDN, the CSP
+# is script-src 'self'); vendored libraries go through dash/vendored.py. Name -> media type.
+STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript", "studio_wait.js": "text/javascript", "studio_files.js": "text/javascript", "studio_edit.js": "text/javascript"}
 REFRESH_S = 10
 LIVE_MS = 3000             # the live view refreshes faster
 log = logging.getLogger("wpk.dash")
@@ -50,7 +48,6 @@ PROCS_MAX = 60             # rows of the live view's Processes panel (a -j32 bui
 
 def _vendored(request, rel):
     """A file of the studio's vendored libraries (``dash/vendored.py``)."""
-    from . import vendored
     got = vendored.lookup(rel)
     if got is None:
         return PlainTextResponse("not found\n", status_code=404)
@@ -111,6 +108,13 @@ def _epoch(t):
     return datetime.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M")
 
 
+def is_owner(request):
+    """The board's owner, or someone the Guard lets act as them: the local user,
+    an allowed tailnet user. Only they see their VS Code sessions
+    (docs/vscode-monitor-plan.md §2.6). No Guard (tests): the local user."""
+    return bool((request.scope.get("state") or {}).get("owner", True))
+
+
 def _view(request, default):
     """The transcript view asked for: ``?view=log``, or ``default``."""
     return "log" if request.query_params.get("view") == "log" else default
@@ -148,7 +152,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     stamp = max(os.path.getmtime(os.path.join(HERE, n)) for n in STATIC)
     env.globals.update(origin_of=data.origin, version=__about__.__version__, refresh_s=REFRESH_S,
                        asset_v="%s-%d" % (__about__.__version__, stamp),
-                       columns=data.COLUMNS, ask_text=ask_text)
+                       columns=data.COLUMNS, ask_text=ask_text,
+                       packet_layout=layout.is_packet_layout, packet_folder=layout.packet_folder)
 
     def render(request, name, status=200, **ctx):
         ctx["user"] = request.scope.get("state", {}).get("user")
@@ -236,7 +241,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         burn = tokens.board(archived.entries(home), days=days, on=[b["name"] for b in side])
         ov = data.overview(cols, broken, side, burn)
         snap = await run_in_threadpool(dsched.snapshot, home)
+        vsc = await run_in_threadpool(ide_sessions.recent_view, home or registry.home()) \
+            if is_owner(request) else None
         return render(request, "overview.html", ov=ov, burn=burn, broken=broken, live=True,
+                      vsc=vsc,
                       sch=dsched.tiles(snap), xpanels=xpanels(request, "overview"),
                       home=home or registry.home(), side=side, here=None,
                       windows=tokens.WINDOWS, main_board=registry.DEFAULT_BOARD)
@@ -738,7 +746,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         # Whatever in the tree is waiting on an answer leads the page, form and all.
         asks = [(n, qs) for n in nodes if n["state"] == "NEEDS_INPUT" and not n["running"]
                 for qs in [questions.of_packet(Packet(n["path"]))] if qs]
-        return render(request, "project.html", rp=rp, live=True, asks=asks,
+        vsc = await run_in_threadpool(ide_sessions.project_view, home or registry.home(),
+                                      e["name"]) if is_owner(request) else None
+        return render(request, "project.html", rp=rp, live=True, asks=asks, vsc=vsc,
                       on=registry.board_of(e, [b["name"] for b in bs]),
                       tl=data.timeline(kw["tasks"], now), **kw)
 
@@ -802,8 +812,11 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         convs = await run_in_threadpool(conv_rows, lambda m: m.get("project") == e["name"] and
                                         m.get("wpid") == request.path_params["wpid"])
         built = await run_in_threadpool(docs_of_run, e, request.path_params["wpid"])
+        vsc = await run_in_threadpool(ide_sessions.packet_view, home or registry.home(),
+                                      e["name"], request.path_params["wpid"]) \
+            if is_owner(request) else None
         return render(request, "packet.html", e=e, p=p, live=True, classes=CLASSES, dfm=dfm,
-                      convs=convs, docs_built=built,
+                      convs=convs, docs_built=built, vsc=vsc,
                       sch=dsched.packet_info(snap, e, request.path_params["wpid"]),
                       tk=tokens.packet(e, request.path_params["wpid"]))
 
@@ -1074,7 +1087,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             from . import ide as dide
             try:
                 key = await run_in_threadpool(ide_backend.register, op.path,
-                                              one("size") or None)
+                                              one("size") or None, e["name"],
+                                              op.wpid, who(request))
             except dide.IdeUnavailable as ex:
                 return not_found(request, "web VS Code here (%s)" % ex)
             return RedirectResponse(ide.web_path(op, "/ide/%s/" % key), status_code=303)
@@ -1222,7 +1236,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             c["instruction"] = request.query_params["instruction"]
         return render(request, "compose.html", e=e, c=c, settings=data.settings(e),
                       shells=shells.of_project(e["name"]) if shells else [],
-                      shell_ok=shells is not None)
+                      shell_ok=shells is not None and vendored.built("term"))
 
     async def compose_post(request):
         from .. import actions, executor, setup

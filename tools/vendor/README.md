@@ -1,28 +1,50 @@
-# Vendored JavaScript for the studio
+# Vendored JavaScript for the dash
 
-The studio's viewers need Vega-Lite, Mermaid and Excalidraw in the browser.
-The board's CSP is `script-src 'self'` and a tailnet may have no internet, so
-they are bundled here and committed under `src/work_packet/dash/vendor/`
-(decision D11 in `docs/studio-plan.md`): Node is needed only to rebuild them.
+The dash's pages need xterm.js (the browser shell and the studio's agent
+terminal), CodeMirror (the studio's editor), Vega-Lite, Mermaid and
+Excalidraw. The board's CSP is `script-src 'self'` and a tailnet may have no
+internet, so they are bundled and served from the package
+(docs/studio-v2.md §7).
 
-## Rebuild
+**The bundles are build output, not committed:**
+`src/work_packet/dash/vendor/` is gitignored.
+
+## Build
 
 ```sh
-cd tools/vendor
-npm ci            # the versions in package-lock.json
-node build.mjs    # or: node build.mjs vega   (one library)
+ivpm update                  # installs package.json here into packages/node
+node tools/vendor/build.mjs  # or: node tools/vendor/build.mjs codemirror
 ```
 
-`build.mjs` (esbuild) writes ESM bundles to `dash/vendor/<lib>/` and
-`dash/vendor/manifest.json` (every file with its sha256 and size, the
-versions, the size budget). The dash serves only what the manifest lists, at
-`/static/vendor/<path>`; `tests/test_studio_vendor.py` fails if the files and
-the manifest disagree (a half-done rebuild). Commit the whole of
-`dash/vendor/vega/`, `dash/vendor/draw/` and the manifest together.
+`ivpm.yaml` (`default-dev`) imports this `package.json` with the
+`package.json` source, so `ivpm update` installs the packages into
+`packages/node/node_modules` (and links `./node_modules` to it). No
+`npm ci` by hand. `build.mjs` finds them in `$WPK_NODE_MODULES`, else
+`packages/node/node_modules`, else `tools/vendor/node_modules` (a plain
+`npm install` here, without ivpm).
 
-To upgrade: change the versions in `package.json`, `npm install`, rebuild,
-run the tests (and the `live` ones: `WPK_LIVE=1 pytest -m live
-tests/test_studio_*`), and update the table below.
+It writes `dash/vendor/<lib>/` and `dash/vendor/manifest.json` (every file
+with its sha256 and size, the versions, the size budget):
+
+- ESM bundles by esbuild for `vega`, `draw` and `codemirror`;
+- `term`: xterm.js and its fit addon copied as they are built (UMD,
+  loaded by a plain `<script>`).
+
+The dash serves only what the manifest lists, at `/static/vendor/<path>`.
+It reads the manifest once, so restart a running dash after a build.
+Without a build, the dash still runs: chart pages say the JavaScript is not
+built (`vendored.NOT_BUILT`), the shell is not offered, and
+`tests/test_studio_vendor.py` skips.
+
+To upgrade: change the versions in `package.json` (direct dependencies are
+pinned exactly), `ivpm update`, rebuild, run the tests (and the `live`
+ones: `WPK_LIVE=1 pytest -m live tests/test_studio_*`), and update the
+table below.
+
+Transitive versions come from ivpm's `packages/node/package-lock.json`,
+which is not committed, so two builds a month apart can differ in a
+dependency's dependency. How releases get reproducible bundles is open
+(docs/studio-v2.md §11).
 
 ## What is in it
 
@@ -32,6 +54,8 @@ tests/test_studio_*`), and update the table below.
 | `draw/mermaid.js` | `entries/mermaid.js` | mermaid 11.17.2 | MIT |
 | `draw/excalidraw.js`, `draw/excalidraw.css`, `draw/fonts/` | `entries/excalidraw.js` | @excalidraw/excalidraw 0.18.1, react 18.3.1, react-dom 18.3.1 | MIT |
 | `draw/mermaid-to-excalidraw.js` | `entries/mermaid-to-excalidraw.js` | @excalidraw/mermaid-to-excalidraw 2.2.2 | MIT |
+| `codemirror/codemirror.js` | `entries/codemirror.js` | codemirror 6.0.2, @codemirror/state 6.7.6, view 6.43.15, language 6.13.1, lang-markdown 6.5.2, lang-python 6.2.1, lang-json 6.0.2, lang-yaml 6.1.3, legacy-modes 6.5.5 (shell, TOML, Verilog/SV, C/C++, diff, CMake), merge 6.12.3 | MIT |
+| `term/xterm.js`, `term/xterm.css`, `term/addon-fit.js` | copied | @xterm/xterm 6.0.0, @xterm/addon-fit 0.11.0 | MIT (`term/LICENSE.txt`) |
 
 Third-party licence comments are collected in `*.LEGAL.txt` next to each
 bundle.
@@ -56,13 +80,15 @@ Choices made:
 
 ## Sizes and budget
 
-Built 2026-10-30 (budget in `build.mjs`, `BUDGET`; the build and
+Built 2026-10-31 (budget in `build.mjs`, `BUDGET`; the build and
 `vendored.check()` warn above it):
 
 | Library | Size | Budget |
 |---|---|---|
 | vega | 0.84 MB (2 files) | 1.5 MB |
 | draw | 8.93 MB (219 files: 7.61 MB chunks, 0.88 MB entries and CSS, 0.44 MB fonts) | 10 MB |
+| codemirror | 0.74 MB (1 file) | 0.8 MB |
+| term | 0.50 MB (4 files) | 0.6 MB |
 
 A page loads only what it uses: a chart page `vega.js` (0.84 MB); Mermaid
 loads a diagram type's chunk on first use; the sketch editor loads

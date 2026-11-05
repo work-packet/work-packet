@@ -519,6 +519,8 @@ def cmd_studio(args) -> int:
     from .studio import model
     if args.op in ("exec", "query", "datasets"):
         return _studio_kernel(args)
+    if args.op == "look":
+        return _studio_look(args)
     if not args.target and args.op == "status":
         got = model.find(os.getcwd())          # in a studio's folder: that studio
         if got is not None:
@@ -558,6 +560,56 @@ def cmd_studio(args) -> int:
                                              "" if len(st["sessions"]) == 1 else "s"))
     except model.StudioError as ex:
         return _err(str(ex))
+    return 0
+
+
+def _studio_look(args) -> int:
+    """wpk studio look <path> [--part N]: the picture of a studio file, as the
+    person sees it, through the board's renderer (docs/studio-plan.md S3.4)."""
+    import json
+    import urllib.error
+    import urllib.request
+    from . import registry
+    from .studio import model, renders
+    if len(args.target) != 1:
+        return _err("wpk studio look <path> [--part N]")
+    got = model.find(os.getcwd())
+    if got is None:
+        return _err("not in an open studio's folder: run this in the studio's folder")
+    name, wpid, folder = got
+    rel = os.path.relpath(os.path.abspath(args.target[0]), folder).replace(os.sep, "/")
+    lst = renders.read_listener(registry.home())
+    if not lst:
+        return _err("the board is not running (or has no renderer): no pictures")
+    req = urllib.request.Request(
+        lst["url"] + "/_render/look", method="POST",
+        data=json.dumps({"project": name, "wpid": wpid, "path": rel,
+                         "part": args.part}).encode(),
+        headers={"content-type": "application/json", renders.HEADER: lst["secret"]})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            out = json.loads(r.read())
+    except urllib.error.HTTPError as ex:
+        try:
+            msg = json.loads(ex.read()).get("error")
+        except ValueError:
+            msg = None
+        return _err(msg or "the renderer refused (%s)" % ex.code)
+    except (OSError, ValueError) as ex:
+        return _err("cannot reach the board's renderer: %s" % ex)
+    n = out.get("parts") or 0
+    for i, f in enumerate(out["files"]):
+        what = ("part %d of %d" % (args.part or i + 1, n)) if n > 1 else "the picture"
+        print("%s: %s" % (what, f))
+    if out.get("size"):
+        print("size: %dx%d px" % tuple(out["size"][:2]))
+    if out.get("checks"):
+        print("checks:")
+        for c in out["checks"]:
+            print("  %s: %s" % (c.get("check"), c.get("what")))
+    else:
+        print("checks: none flagged")
+    print("Read the picture to see it.")
     return 0
 
 
@@ -1486,6 +1538,10 @@ def cmd_serve(args) -> int:
     from .sched import home_lease
     h = registry.home()
     held = home_lease.live(h)
+    if args.stop:
+        if args.detach or args.ensure:
+            return _err("--stop does not go with --detach or --ensure")
+        return _stop_wpkd(h, held, args.wait)
     if args.ensure and held:
         print("wpk: wpkd is running (host %s, pid %s)" % (held.get("host"), held.get("pid")),
               file=sys.stderr)
@@ -1519,6 +1575,69 @@ def cmd_serve(args) -> int:
             p.pid, os.path.join(logdir, "wpkd.log")))
     args.run, args.host, args.tailnet = True, None, None
     return cmd_dash(args)
+
+
+def _is_wpk(pid):
+    """Whether ``pid`` still runs wpk, so a reused pid is never signalled. Without
+    ``/proc`` there is no telling, and the lease's own check has to do."""
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as fp:
+            argv = fp.read().split(b"\0")
+    except FileNotFoundError:
+        return not os.path.isdir("/proc/self")
+    except OSError:
+        return False
+    return any(b"work_packet" in a or os.path.basename(a) == b"wpk" for a in argv)
+
+
+def _stop_wpkd(h, held, wait_s):
+    """``wpk serve --stop``: SIGTERM to this home's wpkd (what systemd sends), then
+    wait for it to let go of the lease. Running steps are waited for (§4), so a
+    wpkd with steps out may take longer than ``wait_s``; it is left to finish."""
+    import signal
+    import socket
+    import time
+    from .dash.server import read_state
+    from .sched import home_lease
+    what = "wpkd"
+    if held is None:                       # no wpkd: maybe a `wpk dash` board
+        st = read_state(h)
+        if not st:
+            return _err("wpkd is not running for %s" % h)
+        held, what = {"host": socket.gethostname(), "pid": st["pid"]}, "the board"
+    pid = int(held["pid"])
+    if held.get("host") != socket.gethostname():
+        return _err("%s for %s runs on host %s (pid %d); run `wpk serve --stop` there"
+                    % (what, h, held.get("host"), pid))
+    if not _is_wpk(pid):
+        return _err("pid %d (in %s's lease) is not wpk; not signalling it" % (pid, what))
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        print("wpk: %s (pid %d) had already exited" % (what, pid), file=sys.stderr)
+        return 0
+    except PermissionError as e:
+        return _err("cannot signal %s (pid %d): %s" % (what, pid, e))
+    print("wpk: stopping %s (pid %d)" % (what, pid), file=sys.stderr)
+
+    def gone():
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+        return False
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        if gone():
+            print("wpk: %s stopped" % what, file=sys.stderr)
+            return 0
+        time.sleep(0.2)
+    print("wpk: %s (pid %d) is still finishing its running steps; it exits when they are "
+          "done. `wpk sched stop` kills them; see %s" % (
+              what, pid, os.path.join(h, "log", "wpkd.log")), file=sys.stderr)
+    return 0
 
 
 def cmd_url(args) -> int:
@@ -1811,15 +1930,17 @@ def build_parser() -> argparse.ArgumentParser:
                        "records the session as one step and releases the packet. "
                        "exec, query and datasets use the studio's kernel (Python and "
                        "DuckDB in the studio's folder); run them in that folder.")
-    p.add_argument("op", choices=("open", "close", "status", "exec", "query", "datasets"))
+    p.add_argument("op", choices=("open", "close", "status", "exec", "query", "datasets",
+                                  "look"))
     p.add_argument("target", nargs="*",
                    help="open/close/status: WPID (or unique prefix); exec: Python code; "
-                   "query: SQL")
+                   "query: SQL; look: the file to see")
     p.add_argument("-f", "--file", help="exec: run this Python file")
     p.add_argument("--limit", type=int, default=50, help="query: rows to show (default 50)")
     p.add_argument("--out", help="query: write the result to this file (CSV or .parquet) "
                    "instead of showing it")
     p.add_argument("--reset", action="store_true", help="exec: start from a fresh namespace")
+    p.add_argument("--part", type=int, help="look: only this part of a tall page (1, 2, ...)")
     p.add_argument("--hold", action="store_true", help="close: leave it PAUSED, reason held")
     p.add_argument("--summary", help="close: the step's summary (default: the facts)")
     p.add_argument("--force", action="store_true", help="close someone else's studio")
@@ -2079,6 +2200,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="start in the background; log in $WPK_HOME/log/wpkd.log")
     p.add_argument("--ensure", action="store_true",
                    help="start in the background unless a wpkd already runs (for cron)")
+    p.add_argument("--stop", action="store_true",
+                   help="stop this home's wpkd (SIGTERM; running steps are waited for)")
+    p.add_argument("--wait", type=float, default=30, metavar="S",
+                   help="with --stop: seconds to wait for it to exit (default 30)")
     p.add_argument("--port", type=int, help="port (default [server] port, 7878)")
     p.add_argument("-j", "--jobs", type=int, help="steps at once (default: the pool's jobs)")
     p.set_defaults(func=cmd_serve)

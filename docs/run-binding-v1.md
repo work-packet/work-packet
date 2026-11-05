@@ -225,6 +225,10 @@ Home directories are often severely limited, so nothing large goes to
     on the current branch (or `-b wpk/<name>`).
   - `wpk new <repo-url> "<title>"` clones with IVPM into `<name>/` on
     `wpk/<name>`, then does the same.
+    (2026-11-04: built as `git clone`, the branch checkout, then `ivpm
+    update` when the clone has an `ivpm.yaml` and no `packages/` yet; the
+    same as `ivpm clone`, but the deps are the branch's. A failed update
+    removes the clone, like any failed make. `setup.ivpm_update`.)
   - `wpk new "<title>"` with no repo makes `<name>/` holding the card and
     `.work-packet/`; files can be added before `wpk run`.
   - `wpk new <repo> <repo> …` (multi-repo) makes a plain folder with the

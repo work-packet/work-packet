@@ -25,6 +25,8 @@ import socket
 import subprocess
 import time
 
+from .. import ide_launch
+
 log = logging.getLogger("wpk.dash")
 
 BASE = "/ide"
@@ -38,6 +40,15 @@ HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "te", "traile
 TRUST = (b"&quot;enableWorkspaceTrust&quot;:true", b"&quot;enableWorkspaceTrust&quot;:false")
 KEY = re.compile(r"[0-9a-f]{12}\Z")
 COOKIE_ROOT = re.compile(r"(;\s*path=)/(?=\s*(;|$))", re.I)
+# Installing a gallery extension in the browser fetches its files through the
+# server's /web-extension-resource/<host>/<path>. serve-web 2c33b50 refuses every
+# one (403 "Request Forbidden"): it takes the host from a path that still starts
+# with "/", so the host is "" and never matches the gallery's. The proxy fetches
+# them itself, from the hosts the stock product.json files name.
+EXT_RESOURCE = re.compile(r"/ide/[0-9a-f]{12}/(?:[^/]+/)?web-extension-resource/([^/]+)/(.+)\Z")
+EXT_HOSTS = re.compile(r"([a-z0-9-]+\.vscode-unpkg\.net|open-vsx\.org)\Z")
+EXT_REQUEST_HEADERS = ("x-client-name", "x-client-version", "x-machine-id", "x-client-commit")
+EXT_RESPONSE_HEADERS = ("cache-control", "content-type")
 
 
 class IdeUnavailable(Exception):
@@ -179,16 +190,27 @@ class Backend:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(self.sock)
         out = open(self.log_path, "ab")
+        lid = ide_launch.start(self.home, self.key, self._target(), "local")
         try:
             self.proc = subprocess.Popen(self.argv(), stdin=subprocess.DEVNULL, stdout=out,
-                                         stderr=subprocess.STDOUT, start_new_session=True)
+                                         stderr=subprocess.STDOUT, start_new_session=True,
+                                         env=dict(os.environ, **ide_launch.env(lid, self.key)))
         except OSError as e:
+            ide_launch.update(self.home, self.key, lid, ended=time.time())
             raise IdeUnavailable("cannot start %s: %s" % (self.argv()[0], e)) from None
         finally:
             out.close()
         with open(self.pid_path, "w") as fp:
             fp.write("%d\n" % self.proc.pid)
+        ide_launch.update(self.home, self.key, lid, pid=self.proc.pid)
         log.info("started VS Code's server %s, pid %d", self.key, self.proc.pid)
+
+    def _target(self):
+        try:
+            with open(os.path.join(self.dir, "target")) as fp:
+                return fp.read()
+        except OSError:
+            return ""
 
     def running(self):
         p = self.proc
@@ -232,6 +254,9 @@ class Backend:
             _wait(p, STOP_S)
         with contextlib.suppress(OSError):
             os.unlink(self.pid_path)
+        cur = ide_launch.current(self.home, self.key)
+        if cur is not None and cur.get("pid") == pid and not cur.get("ended"):
+            ide_launch.update(self.home, self.key, cur["launch_id"], ended=time.time())
         log.info("stopped VS Code's server %s", self.key)
 
     def stop(self):
@@ -301,7 +326,7 @@ class JobBackend(Backend):
                 fp.write(secrets.token_hex(24))
             return self.token()
 
-    def job_argv(self):
+    def job_argv(self, launch_id=None):
         import sys
         tok = ["--host", "0.0.0.0", "--port", "{port}", "--connection-token-file",
                self.token_path]
@@ -312,7 +337,10 @@ class JobBackend(Backend):
             srv = [command(self.cfg)] + sub + tok + [
                 "--server-base-path", self.base, "--accept-server-license-terms",
                 "--server-data-dir", self.data]
-        return [sys.executable, "-m", "work_packet.sched.ide_job", self.dir, "--"] + srv
+        lid = ["--launch", launch_id] if launch_id else []
+        if launch_id and self.cfg.get("sessions", True):     # watch its sessions, there
+            lid += ["--collect", str(self.cfg.get("sessions_poll_s") or 5)]
+        return [sys.executable, "-m", "work_packet.sched.ide_job", self.dir] + lid + ["--"] + srv
 
     def size(self):
         try:
@@ -381,17 +409,13 @@ class JobBackend(Backend):
         from ..sched import authz, ide
         private_dirs(self.home, self.key)
         self.token()
-        ide.request(self.key, self.size(), self.job_argv(), self.by or authz.principal_cli(),
-                    self._target(), self.home)
+        if not os.path.exists(ide.req_path(self.key, self.home)):    # else asked already
+            lid = ide_launch.start(self.home, self.key, self._target(), "job")
+            ide.request(self.key, self.size(), self.job_argv(lid),
+                        self.by or authz.principal_cli(), self._target(), self.home,
+                        launch=lid)
         self.poke()
         log.info("asked for a job for VS Code's server %s", self.key)
-
-    def _target(self):
-        try:
-            with open(os.path.join(self.dir, "target")) as fp:
-                return fp.read()
-        except OSError:
-            return ""
 
     def _adopt(self):
         return False
@@ -456,10 +480,19 @@ class Backends:
         self.servers = {}
         self._lock = asyncio.Lock()
 
-    def register(self, path, size=None):
+    def register(self, path, size=None, project=None, wpid=None, by=None):
         """The key for ``path``, its directory made. Blocking: call it off the loop.
-        ``size``: the job size for a server in a slot (the Open menu's choice)."""
+        ``size``: the job size for a server in a slot (the Open menu's choice).
+        ``project``, ``wpid``, ``by``: who is opening it, kept in ``opens.jsonl``
+        so a harness session in the editor can be tied to its packet."""
         key = key_for(path)
+        try:
+            return self._register(key, path, size)
+        finally:
+            if project or wpid or by:
+                ide_launch.record_open(self.home, key, project, wpid, by)
+
+    def _register(self, key, path, size):
         private_dirs(self.home, key)
         if self.slot:
             sz = os.path.join(server_dir(self.home, key), "size")
@@ -590,6 +623,37 @@ def cookie_path(value, base):
     return COOKIE_ROOT.sub(lambda m: m.group(1) + base, value)
 
 
+def ext_resource_url(path):
+    """``/ide/<key>/<quality-commit>/web-extension-resource/<host>/<path>`` ->
+    ``https://<host>/<path>``, for a gallery host only (``EXT_RESOURCE``);
+    else None."""
+    m = EXT_RESOURCE.match(path)
+    if not m or not EXT_HOSTS.match(m.group(1).lower()) or \
+            ".." in m.group(2).split("/"):
+        return None
+    return "https://%s/%s" % (m.group(1).lower(), m.group(2))
+
+
+async def ext_resource(url, headers, transport=None):
+    """What VS Code's server would have sent for ``url``: its body, status,
+    Cache-Control and Content-Type."""
+    import httpx
+    from starlette.responses import PlainTextResponse, Response
+    send = {k: headers[k] for k in EXT_REQUEST_HEADERS if k in headers}
+    try:
+        async with httpx.AsyncClient(transport=transport, follow_redirects=True,
+                                     timeout=httpx.Timeout(60.0, connect=10.0)) as hc:
+            r = await hc.get(url, headers=send)
+    except Exception as e:          # httpx's transport errors
+        log.warning("extension resource %s: %s", url, e)
+        return PlainTextResponse("502 %s: %s\n" % (url, e), status_code=502)
+    if r.status_code != 200:
+        return PlainTextResponse(r.text or "Request failed with status %d" % r.status_code,
+                                 status_code=r.status_code)
+    return Response(r.content, headers={k: r.headers[k] for k in EXT_RESPONSE_HEADERS
+                                        if k in r.headers})
+
+
 WAITING = """<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="5"><title>Waiting for room · VS Code</title></head>
 <body style="font: 15px system-ui, sans-serif; margin: 3em; color: #444">
@@ -609,6 +673,10 @@ async def proxy_http(backends, request):
     backend = backends.get(key_of(request.url.path))
     if backend is None:
         return PlainTextResponse(GONE, status_code=404)
+    ext = ext_resource_url(request.scope.get("raw_path", b"").decode("latin-1")
+                           or request.url.path)
+    if ext and request.method in ("GET", "HEAD"):
+        return await ext_resource(ext, request.headers)
     try:
         await backends.ensure(backend)
     except IdeWaiting as e:

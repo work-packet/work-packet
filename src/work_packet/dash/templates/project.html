@@ -4,6 +4,7 @@
 {% import "_report.html" as rpm %}
 {% import "_project_tasks.html" as ptm %}
 {% import "_answer.html" as ans with context %}
+{% import "_vscode.html" as vsm %}
 {% block title %}{{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a>{% endblock %}
 {% block head %}
@@ -35,6 +36,10 @@
   <a href="{{ sbase }}"><strong>{{ "Return to the studio" if root.taken_by == user else "See the studio" }}</strong></a>{% elif root.taking %}{{ root.taking }} is taking the root packet for the studio after this step. <a href="{{ sbase }}">Studio</a>{% else %}<a href="{{ sbase }}" title="Work on the root packet live with an agent">Studio</a>: work on this project live with an agent.{% endif %}</div>
 {% endif %}
 {% if rp %}<div style="margin-top:12px">{{ rpm.panel(e, rp, "/p/" ~ e.name|urlencode ~ "/" ~ rp.wpid ~ "#steps") }}</div>{% endif %}
+{% if vsc %}
+<h2 id="vscode-sessions">VS Code sessions</h2>
+{{ vsm.table(vsc, where=True) }}
+{% endif %}
 <h2>Tasks</h2>
 {{ ptm.table(e, tasks) }}
 {% endblock %}

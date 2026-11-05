@@ -23,7 +23,7 @@ details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
 .shellpane [hidden] { display: none; }
 .last { white-space: pre-wrap; font-size: 13px; max-height: 12em; overflow: auto; }
 </style>
-{% if shell_ok and c.owned %}<link rel="stylesheet" href="/static/vendor/xterm.css?v={{ asset_v }}">{% endif %}
+{% if shell_ok and c.owned %}<link rel="stylesheet" href="/static/vendor/term/xterm.css?v={{ asset_v }}">{% endif %}
 {% endblock %}
 {% block main %}
 {% set q = e.name|urlencode %}
@@ -143,8 +143,8 @@ details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
 </div>
 <script src="/static/compose.js?v={{ asset_v }}"></script>
 {% if shell_ok and c.owned %}
-<script src="/static/vendor/xterm.js?v={{ asset_v }}"></script>
-<script src="/static/vendor/addon-fit.js?v={{ asset_v }}"></script>
+<script src="/static/vendor/term/xterm.js?v={{ asset_v }}"></script>
+<script src="/static/vendor/term/addon-fit.js?v={{ asset_v }}"></script>
 <script src="/static/shell.js?v={{ asset_v }}"></script>
 {% endif %}
 {% endblock %}

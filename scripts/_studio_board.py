@@ -49,6 +49,20 @@ class Board:
         threading.Thread(target=self.srv.run, daemon=True).start()
         while not self.srv.started:
             time.sleep(0.05)
+        # The studio's render listener, as wpk dash starts it (dash/render_gate.py).
+        from work_packet.dash.render_gate import RenderGate
+        from work_packet.studio import renders
+        self.renders = renders.install(renders.Service(os.environ["WPK_HOME"]))
+        rport = _port()
+        self.rsrv = uvicorn.Server(uvicorn.Config(RenderGate(app.app, self.renders),
+                                                  host="127.0.0.1", port=rport,
+                                                  log_level="warning", lifespan="off"))
+        threading.Thread(target=self.rsrv.run, daemon=True).start()
+        while not self.rsrv.started:
+            time.sleep(0.05)
+        self.renders.base_url = "http://127.0.0.1:%d" % rport
+        renders.write_listener(os.environ["WPK_HOME"], self.renders.base_url,
+                               self.renders.secret)
         self.url = "http://127.0.0.1:%d" % self.port
         self.tok = csrf_token(secret)
         self.base = "/p/%s/%s/studio" % (name, self.pkt.wpid)
@@ -157,9 +171,21 @@ class Board:
         res = wcheck.check_project(self.e["path"])
         self.check(not res.errors, "wpk check is clean %s" % (res.errors or ""))
 
+    def versions(self):
+        return self.get("/versions").json()["versions"]
+
+    def tools(self, got):
+        """The tool lines of a turn's events, as one string."""
+        return " ".join((x.get("what") or "") for x in got if x.get("k") == "tool")
+
+    def says(self, got):
+        return " ".join(x.get("text") or "" for x in got if x.get("k") == "say")
+
     def finish(self):
         self.stop.set()
         self.srv.should_exit = True
+        self.rsrv.should_exit = True
+        self.renders.stop()
         print("\n%s" % ("all checks passed" if not self.fails else "%d failed: %s" % (
             len(self.fails), "; ".join(self.fails))))
         return 1 if self.fails else 0

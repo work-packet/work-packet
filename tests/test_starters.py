@@ -400,3 +400,57 @@ def test_new_packet_on_a_board(forge, tmp_path):
     got = c.post("/new", data={"starter": "folder", "name": "a2", "dir": str(tmp_path),
                                "board": "solver", "action": "create"}, follow_redirects=False)
     assert got.status_code == 303 and registry.get("a2")["board"] == "solver"
+
+
+FAKE_IVPM = """#!/bin/sh
+# Stand-in for ivpm: records where it ran and on which branch, then fills packages/.
+[ "$1" = update ] || exit 2
+git symbolic-ref --short HEAD > "%(log)s"
+[ -n "$IVPM_FAIL" ] && { echo "fetch failed: no route to host" >&2; exit 1; }
+mkdir -p packages/python && touch packages/python/marker
+"""
+
+
+@pytest.fixture
+def fake_ivpm(tmp_path, monkeypatch):
+    """A fake ``ivpm`` first on PATH; returns the file it logs the branch to."""
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    log = tmp_path / "ivpm.log"
+    (bin_ / "ivpm").write_text(FAKE_IVPM % {"log": log})
+    (bin_ / "ivpm").chmod(0o755)
+    monkeypatch.setenv("PATH", "%s:%s" % (bin_, os.environ["PATH"]))
+    return log
+
+
+def _ivpm_source(source):
+    (source / "ivpm.yaml").write_text("package:\n  name: dv-solve\n")
+    git(source, "add", "ivpm.yaml")
+    git(source, "commit", "-q", "-m", "ivpm")
+
+
+def test_a_clone_with_an_ivpm_yaml_gets_its_dependencies(home, source, tmp_path, fake_ivpm):
+    _ivpm_source(source)
+    r = starters.from_values("clone", {"clone": str(source), "dir": str(tmp_path / "t"),
+                                       "branch": "try-it"})
+    starters.make(r)
+    folder = tmp_path / "t" / "dv-solve"
+    assert (folder / "packages" / "python" / "marker").exists()
+    assert fake_ivpm.read_text().strip() == "try-it"          # after the branch checkout
+    assert git(folder, "status", "--porcelain") == ""
+
+
+def test_a_clone_without_an_ivpm_yaml_is_not_updated(home, source, tmp_path, fake_ivpm):
+    r = starters.from_values("clone", {"clone": str(source), "dir": str(tmp_path / "t")})
+    starters.make(r)
+    assert not fake_ivpm.exists()
+    assert not (tmp_path / "t" / "dv-solve" / "packages").exists()
+
+
+def test_a_failed_ivpm_update_leaves_nothing(home, source, tmp_path, fake_ivpm, monkeypatch):
+    _ivpm_source(source)
+    monkeypatch.setenv("IVPM_FAIL", "1")
+    r = starters.from_values("clone", {"clone": str(source), "dir": str(tmp_path / "t")})
+    with pytest.raises(starters.StartError, match="ivpm update .* failed:\n.*no route to host"):
+        starters.make(r)
+    assert not (tmp_path / "t" / "dv-solve").exists()

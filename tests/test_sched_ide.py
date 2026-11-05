@@ -243,3 +243,36 @@ def test_the_waiting_page_and_an_agent_taking_the_room(home, tmp_path, fake):
         control.set_mode("stop", ME, "test over")
     finally:
         pool.close()
+
+
+def test_a_job_server_gets_its_launch_and_the_launch_keeps_the_job(home, tmp_path):
+    """docs/vscode-monitor-plan.md S1: the job's ID and host outlive its record."""
+    import socket
+    from work_packet import ide_launch
+    from work_packet.dash.app import create_app
+    config(home, jobs=2)
+    pool = Pool(home)
+    try:
+        bs = backends(home, tmp_path, poke=pool.poke.set)
+        key = bs.register("/x", project="p", wpid="W1", by=ME)
+        c = TestClient(create_app(home, ide_backend=bs), base_url="http://127.0.0.1:7878")
+        with c:
+            get_until_up(c, "/ide/%s/" % key)
+            [rec] = jobs.all(home)
+            cur = ide_launch.current(home, key)
+            assert cur["backend"] == "job" and cur["job_ref"] == rec.ref
+            assert cur["job_id"] == rec.id and cur["host"] == socket.gethostname()
+            envs = [json.loads(ln) for ln in open(str(tmp_path / "pids") + ".env")]
+            assert envs == [{"WPK_IDE_LAUNCH": cur["launch_id"], "WPK_IDE_KEY": key}]
+            assert ide.requests(home)[0]["launch"] == cur["launch_id"]
+            bs.get(key)._stop_now()
+            pool.poke.set()
+            deadline = time.time() + 30
+            while jobs.all(home) and time.time() < deadline:
+                time.sleep(0.1)
+        [old] = ide_launch.history(home, key)
+        assert old["launch_id"] == cur["launch_id"] and old["job_ref"] == rec.ref
+        assert old["ended"] and old["host"] == socket.gethostname()
+        assert ide_launch.packet_of(home, key) == ("p", "W1")
+    finally:
+        pool.close()

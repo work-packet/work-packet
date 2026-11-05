@@ -221,12 +221,17 @@ class Browser:
         return self.proc is not None and self.proc.poll() is None
 
     def render(self, url, png=None, pdf=None, selector=None, full_page=True, width=1200,
-               height=800, script=None, ready_timeout_s=15):
+               height=800, script=None, ready_timeout_s=15, headers=None, thumb=None,
+               thumb_scale=0.3, parts_h=None, max_h=None):
         """Render ``url``. ``png``/``pdf``: files to write. ``selector``: the PNG is
         of that element only. ``script``: a JavaScript expression evaluated once
-        ready; its value is returned. Returns ``{ready, png, pdf, value, errors,
-        size}``; ``ready`` False when the page never said so (the render is
-        taken anyway)."""
+        ready; its value is returned. ``headers``: sent with every request of
+        the page. ``thumb``: also write the same picture at ``thumb_scale`` there.
+        ``parts_h``: a full page taller than this is also cut into parts
+        (``png`` with ``.1.png``, ``.2.png``, ...); ``max_h``: the full page is
+        cut off below this. Returns ``{ready, png, pdf, value, errors, size,
+        thumb, parts}``; ``ready`` False when the page never said so (the render
+        is taken anyway)."""
         with self.lock:
             conn = self.ensure()
             self.used = time.monotonic()
@@ -235,7 +240,9 @@ class Browser:
                 sid = conn.call("Target.attachToTarget",
                                 {"targetId": tid, "flatten": True})["sessionId"]
                 return self._render(conn, sid, url, png, pdf, selector, full_page, width,
-                                    height, script, ready_timeout_s)
+                                    height, script, ready_timeout_s, headers=headers,
+                                    thumb=thumb, thumb_scale=thumb_scale, parts_h=parts_h,
+                                    max_h=max_h)
             finally:
                 try:
                     conn.call("Target.closeTarget", {"targetId": tid}, timeout_s=5)
@@ -244,9 +251,13 @@ class Browser:
                 self.used = time.monotonic()
 
     def _render(self, conn, sid, url, png, pdf, selector, full_page, width, height, script,
-                ready_timeout_s):
+                ready_timeout_s, headers=None, thumb=None, thumb_scale=0.3, parts_h=None,
+                max_h=None):
         for m in ("Page.enable", "Runtime.enable", "Log.enable"):
             conn.call(m, session=sid)
+        if headers:
+            conn.call("Network.enable", session=sid)
+            conn.call("Network.setExtraHTTPHeaders", {"headers": dict(headers)}, session=sid)
         conn.call("Emulation.setDeviceMetricsOverride", {
             "width": width, "height": height, "deviceScaleFactor": 1, "mobile": False},
             session=sid)
@@ -255,7 +266,8 @@ class Browser:
             raise RenderError("could not load %s: %s" % (url, nav["errorText"]))
         conn.wait_event("Page.loadEventFired", sid, self.timeout_s)
         ready = self._wait_ready(conn, sid, ready_timeout_s)
-        out = {"ready": ready, "png": None, "pdf": None, "value": None, "errors": []}
+        out = {"ready": ready, "png": None, "pdf": None, "value": None, "errors": [],
+               "thumb": None, "parts": []}
         if script:
             out["value"] = self._eval(conn, sid, script)
         m = conn.call("Page.getLayoutMetrics", session=sid)
@@ -272,13 +284,34 @@ class Browser:
                     raise RenderError("no element matches %s" % selector)
                 clip = {"x": r[0], "y": r[1], "width": max(r[2], 1), "height": max(r[3], 1)}
             elif full_page:
-                clip = {"x": 0, "y": 0, "width": out["size"][0], "height": out["size"][1]}
-            args = {"format": "png", "captureBeyondViewport": bool(clip)}
-            if clip:
-                args["clip"] = dict(clip, scale=1)
-            data = conn.call("Page.captureScreenshot", args, session=sid)["data"]
-            _write(png, base64.b64decode(data))
+                h = out["size"][1] if not max_h else min(out["size"][1], max_h)
+                clip = {"x": 0, "y": 0, "width": out["size"][0], "height": h}
+
+            def shot(c, scale, path):
+                args = {"format": "png", "captureBeyondViewport": bool(c)}
+                if c:
+                    args["clip"] = dict(c, scale=scale)
+                elif scale != 1:
+                    args["clip"] = {"x": 0, "y": 0, "width": width, "height": height,
+                                    "scale": scale}
+                data = conn.call("Page.captureScreenshot", args, session=sid,
+                                 timeout_s=60)["data"]
+                _write(path, base64.b64decode(data))
+            shot(clip, 1, png)
             out["png"] = png
+            if thumb:
+                shot(clip, thumb_scale, thumb)
+                out["thumb"] = thumb
+            if parts_h and clip and not selector and clip["height"] > parts_h:
+                root, _ = os.path.splitext(png)
+                y, n = 0, 0
+                while y < clip["height"]:
+                    n += 1
+                    part = "%s.%d.png" % (root, n)
+                    shot({"x": 0, "y": y, "width": clip["width"],
+                          "height": min(parts_h, clip["height"] - y)}, 1, part)
+                    out["parts"].append(part)
+                    y += parts_h
         if pdf:
             data = conn.call("Page.printToPDF", {"printBackground": True},
                              session=sid, timeout_s=60)["data"]

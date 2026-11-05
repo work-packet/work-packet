@@ -1,6 +1,11 @@
-// Build the studio's vendored JavaScript (docs/studio-plan.md P0.5).
+// Build the dash's vendored JavaScript (docs/studio-v2.md §7).
 //
-//   cd tools/vendor && npm ci && node build.mjs
+//   ivpm update                 # installs tools/vendor/package.json into packages/node
+//   node tools/vendor/build.mjs # or: node tools/vendor/build.mjs codemirror
+//
+// The packages are found in $WPK_NODE_MODULES, else packages/node/node_modules
+// (ivpm), else tools/vendor/node_modules (a plain `npm ci` here). The output
+// is build output, not committed.
 //
 // Writes ESM bundles to src/work_packet/dash/vendor/<lib>/ and
 // src/work_packet/dash/vendor/manifest.json ({path: {sha256, size}}), which the
@@ -15,13 +20,25 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.resolve(HERE, "../../src/work_packet/dash/vendor");
+const NODE_MODULES = [process.env.WPK_NODE_MODULES,
+  path.resolve(HERE, "../../packages/node/node_modules"),
+  path.join(HERE, "node_modules")].find(d => d && fs.existsSync(d));
+if (!NODE_MODULES) {
+  console.error("build.mjs: no node_modules: run `ivpm update` (or `npm ci` in tools/vendor)");
+  process.exit(1);
+}
 // <lib>: its entries. "draw" builds Mermaid and Excalidraw together so they
 // share chunks: mermaid-to-excalidraw imports Mermaid's internals.
 const LIBS = {
   vega: ["vega"],
   draw: ["mermaid", "excalidraw", "mermaid-to-excalidraw"],
+  codemirror: ["codemirror"],
+  term: [],   // xterm.js: copied as built (UMD, loaded by a plain <script>)
 };
-export const BUDGET = { vega: 1_500_000, draw: 10_000_000 };
+export const BUDGET = { vega: 1_500_000, draw: 10_000_000, codemirror: 800_000, term: 600_000 };
+// term: [from (under node_modules), to (under vendor/term/)]
+const TERM = [["@xterm/xterm/lib/xterm.js", "xterm.js"], ["@xterm/xterm/css/xterm.css", "xterm.css"],
+  ["@xterm/addon-fit/lib/addon-fit.js", "addon-fit.js"], ["@xterm/xterm/LICENSE", "LICENSE.txt"]];
 // Excalidraw's CJK font (Xiaolai, ~13 MB in 209 files) is left out: the
 // browser falls back to a system font for those characters.
 const SKIP_FONTS = new Set(["Xiaolai"]);
@@ -70,6 +87,11 @@ function walk(dir, out = []) {
 async function bundle(lib) {
   const outdir = path.join(OUT, lib);
   rm(outdir);
+  if (lib === "term") {
+    fs.mkdirSync(outdir, { recursive: true });
+    for (const [from, to] of TERM) fs.copyFileSync(path.join(NODE_MODULES, from), path.join(outdir, to));
+    return;
+  }
   await build({
     entryPoints: Object.fromEntries(LIBS[lib].map(e => [e, path.join(HERE, "entries", e + ".js")])),
     outdir, bundle: true, format: "esm", splitting: true, minify: true,
@@ -77,10 +99,10 @@ async function bundle(lib) {
     chunkNames: "chunks/[name]-[hash]", assetNames: "assets/[name]-[hash]",
     loader: { ".woff2": "file", ".ttf": "file", ".png": "file", ".svg": "file" },
     define: { "process.env.NODE_ENV": '"production"', "process.env.IS_PREACT": '"false"' },
-    logLevel: "warning", plugins: [noCdnFonts],
+    logLevel: "warning", plugins: [noCdnFonts], nodePaths: [NODE_MODULES],
   });
   if (lib === "draw") {
-    const dist = path.join(HERE, "node_modules/@excalidraw/excalidraw/dist/prod");
+    const dist = path.join(NODE_MODULES, "@excalidraw/excalidraw/dist/prod");
     fs.copyFileSync(path.join(dist, "index.css"), path.join(outdir, "excalidraw.css"));
     copyDir(path.join(dist, "fonts"), path.join(outdir, "fonts"), SKIP_FONTS);
   }
@@ -90,6 +112,7 @@ function manifest() {
   const files = {};
   const sizes = {};
   for (const lib of Object.keys(LIBS)) {
+    if (!fs.existsSync(path.join(OUT, lib))) continue;
     for (const p of walk(path.join(OUT, lib)).sort()) {
       const rel = path.relative(OUT, p).split(path.sep).join("/");
       const buf = fs.readFileSync(p);
@@ -101,7 +124,7 @@ function manifest() {
   const pkg = JSON.parse(fs.readFileSync(path.join(HERE, "package.json"), "utf8"));
   for (const name of Object.keys(pkg.dependencies)) {
     versions[name] = JSON.parse(fs.readFileSync(
-      path.join(HERE, "node_modules", name, "package.json"), "utf8")).version;
+      path.join(NODE_MODULES, name, "package.json"), "utf8")).version;
   }
   fs.writeFileSync(path.join(OUT, "manifest.json"),
     JSON.stringify({ versions, budget: BUDGET, files }, null, 1) + "\n");

@@ -129,6 +129,29 @@ def test_serve_ensure_twice_starts_one_on_a_unix_socket(home, capsys):
     assert os.path.exists(os.path.join(home, "log", "wpkd.log"))
 
 
+def test_serve_stop_stops_the_detached_wpkd(home):
+    config(home)
+    project.new("demo", "Read state/count.md (0 if missing), add one.")
+    assert _serve(home, "--detach").returncode == 0
+    held = home_lease.live(home)
+    sock = os.path.join(home, "run", "wpkd.sock")
+    assert wait(lambda: os.path.exists(sock))
+    r = _serve(home, "--stop")
+    assert r.returncode == 0 and "wpkd stopped" in r.stderr, r.stderr
+    with pytest.raises(ProcessLookupError):
+        os.kill(held["pid"], 0)
+    assert home_lease.read(home) is None and not os.path.exists(sock)
+    r = _serve(home, "--stop")
+    assert r.returncode == 4 and "wpkd is not running" in r.stderr
+
+
+def test_serve_stop_leaves_another_hosts_wpkd_alone(home):
+    with open(home_lease.path(home), "w") as fp:
+        json.dump({"host": "login2", "pid": 1, "expires": "2999-01-01T00:00:00Z"}, fp)
+    r = _serve(home, "--stop")
+    assert r.returncode == 4 and "runs on host login2" in r.stderr
+
+
 def test_unix_guard_accepts_the_forwarded_host(home):
     from starlette.testclient import TestClient
     from work_packet.dash.app import create_app

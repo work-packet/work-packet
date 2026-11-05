@@ -30,6 +30,19 @@ MODELS = (
 KEY_VARS = ("CODEX_API_KEY", "OPENAI_API_KEY")
 
 
+def claude_names(tokens):
+    """OpenAI's usage counts named as Claude's, so stats and pricing read them
+    alike. OpenAI's ``input_tokens`` includes the cached part."""
+    tokens = dict(tokens)
+    if "cached_input_tokens" in tokens:
+        c = tokens.pop("cached_input_tokens")
+        tokens["cache_read_input_tokens"] = c
+        tokens["input_tokens"] = max(tokens.get("input_tokens", 0) - c, 0)
+    if "reasoning_output_tokens" in tokens:
+        tokens["thinking_tokens"] = tokens.pop("reasoning_output_tokens")
+    return tokens
+
+
 class Codex(Harness):
     name = "codex"
     caps = Caps()
@@ -109,13 +122,6 @@ class Codex(Harness):
                 if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
                     res.text = item["text"]
         if tokens:
-            # Name the counts as Claude's are, so stats and pricing read them alike.
-            if "cached_input_tokens" in tokens:
-                c = tokens.pop("cached_input_tokens")
-                tokens["cache_read_input_tokens"] = c
-                tokens["input_tokens"] = max(tokens.get("input_tokens", 0) - c, 0)
-            if "reasoning_output_tokens" in tokens:
-                tokens["thinking_tokens"] = tokens.pop("reasoning_output_tokens")
-            res.tokens = tokens
+            res.tokens = claude_names(tokens)
         res.account = res.account or self.account
         return res

@@ -15,6 +15,7 @@ duckdb = pytest.importorskip("duckdb")
 from test_dash_tasks import _new  # noqa: E402
 from work_packet import layout, registry  # noqa: E402
 from work_packet.dash.agent import Agents  # noqa: E402
+from work_packet.dash import vendored  # noqa: E402
 from work_packet.studio import chart, kernel, model, primer  # noqa: E402
 
 SECRET = b"k" * 32
@@ -177,6 +178,7 @@ def test_sql_box_and_saved_queries(board):
     assert r.status_code == 200 and r.json()["columns"] == [{"name": "n", "type": "BIGINT"}]
 
 
+@pytest.mark.skipif(not vendored.built("vega"), reason=vendored.NOT_BUILT)
 def test_chart_frame_data_and_panel(board):
     c, e, pkt, ag, tok, base, folder = board
     r = c.get(base + "/frame/chart", params={"path": "charts/f.vl.json"})

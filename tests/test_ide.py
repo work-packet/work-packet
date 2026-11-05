@@ -439,6 +439,42 @@ def test_web_proxy_http(short_home, tmp_path):
     assert not os.path.exists(be.sock)
 
 
+def test_ext_resource_url_only_for_gallery_hosts():
+    from work_packet.dash import ide as dide
+    p = "/ide/fd9028da2fe7/stable-2c33b50/web-extension-resource/%s/vscodevim/vim/1.32.4/extension/package.json"
+    assert dide.ext_resource_url(p % "vscodevim.vscode-unpkg.net") == \
+        "https://vscodevim.vscode-unpkg.net/vscodevim/vim/1.32.4/extension/package.json"
+    assert dide.ext_resource_url(p % "open-vsx.org").startswith("https://open-vsx.org/vscodevim/")
+    assert dide.ext_resource_url(p % "evil.example") is None
+    assert dide.ext_resource_url(p % "x.vscode-unpkg.net.evil") is None
+    assert dide.ext_resource_url(p.replace("1.32.4", "..") % "a.vscode-unpkg.net") is None
+    assert dide.ext_resource_url("/ide/fd9028da2fe7/stable-2c33b50/static/x.js") is None
+
+
+def test_ext_resource_fetches_upstream():
+    import asyncio
+    import httpx
+    from work_packet.dash import ide as dide
+    seen = {}
+
+    def handler(req):
+        seen["url"], seen["headers"] = str(req.url), dict(req.headers)
+        if req.url.path.endswith("missing"):
+            return httpx.Response(404, text="nope")
+        return httpx.Response(200, content=b"{}", headers={
+            "content-type": "application/json", "cache-control": "max-age=60", "x-other": "1"})
+
+    t = httpx.MockTransport(handler)
+    hdrs = {"x-client-name": "web", "cookie": "vscode-tkn=1"}
+    r = asyncio.run(dide.ext_resource("https://a.vscode-unpkg.net/p/n/1/package.json", hdrs, t))
+    assert (r.status_code, r.body) == (200, b"{}")
+    assert r.headers["content-type"] == "application/json"
+    assert r.headers["cache-control"] == "max-age=60" and "x-other" not in r.headers
+    assert seen["headers"]["x-client-name"] == "web" and "cookie" not in seen["headers"]
+    r = asyncio.run(dide.ext_resource("https://a.vscode-unpkg.net/missing", {}, t))
+    assert (r.status_code, r.body) == (404, b"nope")
+
+
 def test_web_proxy_websocket(short_home, tmp_path):
     from starlette.websockets import WebSocketDisconnect
     c, be, origin, tok = _web_client(short_home, tmp_path)
@@ -776,3 +812,49 @@ def test_a_child_is_titled_with_its_spawn_name(home, tmp_path):
     op = ide.resolve(kid)
     assert op.kind == "packet" and op.path.startswith(kid)
     assert load(op.path)["settings"]["window.title"] == "wpk: demo/hello${dirty}"
+
+
+# --- the packet layout (docs/run-binding-v1.md) ---------------------------------------
+
+def test_a_packet_folder_opens_as_itself(home, source, capsys):
+    from test_packet_layout import new_here
+    from test_setup import git
+    plan = new_here(source)
+    for t in ("sr", str(source), plan.path):
+        op = ide.resolve(t)
+        assert (op.kind, op.path, op.is_workspace) == ("folder", str(source), False)
+    assert executor.step(str(source)).code == 0
+    op = ide.resolve("sr")
+    assert op.path == str(source) and op.wpid == plan.root
+    # wpk writes nothing: no workspace file, no .vscode/ in the clone
+    assert not os.path.exists(source / ".vscode")
+    assert not os.path.exists(os.path.join(plan.path, ".vscode"))
+    assert not os.path.exists(os.path.join(plan.path, "runs", plan.root, ".vscode"))
+    assert git(source, "status", "--porcelain") == ""
+    assert ide.desktop_url(op) == "vscode://file%s" % source
+    assert ide.web_path(op) == "/ide/?folder=%s" % source
+    from work_packet.packet import Packet
+    assert not ide.set_owner(Packet(os.path.join(plan.path, "runs", plan.root)))
+    with pytest.raises(ide.IdeError, match="packet folder"):
+        ide.resolve("sr", "dv-solve")
+    assert main(["ide", "sr", "--json"]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert got["kind"] == "folder" and got["path"] == str(source) and not got["workspace"]
+
+
+def test_board_opens_the_packet_folder(home, source):
+    from test_packet_layout import new_here
+    from work_packet.packet import Packet
+    plan = new_here(source)
+    c, origin, tok = _board_client("loopback")
+    page = c.get("/p/sr/" + plan.root).text
+    assert "Pause and open" in page and "The runner works in this folder" in page
+    r = c.post("/p/sr/ide", headers=dict(origin, **{"user-agent": LINUX}),
+               data={"csrf": tok, "wpid": plan.root, "go": "desktop"})
+    assert r.status_code == 200 and "sr packet folder" in r.text
+    assert 'data-kind="local" href="vscode://file%s"' % source in r.text
+    r = c.post("/p/sr/ide", headers=dict(origin, **{"user-agent": LINUX}),
+               data={"csrf": tok, "go": "desktop"})
+    assert 'href="vscode://file%s"' % source in r.text
+    executor.admin(Packet(os.path.join(plan.path, "runs", plan.root)), "pause", None, None, "me")
+    assert "The packet folder, <code>%s</code>" % source in c.get("/p/sr/" + plan.root).text

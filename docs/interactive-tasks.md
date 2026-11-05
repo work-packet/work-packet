@@ -1,5 +1,7 @@
 # Studio: interactive research and visualization (proposal)
 
+**Refocused by `docs/studio-v2.md` (2026-10-31):** §3's canvas-centred layout and §11's "no editor, no file tree" no longer hold.
+
 Draft 2, 2026-10-30 (with §11, the case for VS Code). Status: **for review**. Nothing here is built.
 
 Draft 1 proposed a studio for iterating on one visual thing, such as a
@@ -236,6 +238,16 @@ and element comments. It fits S4 in the plan, beside Mermaid diagrams.
 - The same images serve as version thumbnails and comment crops: one
   renderer.
 
+*As built (S3, studio-plan.md §8):* documents, charts and tables are
+rendered by loading their studio frame pages in headless Chrome through a
+private loopback listener of the dash (the browser cannot sign in to the
+board); an image is its own picture; PDF and slides wait for their kinds.
+Pictures are cached by content (the file and what it reads). The cheap
+checks are overflow (page and boxes), text outside an SVG, broken images,
+Vega warnings and console errors; contrast and palette are left to the
+agent's look. `wpk studio look` writes the picture under `.studio/look/`
+for the agent to Read; tall pages come in parts.
+
 ### 5.4 Versions and branches
 
 - A **version** is a snapshot of the studio's changed files and their
@@ -254,6 +266,13 @@ and element comments. It fits S4 in the plan, beside Mermaid diagrams.
 - **Several agents at once.** "Try three chart forms" can run three
   branches in parallel (the agent's own sub-agents, as steps may already
   use), and the canvas shows the three side by side.
+
+*As built (S3):* versions are taken at the end of each agent turn that
+changed tracked files, before each question (the person's edits), at open
+and at close; a version holds every tracked file (a kind the studio knows,
+up to 20 MB), not only the changed ones, so restore is exact. Versions live
+in `.work-packet/runs/<id>/studio/versions/` (`runs/` in the packet's run
+dir). Keep is a flag only (no git commit yet); branches are S7.
 
 ### 5.5 You and the agent editing the same files
 

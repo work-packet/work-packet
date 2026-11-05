@@ -117,6 +117,15 @@ def test_cli_new_here(home, source):
     assert registry.get("cl")["path"] == str(source / ".work-packet")
 
 
+def _no_ide_hint(pages):
+    """Intended: what the VS Code button opens differs (the packet folder in the
+    packet layout), and its hint says so."""
+    import re
+    hint = re.compile(r'<span class="muted ide-hint"[^>]*>.*?</span>')
+    return {u: (st, hint.sub("@IDE-HINT@", b) if isinstance(b, str) else b)
+            for u, (st, b) in pages.items()}
+
+
 def _crawl_one(tmp_path, monkeypatch, packet):
     """The same finished project, in one layout, crawled in its own home."""
     import uuid
@@ -137,8 +146,9 @@ def _crawl_one(tmp_path, monkeypatch, packet):
     # Two separate runs: measured wall-clock times differ in the last digit.
     import re
     pages = crawl.crawl(TestClient(create_app()), "sr")
-    return plan.path, {u: (st, re.sub(r'"duration_s": [0-9.]+', '"duration_s": 0', b)
-                           if isinstance(b, str) else b) for u, (st, b) in pages.items()}
+    return plan.path, _no_ide_hint(
+        {u: (st, re.sub(r'"duration_s": [0-9.]+', '"duration_s": 0', b)
+             if isinstance(b, str) else b) for u, (st, b) in pages.items()})
 
 
 def test_dash_pages_match_the_legacy_layout(home, tmp_path, monkeypatch):
@@ -227,7 +237,7 @@ def test_convert_a_nested_project(home, tmp_path, monkeypatch):
     from work_packet.dash.app import create_app
     folder, plan = _finished_legacy(tmp_path)
     old = plan.path
-    before = crawl.crawl(TestClient(create_app()), "sr")
+    before = _no_ide_hint(crawl.crawl(TestClient(create_app()), "sr"))
     stats_before = stats.report(stats.groups(*stats.collect([("sr", old)])))
     assert convert.convert("sr", dry_run=True)["folder"] == str(folder)
     assert os.path.isdir(old)                                   # dry run: nothing moved
@@ -240,7 +250,7 @@ def test_convert_a_nested_project(home, tmp_path, monkeypatch):
     assert sorted(os.listdir(os.path.join(dot, "runs"))) == sorted(
         [plan.root, child_wpid(plan.root, 8, 0)])
     assert stats.report(stats.groups(*stats.collect([("sr", dot)]))) == stats_before
-    after = crawl.crawl(TestClient(create_app()), "sr")
+    after = _no_ide_hint(crawl.crawl(TestClient(create_app()), "sr"))
     # Paths overlap (the folder is a prefix of the old project), so both
     # sides get placeholders.
     before = _tokens(before, [(layout.runs_dir(old), "@RUNS@"), (old, "@PROJ@")])

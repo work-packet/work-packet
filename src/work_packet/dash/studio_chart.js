@@ -66,10 +66,29 @@ document.getElementById("ch-q").addEventListener("keydown", (ev) => {
 });
 
 const view = Object.assign({}, spec);
-if (view.mark && view.width === undefined) view.width = "container";
+// As wide as the frame. Vega-Lite then warns 'Dropping "fit-y"' for a discrete
+// height (whatever autosize says): that one is ours, not the spec's, so it is dropped.
+const ours = view.mark && view.width === undefined;
+if (ours) view.width = "container";
 view.config = Object.assign({}, themes[dark ? "dark" : "light"], spec.config || {});
 
-embed("#chart", view, {ast: true, expr: expressionInterpreter, renderer: "svg", actions: false})
+// Vega's warnings go to the render's checks (window.__studioWarnings, studio_wait.js).
+const warnings = window.__studioWarnings || (window.__studioWarnings = []);
+const logger = {
+  _level: 2,
+  level(l) { if (l === undefined) return this._level; this._level = l; return this; },
+  error(...a) { console.error(...a); return this; },
+  warn(...a) {
+    const w = a.map(String).join(" ");
+    if (!(ours && /^Dropping "fit-y"/.test(w))) warnings.push(w);
+    return this;
+  },
+  info() { return this; },
+  debug() { return this; },
+};
+
+embed("#chart", view, {ast: true, expr: expressionInterpreter, renderer: "svg", actions: false,
+                       logger: logger})
   .then((res) => {
     const sels = selections(spec, {});
     Object.keys(sels).forEach((name) => {
@@ -80,7 +99,7 @@ embed("#chart", view, {ast: true, expr: expressionInterpreter, renderer: "svg", 
       });
     });
     if (!Object.keys(sels).length) {
-      msg.textContent = "No selection in this chart: add a param with select (interval or point) to ask about rows.";
+      if (!root.dataset.render) msg.textContent = "No selection in this chart: add a param with select (interval or point) to ask about rows.";
     }
     window.__studioReady = true;
   })

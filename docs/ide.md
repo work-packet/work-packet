@@ -34,6 +34,9 @@ Contents: §1 what we have · §2 the workspace file · §3 desktop VS Code ·
   `COMPLETED` are yours, `RUNNABLE` and `SLEEPING` are the runner's.
   `wpk handoff` is built; `wpk take` is not yet (L1).
 - `step-start` journal records carry the Claude Code `session_id`.
+- Interactive Claude Code and Codex sessions started in web VS Code are
+  listed on the packet page and the Overview (`docs/vscode-plan.md` §4.5,
+  `docs/vscode-monitor-plan.md`).
 - The laptop already uses VS Code Remote-SSH to this host
   (`~/.vscode-server` exists on a9550), and VS Code 1.98 on the host
   includes `code serve-web`.

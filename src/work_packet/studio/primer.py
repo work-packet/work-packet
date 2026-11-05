@@ -21,19 +21,30 @@ def _cut(items, n=LIST_MAX):
     return items[:n], max(0, len(items) - n)
 
 
-def build(entry, wpid, state, files=(), yours=(), memento=None, datasets=None):
+def build(entry, wpid, state, files=(), yours=(), memento=None, datasets=None, checks=None):
     """The primer text. ``state``: ``model.state()``; ``files``: the folder's
     files (relative paths); ``yours``: the changes the person made since the
     agent's last turn ([{path, change}]); ``memento``: the packet's
     instruction, for context; ``datasets``: the kernel's ``datasets`` (the
-    folder's tables with their columns), or None when not known."""
+    folder's tables with their columns), or None when not known; ``checks``:
+    what the renders of the files changed in your last turn flagged
+    ([{path, check, what}])."""
     try:
         out = [fsutil.read_text(GUIDE).rstrip(), ""]
     except OSError:
         out = []
     out += ["## This studio", "",
             "- Packet %s in project %s." % (wpid, entry["name"]),
-            "- Your working folder (cwd): %s" % state["folder"], ""]
+            "- Your working folder (cwd): %s" % state["folder"]]
+    try:
+        from . import tree
+        sd = tree.places(entry, wpid)["state"]
+        out.append("- The packet's plan and inputs: %s (outline.md, questions.md, notes/); "
+                   "you may edit them, and paths shown as wp:state/... are there. The "
+                   "rest of wpk's files are read-only." % sd)
+    except Exception:       # noqa: BLE001 - the primer never fails over this
+        pass
+    out.append("")
     if memento:
         text = memento.strip()
         out += ["## The packet's instruction", "", text[:2000] + (
@@ -67,6 +78,15 @@ def build(entry, wpid, state, files=(), yours=(), memento=None, datasets=None):
                 cols += ", … (%d columns)" % len(d["columns"])
             rows = " %s rows;" % d["rows"] if d.get("rows") is not None else ""
             out.append("- %s:%s %s" % (head, rows, cols))
+        if more:
+            out.append("- … and %d more" % more)
+    if checks:
+        out += ["", "## Checks on what you changed last turn", "",
+                "The renders flagged these (look with `wpk studio look <path>` and fix "
+                "what is wrong):", ""]
+        shown, more = _cut(list(checks), 20)
+        for c in shown:
+            out.append("- %s: %s: %s" % (c["path"], c["check"], c["what"]))
         if more:
             out.append("- … and %d more" % more)
     out += ["", "## Changed by the person since your last turn", ""]

@@ -189,6 +189,15 @@
 
   function viewer(a, small) {
     var k = kindOf(a), stamp = "&t=" + (a.mtime || Date.now());
+    if (k === "document" && window.wpkFiles && !small) {      // rendered or source (v2 §4)
+      return window.wpkFiles.document(a, function () {
+        var f = el("iframe");
+        f.title = a.path;
+        f.src = base + "/frame/doc?path=" + q(a.path);
+        f.dataset.path = a.path;
+        return f;
+      });
+    }
     if (k === "document" || k === "chart") {
       var f = el("iframe");
       f.title = a.path;
@@ -205,25 +214,28 @@
       w.appendChild(img);
       return w;
     }
-    var p = el("div", "st-empty");
-    var l = el("a", null, a.path + ": no viewer for this kind yet; open the file");
-    l.href = base + "/file?path=" + q(a.path);
-    l.target = "_blank";
-    p.appendChild(l);
-    return p;
+    return window.wpkFiles ? window.wpkFiles.editor(a) : el("div", "st-empty", a.path);
   }
 
   function drawCanvas() {
     tabs.textContent = "";
     var open = canvas.layout.open || [];
     canvas.canvas.forEach(function (a) {
-      var b = el("button", "st-tab" + (open.indexOf(a.path) >= 0 ? " on" : ""), a.path);
+      var b = el("button", "st-tab" + (open.indexOf(a.path) >= 0 ? " on" : ""), tabName(a.path));
       b.type = "button";
       b.title = (a.kind || "file") + (a.missing ? " (missing)" : "");
-      if (lastBy[a.path]) b.appendChild(el("span", "by", lastBy[a.path]));
+      b.title = a.path;
+      if (window.wpkFiles && window.wpkFiles.dirty(a.path)) b.appendChild(el("span", "dirty", "●"));
+      else if (lastBy[a.path]) b.appendChild(el("span", "by", lastBy[a.path]));
       var x = el("span", "x", "×");
-      x.title = "Unpin";
-      x.onclick = function (ev) { ev.stopPropagation(); post("/unpin", {path: a.path}).then(took); };
+      x.title = "Close";
+      x.onclick = function (ev) {
+        ev.stopPropagation();
+        var F = window.wpkFiles;
+        if (F && F.dirty(a.path) && !confirm("Close " + a.path + " without saving?")) return;
+        if (F) F.drop(a.path);
+        post("/unpin", {path: a.path}).then(took);
+      };
       b.appendChild(x);
       b.onclick = function () {
         var want = canvas.layout.mode === "two-up" ? open.filter(function (p) { return p !== a.path; }).slice(-1).concat([a.path]) : [a.path];
@@ -236,7 +248,7 @@
     var shown = canvas.canvas.filter(function (a) { return open.indexOf(a.path) >= 0; });
     if (!shown.length) {
       tiles.appendChild(el("div", "st-empty", canvas.canvas.length ?
-        "Pick a tab to open it." : "Nothing on the canvas yet. Ask for something, then Pin it."));
+        "Pick a tab to open it." : "Open a file from the tree, or ask for something."));
       return;
     }
     shown.forEach(function (a) {
@@ -251,6 +263,14 @@
     if (a[0] !== 200) { say(a[1].error || ("error " + a[0]), true); return; }
     canvas = a[1];
     drawCanvas();
+    if (window.wpkFiles) window.wpkFiles.redraw();
+  }
+
+  // A tab's label: the file's name, with the plan's paths shown as such.
+  function tabName(p) {
+    if (p === "wp:card") return "card";
+    var n = p.split("/").pop();
+    return /^wp:state\//.test(p) ? "plan: " + n : /^wp:/.test(p) ? n + " (ro)" : n;
   }
 
   function refresh(path) {
@@ -299,6 +319,12 @@
       var row = el("div", "row");
       row.appendChild(el("strong", null, f.path));
       row.appendChild(el("span", "muted", f.change + (f.kind ? " · " + f.kind : "")));
+      if (f.gone) {            // deleted since: nothing to pin or show
+        row.appendChild(el("span", "muted", "· deleted since"));
+        c.appendChild(row);
+        put(c);
+        return;
+      }
       var pin = el("button", "mini", "Pin");
       pin.type = "button";
       pin.onclick = function () { post("/pin", {path: f.path}).then(took); };
@@ -329,13 +355,16 @@
     } else if (k === "tool") {
       put(el("div", "st-ev tool", "· " + ev.name + " " + short(ev.what || "")));
     } else if (k === "end") {
+      setTimeout(loadVersions, 1500);
       put(el("div", "st-ev end" + (ev.ok ? "" : " bad"),
         (ev.ok ? "done" : "stopped: " + (ev.error || "error")) +
         (ev.cost ? " · $" + Number(ev.cost).toFixed(3) + " so far" : "")));
     } else if (k === "output") {
       outputCard(ev);
+      setTimeout(loadVersions, 800);       // the turn's version follows its card
     } else if (k === "changed") {
       lastBy[ev.path] = ev.by === "you" ? "you" : ev.by;
+      if (window.wpkFiles) window.wpkFiles.changed(ev);
       if (ev.by !== "agent") put(el("div", "st-ev changed", ev.path + " " + ev.change + " by " + ev.by));
       var pinned = canvas.canvas.some(function (a) { return a.path === ev.path; });
       if (pinned) { refresh(ev.path); drawTabsOnly(); }
@@ -345,12 +374,23 @@
     }
   }
 
+  // For studio_files.js (the tree and the editor tabs).
+  window.wpkStudio = {
+    base: base, csrf: csrf, post: post, getJSON: getJSON, say: say,
+    pin: function (path) { return post("/pin", {path: path}).then(took); },
+    isOpen: function (path) { return (canvas.layout.open || []).indexOf(path) >= 0; },
+    tabsChanged: function () { drawTabsOnly(); },
+  };
+
   function drawTabsOnly() {
     tabs.querySelectorAll(".st-tab").forEach(function (b, i) {
       var a = canvas.canvas[i];
       if (!a) return;
+      var dirty = window.wpkFiles && window.wpkFiles.dirty(a.path), dot = b.querySelector(".dirty");
+      if (dirty && !dot) b.insertBefore(el("span", "dirty", "●"), b.querySelector(".x"));
+      if (!dirty && dot) dot.remove();
       var by = b.querySelector(".by");
-      if (lastBy[a.path]) {
+      if (lastBy[a.path] && !dirty) {
         if (!by) { by = el("span", "by"); b.insertBefore(by, b.querySelector(".x")); }
         by.textContent = lastBy[a.path];
       }
@@ -385,6 +425,125 @@
   });
   stop.onclick = function () { post("/cancel", {}); };
 
+  // -- versions (S3.3): the strip, view, compare, flip, restore, keep ---------------------
+  var strip = document.getElementById("st-strip"), verBox = document.getElementById("st-ver");
+  var vers = [], keyAt = {}, viewing = null, other = null, picking = false, flipped = false;
+  var verPoll = null;
+
+  function when(t) { var d = new Date(t * 1000); return d.toTimeString().slice(0, 5); }
+
+  // keyAt[n][path]: the render of each file as it was at version n (the newest
+  // render at or before n: a version names the renders of what it changed).
+  function index() {
+    keyAt = {};
+    var cur = {};
+    vers.forEach(function (v) {
+      (v.deleted || []).forEach(function (p) { delete cur[p]; });
+      v.changed.forEach(function (c) { cur[c.path] = {key: c.key, kind: c.kind, n: v.n, ready: c.ready, checks: c.checks}; });
+      var snap = {};
+      v.files.forEach(function (p) { if (cur[p]) snap[p] = cur[p]; else snap[p] = {key: null, kind: null, n: null}; });
+      keyAt[v.n] = snap;
+    });
+  }
+
+  function picture(n, path) {      // an <img> of path as it was at version n, or a note
+    var a = (keyAt[n] || {})[path];
+    if (!a) return el("div", "muted", "not in v" + n);
+    if (a.kind === "image" || (!a.key && /\.(png|jpe?g|gif|webp|svg)$/i.test(path))) {
+      var im = el("img"); im.alt = path; im.src = base + "/version/" + n + "/file?path=" + q(path); return im;
+    }
+    if (!a.key) return el("div", "muted", "no picture for this kind");
+    if (!a.ready) return el("div", "muted", "rendering…");
+    var i = el("img"); i.alt = path + " at v" + n; i.src = base + "/render/" + a.key + "/full.png"; return i;
+  }
+
+  function drawStrip() {
+    strip.textContent = "";
+    vers.forEach(function (v) {
+      var b = el("button", "st-chip" + (viewing === v.n || other === v.n ? " on" : "") + (picking ? " pick" : ""));
+      b.type = "button";
+      var first = v.changed.filter(function (c) { return c.key || c.kind === "image"; })[0];
+      var th = el("div", "th");
+      if (first && first.kind === "image") th.style.backgroundImage = "url(" + JSON.stringify(base + "/version/" + v.n + "/file?path=" + q(first.path)) + ")";
+      else if (first && first.ready) th.style.backgroundImage = "url(" + JSON.stringify(base + "/render/" + first.key + "/thumb.png") + ")";
+      b.appendChild(th);
+      var flags = v.changed.reduce(function (k, c) { return k + (c.checks || []).length; }, 0);
+      var line = el("span", null, "v" + v.n + (v.keep ? " ★" : "") + " · " + v.by);
+      if (flags) line.appendChild(el("span", "flag", " ⚑" + flags));
+      b.appendChild(line);
+      b.appendChild(el("span", null, when(v.at) + (v.note ? " · " + v.note : "")));
+      b.title = v.changed.map(function (c) { return c.path; }).concat((v.deleted || []).map(function (p) { return p + " (deleted)"; })).join("\n");
+      b.onclick = function () {
+        if (picking) { picking = false; other = v.n; flipped = false; }
+        else { viewing = viewing === v.n ? null : v.n; other = null; }
+        drawStrip(); drawVersion();
+      };
+      strip.appendChild(b);
+    });
+    strip.scrollLeft = strip.scrollWidth;
+  }
+
+  function drawVersion() {
+    if (viewing == null) { verBox.hidden = true; tiles.hidden = false; return; }
+    tiles.hidden = true; verBox.hidden = false; verBox.textContent = "";
+    var v = vers.filter(function (x) { return x.n === viewing; })[0];
+    if (!v) { viewing = null; return drawVersion(); }
+    var bar = el("div", "vbar");
+    bar.appendChild(el("strong", null, "v" + v.n));
+    bar.appendChild(el("span", "muted", v.by + " · " + when(v.at) + (v.note ? " · " + v.note : "")));
+    function btn(t, fn, title) { var b = el("button", "mini", t); b.type = "button"; b.onclick = fn; if (title) b.title = title; bar.appendChild(b); return b; }
+    btn("Back to now", function () { viewing = null; other = null; drawStrip(); drawVersion(); });
+    btn(v.keep ? "Unkeep" : "Keep", function () { post("/keep", {n: v.n, keep: !v.keep}).then(loadVersions); },
+        "Mark the versions worth showing first");
+    btn("Restore", function () {
+      if (!window.confirm("Write v" + v.n + "'s files back? (The files as they are now stay as a version.)")) return;
+      post("/restore", {n: v.n}).then(function (r) {
+        say(r[0] === 200 ? (r[1].version ? "restored v" + v.n + " as v" + r[1].version.n : "already v" + v.n) : (r[1].error || "error"), r[0] !== 200);
+        viewing = null; other = null; loadVersions();
+      });
+    }, "Write this version's files back, as a new version");
+    btn(other == null ? "Compare with…" : "Stop comparing", function () {
+      if (other != null) { other = null; picking = false; } else { picking = true; say("pick a version in the strip to compare with"); }
+      drawStrip(); drawVersion();
+    });
+    if (other != null) btn("Flip", function () { flipped = !flipped; drawVersion(); }, "Show one in place of the other");
+    verBox.appendChild(bar);
+    var paths = v.changed.map(function (c) { return c.path; });
+    if (other != null) {
+      var o = vers.filter(function (x) { return x.n === other; })[0];
+      (o ? o.changed : []).forEach(function (c) { if (paths.indexOf(c.path) < 0) paths.push(c.path); });
+    }
+    paths.forEach(function (p) {
+      verBox.appendChild(el("div", null, p));
+      var a = (keyAt[v.n] || {})[p];
+      if (a && a.checks && a.checks.length && a.n === v.n) {
+        verBox.appendChild(el("div", "checks", a.checks.map(function (c) { return "⚑ " + c.check + ": " + c.what; }).join("\n")));
+      }
+      var cols = el("div", "cols" + (other != null && !flipped ? " two" : ""));
+      if (other == null) cols.appendChild(picture(v.n, p));
+      else if (flipped) { cols.appendChild(el("div", "muted", "v" + other)); cols.appendChild(picture(other, p)); }
+      else {
+        var l = el("div"), r = el("div");
+        l.appendChild(el("div", "muted", "v" + v.n)); l.appendChild(picture(v.n, p));
+        r.appendChild(el("div", "muted", "v" + other)); r.appendChild(picture(other, p));
+        cols.appendChild(l); cols.appendChild(r);
+      }
+      verBox.appendChild(cols);
+    });
+    (v.deleted || []).forEach(function (p) { verBox.appendChild(el("div", "muted", p + " deleted in this version")); });
+  }
+
+  function loadVersions() {
+    getJSON("/versions").then(function (r) {
+      if (r[0] !== 200) return;
+      vers = r[1].versions || [];
+      index(); drawStrip(); drawVersion();
+      var waiting = vers.some(function (v) { return v.changed.some(function (c) { return c.key && !c.ready; }); });
+      clearTimeout(verPoll);
+      if (waiting && r[1].renders === "on") verPoll = setTimeout(loadVersions, 3000);
+    }).catch(function () {});
+  }
+
   // -- closing ----------------------------------------------------------------------
   var dlg = document.getElementById("st-close");
   document.getElementById("st-close-open").onclick = function () {
@@ -398,5 +557,6 @@
   document.getElementById("st-close-cancel").onclick = function () { dlg.close(); };
 
   loadCanvas();
+  loadVersions();
   connect();
 })();

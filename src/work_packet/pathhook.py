@@ -15,7 +15,8 @@ The studio's agent (docs/studio-plan.md P0.3) works between steps, with no
 ``.pending/``: ``WPK_PROTECT`` lists (``os.pathsep``) what wpk keeps (the
 ``.work-packet`` directory, or a legacy project's ``packets/`` and
 ``project.toml``), and every edit under one is refused unless it is under
-``WPK_PROTECT_ALLOW`` inside it (a child packet's ``work/``).
+one of ``WPK_PROTECT_ALLOW`` (``os.pathsep``) inside it: a child packet's
+``work/``, and the open packet's ``state/`` (docs/studio-v2.md §3).
 
 Standalone on purpose, like ``bghook.py``. Any error lets the call through.
 """
@@ -60,12 +61,12 @@ def blocked(event):
     if not isinstance(p, str) or not p:
         return None
     p = os.path.normpath(os.path.join(event.get("cwd") or os.getcwd(), p))
-    allow = os.environ.get("WPK_PROTECT_ALLOW")
+    allow = [a for a in (os.environ.get("WPK_PROTECT_ALLOW") or "").split(os.pathsep) if a]
     for guard in filter(None, (os.environ.get("WPK_PROTECT") or "").split(os.pathsep)):
         rp, rg = os.path.realpath(p), os.path.realpath(guard)
-        ra = os.path.realpath(allow) if allow else None
-        if _under(rp, rg) and not (ra and _under(ra, rg) and _under(rp, ra)):
-            return STUDIO_MSG % (p, allow or event.get("cwd") or os.getcwd())
+        ras = [os.path.realpath(a) for a in allow]
+        if _under(rp, rg) and not any(_under(ra, rg) and _under(rp, ra) for ra in ras):
+            return STUDIO_MSG % (p, os.pathsep.join(allow) or event.get("cwd") or os.getcwd())
     pkt = _packet(p)
     if pkt is None:
         return None

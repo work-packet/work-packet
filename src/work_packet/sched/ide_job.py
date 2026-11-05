@@ -2,8 +2,10 @@
 port, write ``host:port`` to the server directory's ``endpoint`` once it
 listens, and wait. SIGTERM (the job cancelled, the IDE idle) stops it.
 
-``python -m work_packet.sched.ide_job <server dir> -- <server argv>``, where
-the argv's ``{port}`` is replaced by the port chosen here.
+``python -m work_packet.sched.ide_job <server dir> [--launch ID] -- <server argv>``,
+where the argv's ``{port}`` is replaced by the port chosen here. ``--launch``:
+the server gets ``WPK_IDE_LAUNCH`` (``work_packet.ide_launch``), and the
+launch gets this host.
 """
 
 import os
@@ -30,12 +32,53 @@ def listening(port):
         return False
 
 
+def collect(home, key, lid, server, every):
+    """Watch the sessions under ``server`` here, on the exec host, until it ends
+    (docs/vscode-monitor-plan.md §2.4): a daemon thread, so it never holds the
+    job up. Its records go to the shared home."""
+    import threading
+    from .. import ide_launch, ide_sessions
+
+    def loop():
+        c = None
+        while True:
+            done = server.poll() is not None
+            try:
+                if c is None:
+                    rec = ide_launch.find(home, lid)
+                    if rec is not None:
+                        c = ide_sessions.Collector(home, rec, root=server.pid)
+                if c is not None:
+                    c.pass_once()
+            except Exception as e:          # keep watching; say why on the job's log
+                print("wpk: session watch: %s" % e, file=sys.stderr, flush=True)
+            if done:
+                return
+            time.sleep(every)
+    threading.Thread(target=loop, name="wpk-ide-sessions", daemon=True).start()
+
+
 def main(argv):
     d, rest = argv[0], argv[argv.index("--") + 1:]
+    opts = argv[1:argv.index("--")]
+    lid = opts[opts.index("--launch") + 1] if "--launch" in opts else None
+    home, key = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(d)))), \
+        os.path.basename(os.path.abspath(d))
     port = free_port()
     cmd = [a.replace("{port}", str(port)) for a in rest]
     endpoint = os.path.join(d, "endpoint")
-    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, start_new_session=True)
+    env = None
+    if lid:
+        from .. import ide_launch
+        env = dict(os.environ, **ide_launch.env(lid, key))
+    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, start_new_session=True, env=env)
+    if lid:
+        try:
+            ide_launch.update(home, key, lid, host=socket.gethostname(), pid=p.pid)
+        except OSError:
+            pass
+    if lid and "--collect" in opts:
+        collect(home, key, lid, p, float(opts[opts.index("--collect") + 1]))
 
     def stop(signum, frame):
         try:
