@@ -147,7 +147,7 @@ socket. The backend has no login and no port of its own (ide.md §4.1):
 browser ─► wpkd Guard (identity, Host, Origin) ─► /ide/<key>/* ─► $WPK_HOME/ide/servers/<key>/serve.sock ─► code serve-web
 ```
 
-`code serve-web` 1.98.2 on a9550 has `--socket-path`,
+`code serve-web` 1.98.2 on the dev host has `--socket-path`,
 `--server-base-path`, `--without-connection-token`,
 `--accept-server-license-terms` and `--server-data-dir` (checked
 2026-10-25). `$WPK_HOME/ide/` is 0700, and wpkd refuses to start the
@@ -378,7 +378,7 @@ V0 spikes ──► V1 targets + wpk ide ──► V2 board desktop buttons
 
 ### V0: Spikes (half a day, nothing kept)
 
-- [ ] `vscode://vscode-remote/ssh-remote+a9550/<abs>.code-workspace` from
+- [ ] `vscode://vscode-remote/ssh-remote+myhost/<abs>.code-workspace` from
       the Windows desktop (desktop-4dl84an): does it open as a workspace?
       Also `windowId=_blank`.
 - [ ] `code serve-web --socket-path … --server-base-path /ide
@@ -443,7 +443,7 @@ V0 spikes ──► V1 targets + wpk ide ──► V2 board desktop buttons
   do not; WebSocket text and binary frames both ways; another login gets
   403 and nothing starts; `web = false` is 404; one process for three
   concurrent first requests; idle stop; the whole process group stops.
-- [x] Live (2026-10-25, headless Chrome on a9550 through `wpk dash` on
+- [x] Live (2026-10-25, headless Chrome on the dev host through `wpk dash` on
       127.0.0.1 with real `serve-web`): the project page's **In the
       browser** opened the workspace in a new tab; labelled folders; no
       Restricted Mode; a terminal with `WPK_PROJECT` set; SIGTERM to wpkd
@@ -463,7 +463,7 @@ V0 spikes ──► V1 targets + wpk ide ──► V2 board desktop buttons
 - [ ] Live: needs `sudo tailscale set --operator=$USER` once (LocalAPI
       answers 403 to this user now). Then `[server] tls = "tailscale"`,
       `tailnet = true`, `[ide] web = true`, and open
-      `https://a9550.perch-char.ts.net:7878/` from the iPad and
+      `https://myhost.tailnet.example:7878/` from the iPad and
       desktop-4dl84an.
 
 ### V5: Runner-owned settings
@@ -552,7 +552,7 @@ only picks the default.
 ### 2026-10-25: plan
 
 Written from ide.md, workflow-review.md §4/§6.4, setup.md §10 and
-dash-tasks.md §5. Checked on a9550: `code` 1.98.2 at `/usr/bin/code` with
+dash-tasks.md §5. Checked on the dev host: `code` 1.98.2 at `/usr/bin/code` with
 `serve-web` and the needed flags; the Guard already handles WebSocket
 scopes (`guard.py:123`); httpx is not a dependency yet. Next: V0.
 
@@ -582,7 +582,7 @@ Windows, which also answers V0's question: a `vscode-remote` URI opens a
 `[ide] backend = "openvscode-server"` runs Gitpod's open-source build in
 place of `code serve-web` (§4.4); `[ide] code` now defaults to the
 backend's own program. `wpk doctor` and the disabled web button name the
-missing program. Live on a9550 with v1.109.5 through the board's proxy on
+missing program. Live on the dev host with v1.109.5 through the board's proxy on
 loopback, in headless Chrome: `?folder=` and `?workspace=` open, the
 terminal runs, no Restricted Mode (the trust rewrite works unchanged), and
 stopping the board stops the server and its terminal shells. Two 404s for
@@ -597,7 +597,7 @@ least recently used idle one makes room. Spike first: two serve-web and two
 openvscode-server instances on one shared data dir both start;
 openvscode-server sets no cookies, serve-web sets `vscode-cli-secret-half`
 on `Path=/` with a different value per server, hence the cookie path
-rewrite. Live on a9550 with both backends, two targets in one browser: both
+rewrite. Live on the dev host with both backends, two targets in one browser: both
 load, each terminal starts in its own folder, the first reloads after the
 second opens, the cookies sit on `/ide/<key>`, and stopping the board stops
 both servers. A server from the old single-server layout

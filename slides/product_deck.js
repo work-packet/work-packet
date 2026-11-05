@@ -417,7 +417,7 @@ async function build() {
     txt(s, r[1], { x: x + 1.4, y: y + 0.25, w: 4.3, h: 0.45, fontSize: 18, bold: true, fontFace: THEME.headFontFace });
     txt(s, r[2], { x: x + 1.4, y: y + 0.72, w: 4.3, h: 1.1, fontSize: 14, color: C.text2 });
   });
-  code(s, MX, 5.95, CW, 0.75, [["vscode://vscode-remote/ssh-remote+a9550/…/dvs-enh/packets/7f3c…/.wpk/packet.code-workspace", HEX.accent1]], 13);
+  code(s, MX, 5.95, CW, 0.75, [["vscode://vscode-remote/ssh-remote+myhost/…/dvs-enh/packets/7f3c…/.wpk/packet.code-workspace", HEX.accent1]], 13);
   s.addNotes("VS Code is the IDE; we do not build one. The workspace file is generated: the packet's worktrees labelled as the packet's, never your own clone. While the runner owns the packet the workspace turns off save, autofetch and format-on-save, as a guard against mistakes. A browser IDE under the board comes later, for the iPad.");
 
   // ===================================================== Team

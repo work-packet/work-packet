@@ -34,14 +34,14 @@ from work_packet.dash.tailscale import Tailnet        # noqa: E402
 
 OWNER = "me@example.com"
 SECRET = b"k" * 32
-HOST = "a9550:7878"
+HOST = "myhost:7878"
 
 
 class FakeTailscaled:
     """``/localapi/v0/status`` and ``/whois`` from dicts; ``whois`` maps peer IP
     to ``(login, tags)``."""
 
-    def __init__(self, ips=("100.64.0.1",), whois=None):
+    def __init__(self, ips=("192.0.2.1",), whois=None):
         self.dir = tempfile.mkdtemp(prefix="wpk-ts")      # short: unix socket paths are limited
         self.path = os.path.join(self.dir, "s")
         self.ips = list(ips)
@@ -90,8 +90,8 @@ class FakeTailscaled:
 
     def status(self):
         return {"BackendState": "Running", "TailscaleIPs": self.ips,
-                "Self": {"DNSName": "a9550.tn.ts.net.", "UserID": 7, "Tags": None},
-                "CertDomains": ["a9550.tn.ts.net"],
+                "Self": {"DNSName": "myhost.tailnet.example.", "UserID": 7, "Tags": None},
+                "CertDomains": ["myhost.tailnet.example"],
                 "User": {"7": {"ID": 7, "LoginName": OWNER}}}
 
     def who(self, ip):
@@ -99,7 +99,7 @@ class FakeTailscaled:
             return None
         login, tags = self.whois[ip]
         return {"UserProfile": {"LoginName": login},
-                "Node": {"Name": "laptop.tn.ts.net.", "Tags": tags}}
+                "Node": {"Name": "laptop.tailnet.example.", "Tags": tags}}
 
     def close(self):
         self.server.shutdown()
@@ -109,9 +109,9 @@ class FakeTailscaled:
 
 @pytest.fixture
 def ts():
-    f = FakeTailscaled(whois={"100.64.0.9": (OWNER, None),
-                              "100.64.0.10": ("other@example.com", None),
-                              "100.64.0.11": ("me@example.com", ["tag:ci"])})
+    f = FakeTailscaled(whois={"192.0.2.9": (OWNER, None),
+                              "192.0.2.10": ("other@example.com", None),
+                              "192.0.2.11": ("me@example.com", ["tag:ci"])})
     yield f
     f.close()
 
@@ -123,7 +123,7 @@ def _board(tmp_path, monkeypatch):
     return create_app()
 
 
-def _client(app, kind, ts=None, peer="100.64.0.9", host=HOST, **kw):
+def _client(app, kind, ts=None, peer="192.0.2.9", host=HOST, **kw):
     g = Guard(app, kind, SECRET, tailnet=Tailnet(ts.path) if ts else None,
               local_user="alice", **kw)
     return TestClient(g, base_url="http://" + host, client=(peer, 50000))
@@ -142,9 +142,9 @@ def test_owner_gets_the_board_with_security_headers(tmp_path, monkeypatch, ts):
 
 
 @pytest.mark.parametrize("peer, why", [
-    ("100.64.0.10", "other@example.com"),                   # another login
-    ("100.64.0.11", "not a user's device"),                 # a tagged node
-    ("100.64.0.99", "not a user's device"),                 # unknown to tailscaled
+    ("192.0.2.10", "other@example.com"),                   # another login
+    ("192.0.2.11", "not a user's device"),                 # a tagged node
+    ("192.0.2.99", "not a user's device"),                 # unknown to tailscaled
 ])
 def test_others_are_refused(tmp_path, monkeypatch, ts, peer, why):
     r = _client(_board(tmp_path, monkeypatch), "tailnet", ts, peer=peer).get("/")
@@ -155,8 +155,8 @@ def test_others_are_refused(tmp_path, monkeypatch, ts, peer, why):
 def test_allow_list_replaces_the_owner(tmp_path, monkeypatch, ts):
     app = _board(tmp_path, monkeypatch)
     allow = ["other@example.com"]
-    assert _client(app, "tailnet", ts, peer="100.64.0.10", allow=allow).get("/").status_code == 200
-    assert _client(app, "tailnet", ts, peer="100.64.0.9", allow=allow).get("/").status_code == 403
+    assert _client(app, "tailnet", ts, peer="192.0.2.10", allow=allow).get("/").status_code == 200
+    assert _client(app, "tailnet", ts, peer="192.0.2.9", allow=allow).get("/").status_code == 403
 
 
 def test_tailscaled_down_refuses_tailnet_but_not_loopback(tmp_path, monkeypatch, ts):
@@ -178,11 +178,11 @@ def test_whois_is_cached_per_peer(tmp_path, monkeypatch, ts):
 # -- host names and proxies ---------------------------------------------------
 
 @pytest.mark.parametrize("host, code", [
-    ("a9550:7878", 200), ("A9550.tn.ts.net:7878", 200), ("100.64.0.1:7878", 200),
+    ("myhost:7878", 200), ("MYHOST.tailnet.example:7878", 200), ("192.0.2.1:7878", 200),
     ("localhost:7878", 200),
     ("evil.example:7878", 421),                             # DNS rebinding
-    ("a9550:7879", 421),                                    # wrong port
-    ("a9550", 421),                                         # implies port 80
+    ("myhost:7879", 421),                                    # wrong port
+    ("myhost", 421),                                         # implies port 80
     ("", 421),
 ])
 def test_host_check(tmp_path, monkeypatch, ts, host, code):
@@ -191,7 +191,7 @@ def test_host_check(tmp_path, monkeypatch, ts, host, code):
 
 
 def test_split_host():
-    assert split_host("A9550:7878") == ("a9550", 7878)
+    assert split_host("MYHOST:7878") == ("myhost", 7878)
     assert split_host("[fd7a::1]:7878") == ("fd7a::1", 7878)
     assert split_host("[fd7a::1]") == ("fd7a::1", None)
     assert split_host("x:y") == (None, None)
@@ -219,10 +219,10 @@ def _echo_app():
 @pytest.mark.parametrize("headers, data, code", [
     ({}, {"what": "x"}, 403),                                            # no Origin
     ({"origin": "http://evil.example"}, {"what": "x"}, 403),             # cross-site
-    ({"origin": "http://a9550:7878"}, {"what": "x"}, 403),               # no token
-    ({"origin": "http://a9550:7878"}, {"what": "x", "csrf": "nope"}, 403),
-    ({"origin": "http://a9550:7878"}, {"what": "x", "csrf": csrf_token(SECRET)}, 200),
-    ({"origin": "http://a9550:7878", "x-csrf-token": csrf_token(SECRET)}, {"what": "x"}, 200),
+    ({"origin": "http://myhost:7878"}, {"what": "x"}, 403),               # no token
+    ({"origin": "http://myhost:7878"}, {"what": "x", "csrf": "nope"}, 403),
+    ({"origin": "http://myhost:7878"}, {"what": "x", "csrf": csrf_token(SECRET)}, 200),
+    ({"origin": "http://myhost:7878", "x-csrf-token": csrf_token(SECRET)}, {"what": "x"}, 200),
     ({"origin": "null", "x-csrf-token": csrf_token(SECRET)}, {"what": "x"}, 403),
 ])
 def test_post_needs_origin_and_token(ts, headers, data, code):
@@ -313,11 +313,11 @@ def test_wpk_dash_on_loopback_and_tailnet(tmp_path):
             r = subprocess.run(cmd + ["url"], env=env, capture_output=True, text=True)
             urls = r.stdout.split()
         assert "http://127.0.0.1:%d/" % port in urls
-        assert "http://a9550.tn.ts.net:%d/" % port in urls
+        assert "http://myhost.tailnet.example:%d/" % port in urls
         assert "http://127.0.0.2:%d/" % port in urls
 
         assert _get("http://127.0.0.1:%d/healthz" % port)[0] == 200
-        code, body = _get("http://127.0.0.2:%d/" % port, host="a9550:%d" % port)
+        code, body = _get("http://127.0.0.2:%d/" % port, host="myhost:%d" % port)
         assert code == 200 and OWNER in body
         assert _get("http://127.0.0.2:%d/" % port, host="evil.example:%d" % port)[0] == 421
         st = os.stat(home / "server.secret")

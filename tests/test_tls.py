@@ -17,7 +17,7 @@ from work_packet.dash import tls                                     # noqa: E40
 
 from test_server import OWNER, FakeTailscaled, _free_port            # noqa: E402
 
-DOMAIN = "a9550.tn.ts.net"
+DOMAIN = "myhost.tailnet.example"
 
 
 def make_pair(d, days, name=DOMAIN):

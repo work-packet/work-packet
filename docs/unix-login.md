@@ -157,7 +157,7 @@ Strict, so a link from chat still arrives signed in. With
 `listen = "network"` there is no separate loopback listener: `0.0.0.0`
 covers it, and local users have to sign in as well.
 
-Live on a9550 (port 7899, scratch home): signed out, `/p/x` gave 303 to
+Live on the dev host (port 7899, scratch home): signed out, `/p/x` gave 303 to
 `/login?next=/p/x`. `wpk login CODE` signed in the curl session (303, then
 200 with the sign-out form). No cookie gave 303. A foreign Host gave 421.
 Plain http did not connect. The certificate's SAN listed the host name and

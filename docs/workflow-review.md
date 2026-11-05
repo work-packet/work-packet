@@ -216,7 +216,7 @@ change, not on every step commit. The packet folder gets
 - VS Code web uses service workers for webviews (Markdown preview, most
   extension UIs). Browsers allow service workers and the clipboard API
   only in a secure context: `https://` or `localhost`. The board on
-  `http://a9550:7878` over the tailnet is neither. **I3 depends on S1b
+  `http://myhost:7878` over the tailnet is neither. **I3 depends on S1b
   (Tailscale TLS)**, which ide.md does not list.
 - `code serve-web` downloads the matching server build from Microsoft on
   first use and on each update, and webviews may load from a

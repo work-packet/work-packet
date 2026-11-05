@@ -156,19 +156,19 @@ class FakeTs:
 def test_links():
     op = ide.Open("packet", "/h/p q/.vscode/packet.code-workspace", "x", "p", "w")
     assert ide.desktop_url(op) == "vscode://file/h/p%20q/.vscode/packet.code-workspace"
-    assert ide.desktop_url(op, "a9550") == \
-        "vscode://vscode-remote/ssh-remote+a9550/h/p%20q/.vscode/packet.code-workspace" \
+    assert ide.desktop_url(op, "myhost") == \
+        "vscode://vscode-remote/ssh-remote+myhost/h/p%20q/.vscode/packet.code-workspace" \
         "?windowId=_blank"
     assert ide.web_path(op) == "/ide/?workspace=/h/p%20q/.vscode/packet.code-workspace"
     f = ide.Open("clone", "/h/w/dv-solve", "x", "p", "w")
     assert ide.web_path(f) == "/ide/?folder=/h/w/dv-solve"
     cfg = dict(schema.IDE_DEFAULTS)
     me = __import__("getpass").getuser()
-    assert ide.ssh_host(cfg, FakeTs("a9550.perch-char.ts.net.")) == me + "@a9550"
-    assert ide.ssh_host(cfg, name="a9550.perch-char.ts.net") == me + "@a9550.perch-char.ts.net"
-    assert ide.ssh_host(dict(cfg, ssh_host="box"), FakeTs("a9550.x.")) == "box"   # an alias
+    assert ide.ssh_host(cfg, FakeTs("myhost.tailnet.example.")) == me + "@myhost"
+    assert ide.ssh_host(cfg, name="myhost.tailnet.example") == me + "@myhost.tailnet.example"
+    assert ide.ssh_host(dict(cfg, ssh_host="box"), FakeTs("myhost.x.")) == "box"   # an alias
     assert ide.ssh_host(cfg, FakeTs("")) == me + "@" + __import__("socket").gethostname()
-    assert ide.desktop_url(op, "me@a9550").startswith("vscode://vscode-remote/ssh-remote+me@a9550/")
+    assert ide.desktop_url(op, "me@myhost").startswith("vscode://vscode-remote/ssh-remote+me@myhost/")
 
 
 WIN = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36"
@@ -229,8 +229,8 @@ def _board_client(kind, ts=None):
     from test_server import SECRET, _client
     from work_packet.dash.app import create_app
     from work_packet.dash.guard import csrf_token
-    host = "127.0.0.1:7878" if kind == "loopback" else "a9550:7878"
-    peer = "127.0.0.1" if kind == "loopback" else "100.64.0.9"
+    host = "127.0.0.1:7878" if kind == "loopback" else "myhost:7878"
+    peer = "127.0.0.1" if kind == "loopback" else "192.0.2.9"
     c = _client(create_app(), kind, ts, peer=peer, host=host)
     return c, {"origin": "http://" + host}, csrf_token(SECRET)
 
@@ -265,7 +265,7 @@ def test_board_opens_a_worktree_over_the_tailnet(home, source, tmp_path):
     from test_server import FakeTailscaled, OWNER
     proj, pkt = setup_root(tmp_path, source)
     assert executor.step(proj).code == 0
-    f = FakeTailscaled(whois={"100.64.0.9": (OWNER, None)})
+    f = FakeTailscaled(whois={"192.0.2.9": (OWNER, None)})
     try:
         c, origin, tok = _board_client("tailnet", f)
         assert "Packet worktree" in c.get("/p/dvs").text
@@ -275,10 +275,10 @@ def test_board_opens_a_worktree_over_the_tailnet(home, source, tmp_path):
         tree = os.path.join(pkt.path, "work", "dv-solve")
         # the host the browser used is one the laptop can reach
         me = __import__("getpass").getuser()
-        assert 'href="vscode://vscode-remote/ssh-remote+%s@a9550%s?windowId=_blank"' \
+        assert 'href="vscode://vscode-remote/ssh-remote+%s@myhost%s?windowId=_blank"' \
             % (me, tree) in r.text
         r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "wpid": pkt.wpid})
-        assert "ssh-remote+%s@a9550%s/.vscode/packet.code-workspace" % (me, pkt.path) in r.text
+        assert "ssh-remote+%s@myhost%s/.vscode/packet.code-workspace" % (me, pkt.path) in r.text
         # an error goes back to the page with a message
         r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "repo": "nope"},
                    follow_redirects=False)
@@ -358,8 +358,8 @@ def _web_client(home, tmp_path, kind="loopback", ts=None, **cfg):
     open(os.path.join(home, "config.toml"), "w").write(
         "[ide]\nweb = true\ncode = %s\n" % json.dumps(sys.executable))
     be = _backend(home, tmp_path, **cfg)
-    host = "127.0.0.1:7878" if kind == "loopback" else "a9550:7878"
-    peer = "127.0.0.1" if kind == "loopback" else "100.64.0.9"
+    host = "127.0.0.1:7878" if kind == "loopback" else "myhost:7878"
+    peer = "127.0.0.1" if kind == "loopback" else "192.0.2.9"
     c = _client(create_app(ide_backend=be.mgr), kind, ts, peer=peer, host=host)
     c.__enter__()               # one event loop, as under uvicorn
     return c, be, {"origin": "http://" + host}, csrf_token(SECRET)
@@ -507,15 +507,15 @@ def test_web_proxy_websocket(short_home, tmp_path):
 
 def test_web_proxy_refuses_another_login_without_starting(short_home, tmp_path):
     from test_server import FakeTailscaled, OWNER
-    f = FakeTailscaled(whois={"100.64.0.9": (OWNER, None),
-                              "100.64.0.10": ("other@example.com", None)})
+    f = FakeTailscaled(whois={"192.0.2.9": (OWNER, None),
+                              "192.0.2.10": ("other@example.com", None)})
     try:
         from test_server import SECRET, Guard, TestClient, Tailnet
         from work_packet.dash.app import create_app
         open(os.path.join(short_home, "config.toml"), "w").write("[ide]\nweb = true\n")
         be = _backend(short_home, tmp_path)
         g = Guard(create_app(ide_backend=be.mgr), "tailnet", SECRET, tailnet=Tailnet(f.path))
-        c = TestClient(g, base_url="http://a9550:7878", client=("100.64.0.10", 50000))
+        c = TestClient(g, base_url="http://myhost:7878", client=("192.0.2.10", 50000))
         assert c.get("/ide/%s/?folder=/x" % be.key).status_code == 403
         assert be.proc is None and not os.path.exists(tmp_path / "pids")
     finally:
@@ -593,7 +593,7 @@ def test_board_web_buttons(short_home, tmp_path, monkeypatch, source):
     finally:
         c.__exit__(None, None, None)
     # over the tailnet on plain http: shown, disabled, and the POST is refused
-    f = FakeTailscaled(whois={"100.64.0.9": (OWNER, None)})
+    f = FakeTailscaled(whois={"192.0.2.9": (OWNER, None)})
     try:
         c, be, origin, tok = _web_client(short_home, tmp_path, "tailnet", f)
         page = c.get("/p/dvs").text

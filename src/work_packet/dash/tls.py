@@ -1,6 +1,6 @@
 """Tailscale certificates for the tailnet listener (server.md §2.3, S1b).
 
-tailscaled issues a Let's Encrypt certificate for ``<host>.<tailnet>.ts.net``
+tailscaled issues a Let's Encrypt certificate for ``<host>.<tailnet-domain>``
 through its LocalAPI to root or the configured operator (once:
 ``sudo tailscale set --operator=$USER``). wpkd keeps the pair in
 ``$WPK_HOME/tls/`` (0700; the key 0600) and fetches a new one when the one it

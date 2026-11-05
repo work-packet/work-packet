@@ -49,13 +49,13 @@ and that node's owner is known. `tailscaled` will tell any local process
 who that is:
 
 ```
-GET /localapi/v0/whois?addr=100.101.102.103:51234
+GET /localapi/v0/whois?addr=192.0.2.103:51234
   over the unix socket /var/run/tailscale/tailscaled.sock
 → {"UserProfile": {"LoginName": "matt.ballance@gmail.com", ...},
-   "Node": {"Name": "laptop.perch-char.ts.net.", "Tags": null, ...}}
+   "Node": {"Name": "laptop.tailnet.example.", "Tags": null, ...}}
 ```
 
-Checked on a9550 (2026-10-23, Tailscale 1.102.2): the socket is mode
+Checked on the dev host (2026-10-23, Tailscale 1.102.2): the socket is mode
 `0666`, and both `whois` and `status` answer a non-root caller.
 
 ### 2.1 How a request is checked
@@ -108,7 +108,7 @@ logs once while it waits. If the tailnet IP changes (rare), it rebinds.
 
 Unlike `tailscale serve`, this involves no proxy and no change to the
 node's serve config. Your existing `:443 → 127.0.0.1:3000` serve config
-on a9550 stays as it is.
+on the dev host stays as it is.
 
 ### 2.3 TLS
 
@@ -118,17 +118,17 @@ browser "secure context" either. TLS is optional, and the default is
 `tls = "off"` on the tailnet listener.
 
 `tls = "tailscale"` gives a real certificate for
-`<host>.<tailnet>.ts.net` with no browser warning:
+`<host>.<tailnet-domain>` with no browser warning:
 
 - Tailscale only issues certificates to root or the configured operator.
   Once: `sudo tailscale set --operator=$USER`. After that wpkd fetches and
   renews through LocalAPI (`/localapi/v0/cert/<domain>?type=pair`), keeps
   the files in `$WPK_HOME/tls/`, and reloads them before they expire
   (they last 90 days; renew at 30 left).
-- The name is already in public certificate-transparency logs on a9550,
+- The name is already in public certificate-transparency logs for that host,
   since the existing `serve :443` has one.
 - With TLS on, the Host check (§4) accepts the `ts.net` name, and the URL
-  becomes `https://a9550.perch-char.ts.net:7878/`.
+  becomes `https://myhost.tailnet.example:7878/`.
 
 ## 3. Other modes
 
@@ -140,7 +140,7 @@ below in that setting.
 
 These are for machines without Tailscale, and to keep a way in when
 Tailscale is down. They share the cookie session below. They are
-**S3 in the build plan, not needed for a9550**.
+**S3 in the build plan, not needed for a single-user host**.
 
 | `auth` | How you prove it is you | Notes |
 |---|---|---|
@@ -170,7 +170,7 @@ The same is true of a cookie. Two attacks, two checks, on every listener:
 - **DNS rebinding**: a hostile name resolves to 100.x or 127.0.0.1, and
   the page then reads the board as same-origin. **Host check**: the `Host`
   header must be one of: `localhost`, `127.0.0.1`, the tailnet IPs, the
-  MagicDNS short name (`a9550`), the FQDN (`a9550.perch-char.ts.net`), and
+  MagicDNS short name (`myhost`), the FQDN (`myhost.tailnet.example`), and
   `extra_hosts` from config, each with the right port. Anything else gets
   421. This covers GETs too, so the board cannot be read cross-site.
 - **CSRF**: a hostile page posts a form to the board. On every
@@ -386,7 +386,7 @@ S1 (now) ──► L1 ──► L2 ──► L3 ──► S2 ──► L4
   tailscaled down → 403 on the tailnet listener and 200 on loopback; bad
   Host → 421; POST with no or a wrong Origin or token → 403; every GET
   route leaves the home byte-identical.
-- Live check on a9550: open the board from another tailnet device; a
+- Live check on the dev host: open the board from another tailnet device; a
   device signed in to another tailnet login is refused.
 
 `tests/test_server.py` (38 tests) has all of the above except the
@@ -425,7 +425,7 @@ refused-login half of the live check, plus a subprocess test of `wpk dash
 Written after the user asked for a daemon with a board reachable without a
 proxy and a login as the launching user, without root. The user is on
 Tailscale and the tailnet is private, so Tailscale identity is the main
-mode, and token/PAM are kept for later (S3). Checked on a9550: LocalAPI
+mode, and token/PAM are kept for later (S3). Checked on the dev host: LocalAPI
 `whois` and `status` answer a non-root caller over the 0666 socket; the
 node's owner is `matt.ballance@gmail.com`; `/sbin/unix_chkpwd` is setgid
 `shadow` and the account has a password (so PAM is possible later). Not
@@ -439,13 +439,13 @@ by default, so nothing new listens until you ask; TLS moved to S1b; the
 `whoami-check` command was dropped; loopback refuses proxied requests
 (§2.2). Full suite: 331 passed, 4 skipped.
 
-Live on a9550 (port 7879): `wpk url` listed loopback, MagicDNS, FQDN, IPv4
+Live on the dev host (port 7879): `wpk url` listed loopback, MagicDNS, FQDN, IPv4
 and IPv6 URLs; this machine's own tailnet IPv4 and IPv6 addresses and the
 FQDN gave 200, with `matt.ballance@gmail.com` shown on the page; a
 rebinding Host gave 421; a POST with a foreign Origin, and one with the
 right Origin but no token, gave 403; SIGTERM exited 0 and removed
 `server.json`; `server.secret` is 0600. Not yet tried: a second device,
-and a device on another login (should be 403). On a9550 itself, `a9550`
+and a device on another login (should be 403). On the host itself, `myhost`
 resolves to 127.0.1.1 through `/etc/hosts`, so use the FQDN there; other
 devices get the tailnet address from MagicDNS.
 

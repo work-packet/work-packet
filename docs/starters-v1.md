@@ -79,7 +79,7 @@ package, not an edit here.
 [[forge]]
 name = "home"                 # how it is shown and named in recipes
 kind = "forgejo"              # forgejo | github
-url = "https://a9550.perch-char.ts.net"
+url = "https://forge.example"
 token_env = "FORGEJO_PAT"     # the token is read from the environment, never stored
 
 [[forge]]
