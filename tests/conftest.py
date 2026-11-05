@@ -21,6 +21,14 @@ def _no_site_config(monkeypatch):
     monkeypatch.setenv("WPK_SITE_CONFIG", "")
 
 
+@pytest.fixture(autouse=True)
+def _git_identity(monkeypatch):
+    """Commits work on a host with no git identity (CI runners)."""
+    for k, v in (("GIT_AUTHOR_NAME", "T"), ("GIT_AUTHOR_EMAIL", "t@example.com"),
+                 ("GIT_COMMITTER_NAME", "T"), ("GIT_COMMITTER_EMAIL", "t@example.com")):
+        monkeypatch.setenv(k, v)
+
+
 def child_wpid(parent, step, index):
     return str(uuid.uuid5(NS_WPK, "%s:%d:%d" % (parent, step, index)))
 
