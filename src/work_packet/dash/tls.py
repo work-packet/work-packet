@@ -136,6 +136,18 @@ def context(cert, key):
 
 SELF_DAYS = 397
 
+# Supply the whole extension set. Some system openssl.cnf files make req
+# add CA:TRUE to every self-signed cert, even when -addext requests CA:FALSE.
+_SERVER_REQ = """[req]
+distinguished_name = dn
+x509_extensions = server
+[dn]
+[server]
+subjectAltName = $ENV::WPK_CERT_SAN
+basicConstraints = critical,CA:FALSE
+extendedKeyUsage = serverAuth
+"""
+
 
 def self_signed(home, names, now=None):
     """``(cert path, key path)`` of a self-signed pair for ``names`` (host names
@@ -173,10 +185,9 @@ def self_signed(home, names, now=None):
     r = subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
          "-nodes", "-days", str(SELF_DAYS), "-subj", "/CN=%s" % (names[0] if names else "wpk"),
-         "-addext", "subjectAltName=" + ",".join(san),
-         "-addext", "basicConstraints=critical,CA:FALSE",
-         "-addext", "extendedKeyUsage=serverAuth",
+         "-config", "-",
          "-keyout", tmp_k, "-out", tmp_c],
+        input=_SERVER_REQ, env=dict(os.environ, WPK_CERT_SAN=",".join(san)),
         capture_output=True, text=True)
     if r.returncode != 0:
         raise TlsError("openssl could not make a certificate: %s" % r.stderr.strip()[-300:])

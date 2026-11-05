@@ -326,21 +326,34 @@ class JobBackend(Backend):
                 fp.write(secrets.token_hex(24))
             return self.token()
 
-    def job_argv(self, launch_id=None):
-        import sys
+    transport = "tcp-token"         # ide_job --transport
+
+    def listen_argv(self, fake):
+        """Where the server listens, in its argv (``fake``: tests' fake server,
+        which takes ``<socket> <base>`` first)."""
         tok = ["--host", "0.0.0.0", "--port", "{port}", "--connection-token-file",
                self.token_path]
+        return ["-", self.base] + tok if fake else tok
+
+    def _prepare(self):
+        """What the job needs from wpkd before it is asked for."""
+        self.token()
+
+    def job_argv(self, launch_id=None):
+        import sys
         if self._argv is not None:
-            srv = list(self._argv) + ["-", self.base] + tok
+            srv = list(self._argv) + self.listen_argv(True)
         else:
             sub = [] if self.cfg.get("backend") == "openvscode-server" else ["serve-web"]
-            srv = [command(self.cfg)] + sub + tok + [
+            srv = [command(self.cfg)] + sub + self.listen_argv(False) + [
                 "--server-base-path", self.base, "--accept-server-license-terms",
                 "--server-data-dir", self.data]
-        lid = ["--launch", launch_id] if launch_id else []
-        if launch_id and self.cfg.get("sessions", True):     # watch its sessions, there
-            lid += ["--collect", str(self.cfg.get("sessions_poll_s") or 5)]
-        return [sys.executable, "-m", "work_packet.sched.ide_job", self.dir] + lid + ["--"] + srv
+        opts = ["--transport", self.transport] if self.transport != "tcp-token" else []
+        if launch_id:
+            opts += ["--launch", launch_id]
+            if self.cfg.get("sessions", True):     # watch its sessions, there
+                opts += ["--collect", str(self.cfg.get("sessions_poll_s") or 5)]
+        return [sys.executable, "-m", "work_packet.sched.ide_job", self.dir] + opts + ["--"] + srv
 
     def size(self):
         try:
@@ -408,14 +421,14 @@ class JobBackend(Backend):
     def _start(self):
         from ..sched import authz, ide
         private_dirs(self.home, self.key)
-        self.token()
+        self._prepare()
         if not os.path.exists(ide.req_path(self.key, self.home)):    # else asked already
             lid = ide_launch.start(self.home, self.key, self._target(), "job")
             ide.request(self.key, self.size(), self.job_argv(lid),
                         self.by or authz.principal_cli(), self._target(), self.home,
                         launch=lid)
         self.poke()
-        log.info("asked for a job for VS Code's server %s", self.key)
+        log.info("asked for a job for VS Code's server %s (%s)", self.key, self.transport)
 
     def _adopt(self):
         return False
@@ -463,20 +476,111 @@ class JobBackend(Backend):
                              max_size=None, open_timeout=10)
 
 
+class MtlsJobBackend(JobBackend):
+    """The job-backed server over **mutually pinned TLS** (docs/scheduler.md §8.1):
+    VS Code's server listens on a unix socket in the job; ``ide_relay`` accepts
+    only wpkd's client certificate and splices to it. Nothing listens in plaintext
+    on the exec host, and there is no connection token to leak: the certificates
+    are the authentication, and both travel only through the user's own 0700
+    directory."""
+
+    transport = "mtls"
+
+    def __init__(self, home, cfg, key, argv=None, clock=time.monotonic, poke=None, by=None):
+        super().__init__(home, cfg, key, argv=argv, clock=clock, poke=poke, by=by)
+        self._ctx = None
+        self._pin = None            # the job certificate's fingerprint the context was made for
+
+    def listen_argv(self, fake):
+        if fake:
+            return ["{sock}", self.base]
+        return ["--socket-path", "{sock}", "--without-connection-token"]
+
+    def _prepare(self):
+        """Publish wpkd's (public) client certificate for the job to pin."""
+        import shutil
+        from ..sched import ide_tls
+        _, crt = ide_tls.client_cert(self.home)
+        dst = os.path.join(self.dir, "client.crt")
+        shutil.copyfile(crt, dst + ".tmp")
+        os.chmod(dst + ".tmp", 0o600)
+        os.replace(dst + ".tmp", dst)
+
+    def _context(self):
+        """The TLS context pinned to the job's current certificate, or None."""
+        from ..sched import ide_tls
+        server_crt = os.path.join(self.dir, "server.crt")
+        try:
+            fp = ide_tls.fingerprint(server_crt)
+        except (OSError, ValueError):
+            return None
+        if self._ctx is None or self._pin != fp:
+            key, crt = ide_tls.client_cert(self.home)
+            self._ctx = ide_tls.pinned_client_context(crt, key, server_crt)
+            self._pin, self._http = fp, None       # a new job, a new certificate
+        return self._ctx
+
+    def _connectable(self):
+        import ssl
+        ep = self.endpoint()
+        ctx = self._context() if ep else None
+        if ep is None or ctx is None:
+            return False
+        try:                          # a real handshake: the port may be open before the relay serves
+            s = socket.create_connection(ep, timeout=1.0)
+            try:
+                ctx.wrap_socket(s, server_hostname=ep[0]).close()
+            except BaseException:
+                s.close()
+                raise
+        except (OSError, ssl.SSLError):
+            return False
+        if ep != self._ep and self._http is not None:
+            self._http = None
+        self._ep = ep
+        return True
+
+    def client(self):
+        import httpx
+        if self._http is None:
+            self._http = httpx.AsyncClient(verify=self._context(), timeout=httpx.Timeout(60.0, connect=5.0))
+        return self._http
+
+    def url(self, path):
+        host, port = self._ep or self.endpoint()
+        return "https://%s:%d%s" % (host, port, path)
+
+    def headers(self, headers):
+        return upstream_headers(headers)
+
+    async def ws_connect(self, path, host, hdrs):
+        from websockets.asyncio.client import connect
+        ep = self._ep or self.endpoint()
+        sock = socket.create_connection(ep, timeout=10)
+        sock.setblocking(False)
+        # The browser's Host goes in the URI (as for the unix socket); the certificate is the check.
+        return await connect("wss://%s%s" % (host, path), sock=sock, ssl=self._context(),
+                             server_hostname=ep[0], additional_headers=hdrs, max_size=None,
+                             open_timeout=10)
+
+
 class Backends:
     """One ``Backend`` per target, under ``/ide/<key>/``. A target is registered
     when the board opens it; its directory remembers the path, so a page
     reloaded after the board restarts still finds its server."""
 
-    def __init__(self, home, cfg, argv=None, clock=time.monotonic, slot=False, poke=None):
+    def __init__(self, home, cfg, argv=None, clock=time.monotonic, slot=False, poke=None,
+                 transport="tcp-token"):
         """``slot``: servers run in scheduler jobs (``JobBackend``); ``poke`` wakes
-        the dispatcher when one is asked for."""
+        the dispatcher when one is asked for. ``transport`` (``[sched.ide]``): how
+        wpkd reaches a job's server, ``tcp-token`` or ``mtls`` (``MtlsJobBackend``)."""
         self.home = home
         self.cfg = cfg
         self._argv = argv           # tests: a fake backend
         self._clock = clock
         self.slot = slot
         self.poke = poke
+        self.transport = transport
         self.servers = {}
         self._lock = asyncio.Lock()
 
@@ -520,8 +624,9 @@ class Backends:
             if not os.path.isfile(os.path.join(server_dir(self.home, key), "target")):
                 return None
             if self.slot:
-                be = JobBackend(self.home, self.cfg, key, argv=self._argv, clock=self._clock,
-                                poke=self.poke)
+                cls = MtlsJobBackend if self.transport == "mtls" else JobBackend
+                be = cls(self.home, self.cfg, key, argv=self._argv, clock=self._clock,
+                         poke=self.poke)
             else:
                 be = Backend(self.home, self.cfg, key, argv=self._argv, clock=self._clock)
             self.servers[key] = be

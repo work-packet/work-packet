@@ -538,7 +538,8 @@ in a slot, like the agent:
   --port 0` and `--connection-token-file` (0600, made by wpkd), as a job
   of the size you pick in the Open menu (`look` by default, `sim` to build
   and simulate in its terminals), with `[sched.ide] run_limit` (default
-  8 h). The job writes
+  8 h). On slurm it runs under `node_env` and the size's `env`, like a step, so
+  tools in its terminals find the same PATH and settings. The job writes
   `host:port` to `$WPK_HOME/ide/servers/<key>/endpoint` when it listens.
 - **The proxy** (`dash/ide.py`) gains a TCP transport: same paths, same
   Guard, plus the connection token on the upstream request. A unix socket
@@ -569,6 +570,45 @@ stopped by Halt or Stop now (people are working in them), only by idling
 out, `run_limit` or the farm; when one ends its request is withdrawn, so
 it starts again only when someone opens it. A board restart re-attaches
 through the job record and the endpoint file.
+
+### 8.1 `[sched.ide] transport`: a secured hop between hosts
+
+The default, `tcp-token`, is the plaintext port above: fine on a cluster
+you trust, wrong on a shared one, where any user on the node can reach the
+port and the token is all there is. `transport = "mtls"` keeps the server off
+TCP altogether:
+
+```
+browser ──board (TLS + login, or ssh -L)──► wpkd proxy
+   wpkd ──TLS 1.3, both certificates pinned──► ide_relay on the exec host ──unix socket (0700)──► server
+```
+
+- The server starts with `--socket-path` in a new 0700 directory on the node's
+  **local** disk (not `$TMPDIR` if that is NFS or similar: a socket there does
+  not cross hosts, and a key must not be on shared storage).
+- `python -m work_packet.sched.ide_relay` listens on a free port with TLS 1.3
+  and a **required client certificate**. It accepts exactly wpkd's; plain HTTP,
+  TLS 1.2 or any other peer fails the handshake, so a port scan sees nothing
+  to talk to. After the handshake it splices bytes to the socket, so HTTP and
+  WebSocket upgrades pass unchanged.
+- Trust is pinned both ways with no CA. wpkd makes one client certificate per
+  home (`$WPK_HOME/ide/client.{key,crt}`, 0600, with `openssl`) and copies the
+  public half to `ide/servers/<key>/client.crt` before it asks for the job. The
+  job makes its **own key on the node** (it never touches shared storage) and
+  publishes the public `server.crt`, its `fingerprint` and, last, `endpoint`.
+  wpkd trusts only that `server.crt`. Both certificates travel through the
+  user's own 0700 directory, the same trust the job records already rely on.
+- There is no connection token: the certificates are the authentication.
+- A job that restarts makes a new key, so a new fingerprint, which wpkd follows;
+  a board restart re-attaches through the files on disk. The relay and the
+  files go with the job: no listener outlives it, and the relay exits when
+  nothing answers on the socket.
+- Needs `openssl` on the exec hosts (it prefers `/usr/bin/openssl`) and wpkd's
+  host able to open TCP to a high port on them. If that is not allowed, the
+  alternatives in the design (a reverse connection, or ssh) would be further
+  transports behind the same setting.
+- Not secured by this: the board's own listener (`[server] listen`, TLS), and
+  the browser shell, which runs on wpkd's host.
 
 The browser shell (`dash/shells.py`) stays on wpkd's host for now: it is
 for setup and small checks. A shell in a slot (`srun --pty` / `bsub -Is`
@@ -656,6 +696,7 @@ bin     = ""                 # a directory bsub/bjobs/bkill are run from
 [sched.ide]
 reserve   = "look"           # room agents never use; "" for none
 run_limit = "8h"
+transport = "tcp-token"      # tcp-token | mtls (§8.1: the secured hop between hosts)
 
 [server]
 listen = "unix"              # unix | loopback | tailnet (§7.1)

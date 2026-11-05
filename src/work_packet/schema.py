@@ -169,9 +169,10 @@ SCHED_BUDGET_DEFAULTS = {             # §4; Q2
 SCHED_BACKEND_KEYS = {
     "slurm": ("bin", "partition", "account", "extra", "poll"),
     "lsf": ("bin", "queue", "project", "extra", "poll"),
-    "ide": ("reserve", "run_limit", "slot"),
+    "ide": ("reserve", "run_limit", "slot", "transport"),
 }
 _MEM_RX = re.compile(r"^(\d+)([KMGT]?)$")
+IDE_TRANSPORTS = ("tcp-token", "mtls")    # docs/scheduler.md §8.1
 IDE_BACKENDS = ("serve-web", "openvscode-server")   # docs/vscode-plan.md §4.4
 SERVER_AUTH = ("tailscale", "unix", "none")    # unix: docs/unix-login.md
 SERVER_TLS = ("off", "tailscale", "self-signed", "files")   # server.md §2.3
@@ -782,6 +783,9 @@ def validate_sched(t):
             if k == "slot":
                 if not isinstance(v[k], bool):
                     out.append(_err("sched.ide.slot", "must be true or false"))
+            elif k == "transport":
+                if v[k] not in IDE_TRANSPORTS:
+                    out.append(_err("sched.ide.transport", "must be one of %s" % ", ".join(IDE_TRANSPORTS)))
             elif k == "extra":
                 if not _strs(v[k]):
                     out.append(_err("sched.%s.extra" % sub, "must be a list of strings"))

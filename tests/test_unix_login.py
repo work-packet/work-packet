@@ -212,12 +212,18 @@ def test_config_ok():
 # -- the certificate ---------------------------------------------------------------
 
 @pytest.mark.skipif(not shutil.which("openssl"), reason="needs openssl")
-def test_self_signed_covers_the_names(tmp_path):
+def test_self_signed_covers_the_names(tmp_path, monkeypatch):
     from work_packet.dash import tls
+    # OpenSSL 1.1.1 may append command-line extensions to system defaults.
+    conf = tmp_path / "openssl.cnf"
+    conf.write_text("[req]\ndistinguished_name=dn\nx509_extensions=ca\n"
+                    "[dn]\n[ca]\nbasicConstraints=critical,CA:TRUE\n")
+    monkeypatch.setenv("OPENSSL_CONF", str(conf))
     cp, kp = tls.self_signed(str(tmp_path), ["board.example", "10.1.2.3"])
     assert os.stat(kp).st_mode & 0o777 == 0o600
-    out = subprocess.run(["openssl", "x509", "-in", cp, "-noout", "-ext", "subjectAltName"],
-                         capture_output=True, text=True).stdout
+    out = subprocess.run(["openssl", "x509", "-in", cp, "-noout", "-text"],
+                         capture_output=True, text=True, check=True).stdout
+    assert out.count("X509v3 Basic Constraints") == 1 and "CA:FALSE" in out
     assert "DNS:board.example" in out and "IP Address:10.1.2.3" in out
     tls.context(cp, kp)
     assert tls.self_signed(str(tmp_path), ["board.example"]) == (cp, kp)   # kept

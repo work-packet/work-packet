@@ -151,11 +151,13 @@ class Board:
         from .ide import Backends
         from ..sched import config as sconfig, ide as side
         try:
-            slot = side.enabled(sconfig.load(self.home))
+            scfg = sconfig.load(self.home)
+            slot = side.enabled(scfg)
+            transport = (scfg.get("ide") or {}).get("transport") or "tcp-token"
         except registry.ConfigError:
-            slot = False
+            slot, transport = False, "tcp-token"
         self.ide = Backends(self.home, ide_cfg.load_config(self.home), slot=slot,
-                            poke=runner.poke if runner is not None else None)
+                            poke=runner.poke if runner is not None else None, transport=transport)
         from .agent import Agents
         self.agents = Agents(self.home)
         self.app = create_app(home, runner=runner, shells=self.shells, ide_backend=self.ide,

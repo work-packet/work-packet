@@ -207,6 +207,13 @@ environment (`[harnesses.<name>] env` / `env_file`) is in harness.md §3;
 the step's route (`account@host`, never the key) goes into `meta.json`
 and `wpk stats --by route`.
 
+## 3a. The IDE's transport
+
+`[sched.ide] transport = "mtls"` (scheduler.md §8.1) makes the IDE job serve
+on a unix socket behind a TLS 1.3 relay that accepts only wpkd's pinned client
+certificate. A site that shares exec hosts between users should set it, and
+lock it (`[site] locked = ["sched.ide.transport"]`).
+
 ## 4. Job sizes
 
 A size in `[sched.sizes.<name>]` (scheduler.md §5.2) may carry, beyond

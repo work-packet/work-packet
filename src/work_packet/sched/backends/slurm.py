@@ -55,11 +55,16 @@ def utc(v):
         return None
 
 
-def node_command(cfg, path, lost=None, size=None):
-    """What a job runs: ``node_env``, the size's ``env`` lines, and ``wpk step``."""
-    cmd = "wpk step %s" % shlex.quote(path)
-    if lost:
-        cmd += " --lost %s" % shlex.quote(lost)
+def node_command(cfg, path, lost=None, size=None, argv=None):
+    """What a job runs: ``node_env``, the size's ``env`` lines, and ``wpk step``
+    (or ``argv``, an IDE job's command: it gets the same environment, so
+    ``claude`` and ``codex`` in its terminals are set up like a step's)."""
+    if argv:
+        cmd = " ".join(shlex.quote(a) for a in argv)
+    else:
+        cmd = "wpk step %s" % shlex.quote(path)
+        if lost:
+            cmd += " --lost %s" % shlex.quote(lost)
     lines = [(cfg.get("node_env") or "").strip()]
     lines += (size.env if size is not None else "").splitlines()
     env = " && ".join(x.strip() for x in lines if x.strip())
@@ -109,8 +114,7 @@ class Slurm(Backend):
             argv += ["--constraint", z.constraint]
         argv += self.common["extra"] + list(z.extra)
         argv += ["-o", task.log]
-        cmd = " ".join(shlex.quote(a) for a in task.argv) if task.argv else \
-            node_command(self.cfg, task.path, task.lost, z)
+        cmd = node_command(self.cfg, task.path, task.lost, z, argv=task.argv)
         return argv + ["--wrap", cmd]
 
     def submit(self, task):
