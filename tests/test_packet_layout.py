@@ -143,11 +143,13 @@ def _crawl_one(tmp_path, monkeypatch, packet):
     run_out(plan.path, root)
     kid = Packet(layout.run_dir(plan.path, child_wpid(plan.root, 8, 0)))
     assert executor.step(kid.path).code == 0
-    # Two separate runs: measured wall-clock times differ in the last digit.
+    # Two separate runs: measured wall-clock times differ in the last digit,
+    # as JSON and as the pages show them (0.1s; more often on a slow host).
     import re
     pages = crawl.crawl(TestClient(create_app()), "sr")
     return plan.path, _no_ide_hint(
-        {u: (st, re.sub(r'"duration_s": [0-9.]+', '"duration_s": 0', b)
+        {u: (st, re.sub(r'\b\d+\.\ds\b', '0.0s',
+                        re.sub(r'"duration_s": [0-9.]+', '"duration_s": 0', b))
              if isinstance(b, str) else b) for u, (st, b) in pages.items()})
 
 

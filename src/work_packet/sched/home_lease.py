@@ -12,7 +12,7 @@ import socket
 import threading
 import time
 
-from .. import clock, fsutil, registry, schema
+from .. import clock, fsutil, procs, registry, schema
 
 TTL_S = 90
 REFRESH_S = 30
@@ -54,7 +54,8 @@ def stale(d, now=None):
         except ProcessLookupError:
             return True
         except (PermissionError, KeyError, TypeError, ValueError):
-            pass
+            return False
+        return procs.zombie(int(d["pid"]))
     return False
 
 

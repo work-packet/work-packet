@@ -6,7 +6,7 @@ import socket
 import threading
 from datetime import timedelta
 
-from . import clock, fsutil, schema
+from . import clock, fsutil, procs, schema
 
 REFRESH_S = 60
 
@@ -34,7 +34,8 @@ def is_stale(lease, now=None):
         except ProcessLookupError:
             return True
         except (PermissionError, KeyError, TypeError, ValueError):
-            pass
+            return False
+        return procs.zombie(int(lease["pid"]))
     return False
 
 

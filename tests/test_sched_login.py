@@ -15,7 +15,7 @@ import tomli_w
 pytest.importorskip("starlette")
 pytest.importorskip("httpx")
 
-from work_packet import project  # noqa: E402
+from work_packet import procs, project  # noqa: E402
 from work_packet.cli import main  # noqa: E402
 from work_packet.sched import home_lease  # noqa: E402
 
@@ -138,8 +138,11 @@ def test_serve_stop_stops_the_detached_wpkd(home):
     assert wait(lambda: os.path.exists(sock))
     r = _serve(home, "--stop")
     assert r.returncode == 0 and "wpkd stopped" in r.stderr, r.stderr
-    with pytest.raises(ProcessLookupError):
+    try:                      # gone, or exited and not reaped (a CI container's PID 1)
         os.kill(held["pid"], 0)
+        assert procs.zombie(held["pid"])
+    except ProcessLookupError:
+        pass
     assert home_lease.read(home) is None and not os.path.exists(sock)
     r = _serve(home, "--stop")
     assert r.returncode == 4 and "wpkd is not running" in r.stderr

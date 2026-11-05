@@ -1667,8 +1667,9 @@ def _stop_wpkd(h, held, wait_s):
         except ProcessLookupError:
             return True
         except PermissionError:
-            pass
-        return False
+            return False
+        from . import procs
+        return procs.zombie(pid)
     deadline = time.time() + wait_s
     while time.time() < deadline:
         if gone():

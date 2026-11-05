@@ -49,6 +49,14 @@ def _stat(pid):
         return None
 
 
+def zombie(pid):
+    """True if ``pid`` has exited but is not yet reaped. ``kill(pid, 0)`` still
+    succeeds on it, and under a PID 1 that never reaps (``tail -f /dev/null``
+    in a CI container) it stays that way."""
+    st = _stat(pid)
+    return st is not None and st["state"] == "Z"
+
+
 def _tagged(pid, wpid, step):
     env = _read(os.path.join(PROC, str(pid), "environ"), "rb")
     if not env:
