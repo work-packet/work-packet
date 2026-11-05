@@ -176,7 +176,13 @@ def test_doctor_lists_plugins(fake):
     assert rows["tools.plugin.cli.gateway"].level == "ok"
     assert rows["tools.plugin.cli.acme"].level == "warn"      # no add_commands
     assert "is a wpk command" in rows["tools.plugin.cli.clash"].detail
-    assert "tools.plugin.harnesses.fake" in rows, (sorted(rows), harness.broken())
+    if "tools.plugin.harnesses.fake" not in rows:     # failed on CI only; say why
+        import threading
+        pytest.fail(repr({"rows": sorted(rows), "broken": harness.broken(),
+                          "loaded": list(harness._loaded), "plugins": dict(harness._plugins),
+                          "cache": {g: [(p.name, p.enabled, p.error) for p in ps]
+                                    for g, ps in plugins._cache.items()},
+                          "threads": [t.name for t in threading.enumerate()]}))
     assert rows["tools.plugin.harnesses.fake"].level == "ok"
     assert rows["tools.plugin.budget.broke"].level == "warn"
     assert "no module named acme_budget" in rows["tools.plugin.budget.broke"].detail
