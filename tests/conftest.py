@@ -1,6 +1,7 @@
 """Shared fixtures. ``make_project`` builds a project the way the executor will."""
 
 import os
+import threading
 import uuid
 
 import pytest
@@ -19,6 +20,16 @@ MODEL = "claude-haiku-4-5-20251001"
 def _no_site_config(monkeypatch):
     """No test reads the host's /etc/wpk/config.toml."""
     monkeypatch.setenv("WPK_SITE_CONFIG", "")
+
+
+@pytest.fixture(autouse=True)
+def _finish_livecard_flush():
+    """The board updates cards in a thread after each request (dash/app.py); one
+    still running would read the next test's state (it loads plugins, say)."""
+    yield
+    for t in threading.enumerate():
+        if t.name.endswith("(flush)"):
+            t.join(30)
 
 
 @pytest.fixture(autouse=True)
