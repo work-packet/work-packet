@@ -39,6 +39,7 @@
 {% if vsc %}
 <h2 id="vscode-sessions">VS Code sessions</h2>
 {{ vsm.table(vsc, where=True) }}
+{{ vsm.scribe_switch(scribe_on, "/p/" ~ (e.name|urlencode) ~ "#vscode-sessions", csrf) }}
 {% endif %}
 <h2>Tasks</h2>
 {{ ptm.table(e, tasks) }}

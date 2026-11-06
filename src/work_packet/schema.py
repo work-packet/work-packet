@@ -82,6 +82,8 @@ IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
     "sessions": True,                  # Claude/Codex sessions in web VS Code on the board
     "sessions_poll_s": 5,              # docs/vscode-monitor-plan.md §2.4
     "sessions_keep_days": 30,
+    "sessions_scribe": False,          # draft a status when a session ends (session-checkpoint.md)
+    "scribe_idle_s": 1800,             # ... or has been idle this long
     "forward": True,                   # localhost links from web VS Code (port-forward plan)
 }
 CONSOLE_DEFAULTS = {                  # docs/console.md §3
@@ -617,7 +619,7 @@ def _validate_ide(d):
     if not isinstance(t, dict):
         return [_err("ide", "must be a table")]
     out = _unknown(t, tuple(IDE_DEFAULTS), "ide")
-    for k in ("desktop", "web", "workspace_trust", "sessions", "forward"):
+    for k in ("desktop", "web", "workspace_trust", "sessions", "forward", "sessions_scribe"):
         if k in t and not isinstance(t[k], bool):
             out.append(_err("ide." + k, "must be true or false"))
     for k in ("code", "ssh_host"):
@@ -628,7 +630,7 @@ def _validate_ide(d):
     if t.get("backend", "serve-web") not in IDE_BACKENDS:
         out.append(_err("ide.backend", "must be one of %s" % ", ".join(IDE_BACKENDS)))
     for k, dflt in (("idle_minutes", 60), ("max_servers", 8), ("sessions_poll_s", 5),
-                    ("sessions_keep_days", 30)):
+                    ("sessions_keep_days", 30), ("scribe_idle_s", 1800)):
         m = t.get(k, dflt)
         if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
             out.append(_err("ide." + k, "must be a positive whole number"))

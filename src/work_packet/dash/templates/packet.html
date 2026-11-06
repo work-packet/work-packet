@@ -82,6 +82,44 @@
 {% if vsc[0] %}{{ vsm.table(vsc[0]) }}{% endif %}
 {% if vsc[1] %}<p class="muted" style="margin:8px 0 4px">Shared editor (packet not determined): another packet opened the same folder.</p>
 {{ vsm.table(vsc[1]) }}{% endif %}
+{{ vsm.scribe_switch(scribe_on, "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid ~ "#vscode-sessions", csrf) }}
+{% endif %}
+{% if not p.running and p.meta.reason != "setup" %}
+<details class="panel" id="checkpoint" style="margin-bottom:12px">
+  <summary><strong>Update status</strong> <span class="muted">where it stands after work by hand; the board's card shows it</span></summary>
+  <form class="act" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <label class="muted" for="cp-status">Status (one line)</label>
+    <input type="text" id="cp-status" name="status" required value="{{ p.status_line or '' }}">
+    <label class="muted" for="cp-next">Next action (optional; also what the next autonomous step starts from)</label>
+    <input type="text" id="cp-next" name="next" value="{{ p.intent or '' }}">
+    <label class="muted" for="cp-body">What changed, decisions, open questions (optional)</label>
+    <textarea id="cp-body" name="body"></textarea>
+    <div class="row"><button class="go primary" name="action" value="checkpoint">Record</button>
+      {% if vsc and vsc[0] %}<button class="go" type="button" id="cp-draft" title="draft it from the end of this packet's latest VS Code session (a small model call); you can edit it before you record it">Draft from session</button><span class="muted" id="cp-msg" style="font-size:12px"></span>{% endif %}</div>
+  </form>
+</details>
+{% if vsc and vsc[0] %}<script>
+(function () {
+  var b = document.getElementById("cp-draft"), msg = document.getElementById("cp-msg");
+  b.addEventListener("click", function () {
+    b.disabled = true; msg.textContent = " drafting…";
+    var csrf = b.form.querySelector("[name=csrf]").value;
+    fetch("/p/{{ e.name|urlencode }}/{{ p.wpid }}/checkpoint/draft",
+          {method: "POST", headers: {"x-csrf-token": csrf}})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.error) { msg.textContent = " " + d.error; return; }
+        document.getElementById("cp-status").value = d.status || "";
+        document.getElementById("cp-next").value = d.next || "";
+        document.getElementById("cp-body").value = d.body || "";
+        msg.textContent = " drafted: check it, then Record";
+      })
+      .catch(function () { msg.textContent = " could not draft"; })
+      .finally(function () { b.disabled = false; });
+  });
+})();
+</script>{% endif %}
 {% endif %}
 {{ box(e, p.wpid, st, p.running, p.notes) }}
 <p>{% if not p.running %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live">Live view</a>: the last step's activity, the outline and the steps done. {% endif %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/plan">Plan</a>: the outline as a tree, and how it changed step by step.</p>
@@ -144,7 +182,7 @@
   {% for s in p.steps %}
   <tr>
     <td><a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/{{ s.dir }}">{{ s.n }}{% if s.outcome == "failed" %} attempt {{ s.attempt }}{% endif %}</a></td>
-    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span>{% if s.worker and s.worker != "agent" %} <span class="badge" title="done by a person in the {{ s.worker }}, not by a model's step">{{ s.worker }}</span>{% endif %}</td>
+    <td><span class="state {{ s.outcome }}{{ ' pulse' if s.outcome == 'running' }}">{{ s.outcome }}</span>{% if s.worker and s.worker != "agent" %} <span class="badge" title="{{ s.worker|worker_title }}">{{ s.worker }}</span>{% endif %}</td>
     <td style="white-space:nowrap">{{ s.start|when }}</td>
     <td class="num">{{ s.duration_s|secs }}</td>
     <td class="num"{% if s.cost_basis %} title="cost basis: {{ s.cost_basis }}"{% endif %}>{{ s.cost_usd|money }}{% if s.cost_basis and s.cost_basis != "harness" %} <span class="muted">{{ s.cost_basis }}</span>{% endif %}</td>

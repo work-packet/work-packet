@@ -553,6 +553,35 @@ def cmd_take(args) -> int:
     return out.code
 
 
+def cmd_checkpoint(args) -> int:
+    """wpk checkpoint: where the packet stands, recorded as a step (docs/session-checkpoint.md §3)."""
+    from . import checkpoint, registry
+    target = args.target or os.environ.get("WPK_WPID")
+    if not target:
+        return _err("which packet? Name it, or run this where WPK_WPID is set "
+                    "(a terminal or session VS Code opened for a packet)")
+    try:
+        pkt = _packet(target)
+    except registry.LookupFailed as ex:
+        return _err(str(ex))
+    body = None
+    if args.body == "-":
+        body = sys.stdin.read()
+    elif args.body:
+        try:
+            with open(args.body, encoding="utf-8") as fp:
+                body = fp.read()
+        except OSError as ex:
+            return _err(str(ex))
+    try:
+        out, _ = checkpoint.record(pkt, args.message, body=body, next_action=args.next,
+                                   ticks=args.tick or (), worker=args.worker)
+    except checkpoint.CheckpointError as ex:
+        return _err(str(ex))
+    print("wpk: %s" % out.msg, file=sys.stderr)
+    return out.code
+
+
 def cmd_studio(args) -> int:
     """wpk studio open|close|status <packet> (docs/studio-plan.md S1.9);
     wpk studio exec|query|datasets (S2.2)."""
@@ -1965,6 +1994,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hold", action="store_true", help="leave it PAUSED, reason held")
     p.add_argument("--force", action="store_true", help="release someone else's take")
     p.set_defaults(func=cmd_take)
+
+    p = sub.add_parser("checkpoint", help="record where a packet stands after work by hand",
+                       description="A status line (and a body, and the next action) as the "
+                       "packet's next step, so the board shows where it stands. --next also "
+                       "becomes the instruction the next autonomous step starts from. "
+                       "Sessions VS Code opened for a packet run it through /wpk-checkpoint.")
+    p.add_argument("target", nargs="?", help="WPID (or unique prefix); default $WPK_WPID")
+    p.add_argument("-m", "--message", required=True, help="the status line: where it stands")
+    p.add_argument("--body", help="a file with the rest of the summary (- for stdin)")
+    p.add_argument("--next", help="the next action, one line")
+    p.add_argument("--tick", action="append", metavar="ITEM",
+                   help="mark this state/outline.md item done (repeatable)")
+    p.add_argument("--worker", choices=("session", "studio", "scribe"), default="session",
+                   help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_checkpoint)
 
     p = sub.add_parser("studio", help="open, close or show a packet's studio; its kernel",
                        description="The studio (docs/interaction.md §6b): open takes the "

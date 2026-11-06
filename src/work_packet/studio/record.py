@@ -1,7 +1,7 @@
 """A studio session as one step (docs/studio-plan.md S1.8; the design §5.1).
 
 At close, the session becomes the packet's next step with ``worker: studio``
-(``executor.record_step``): the agent's raw stream as ``transcript.jsonl``
+(``checkpoint.record``, worker ``studio``): the agent's raw stream as ``transcript.jsonl``
 (so stats read its tokens like any step's), the conversation as the board
 showed it (``studio-transcript.jsonl``), the cost, the time it was open, the
 files it changed, and a summary. A session that neither talked nor changed
@@ -19,7 +19,7 @@ import shlex
 import subprocess
 import time
 
-from .. import executor, harness, model, registry, schema
+from .. import checkpoint, harness, model, registry, schema
 
 DRAFT_TIMEOUT_S = 60
 DRAFT_CHARS = 6000
@@ -126,8 +126,9 @@ def draft_summary(entry, wpid, session, home=None, now=None):
     return got, "model"
 
 
-def record(entry, wpid, session, summary=None, home=None, now=None):
-    """Record the session as a step. Returns the step number, or None when the
+def record(entry, wpid, session, summary=None, home=None, now=None, next_action=None):
+    """Record the session as a step, a checkpoint by worker ``studio``
+    (docs/session-checkpoint.md §3). Returns the step number, or None when the
     session did nothing."""
     from . import model as studio
     f = facts(entry, wpid, session, home, now)
@@ -159,8 +160,10 @@ def record(entry, wpid, session, summary=None, home=None, now=None):
     }
     if res.context:
         meta["context"] = model.context_summary(res.context)
-    out, n = executor.record_step(studio.packet(entry, wpid), "studio", text, meta=meta,
-                                  files=files)
+    status, _, rest = text.partition("\n")
+    out, n = checkpoint.record(studio.packet(entry, wpid), status, body=rest,
+                               next_action=next_action, worker="studio", by=session["by"],
+                               meta=meta, files=files)
     if out.code != 0:
         raise studio.StudioError("could not record the session: %s" % out.msg)
     return n

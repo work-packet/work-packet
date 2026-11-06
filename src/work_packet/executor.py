@@ -922,7 +922,8 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
 
 # --- steps from outside the executor (docs/studio-plan.md P0.2) -------------------
 
-def record_step(pkt, worker, summary, meta=None, files=None, notes_seen=None, state=None):
+def record_step(pkt, worker, summary, meta=None, files=None, notes_seen=None, state=None,
+                prepare=None):
     """Record work done outside a model's step (``worker``: ``studio``) as the
     packet's next step, so the Steps tab, cost totals, ``history.db`` and
     ``wpk check`` see it like any other: ``steps/NNNN/`` with ``meta.json``
@@ -931,8 +932,11 @@ def record_step(pkt, worker, summary, meta=None, files=None, notes_seen=None, st
     ({name in the step folder: source path}); then step-start, commit-begin
     and ``_apply``, as a step commits. The memento, ``state/``, the wake time
     and (unless ``state``) the state are unchanged. ``notes_seen``: queued
-    note ids the work dealt with; they are consumed. Returns (Outcome, n).
-    Takes the lease, so it never races a running step."""
+    note ids the work dealt with; they are consumed. ``prepare(pkt)``, under the
+    lease: ``{"memento": text, "state": {path under state/: text}}`` (either
+    optional) to write as the step's changes; ``result.md`` and ``state.diff``
+    show them (docs/session-checkpoint.md §3). Returns (Outcome, n). Takes the
+    lease, so it never races a running step."""
     try:
         sm, body = pkt.load_status()
     except (OSError, frontmatter.FrontMatterError) as e:
@@ -959,9 +963,25 @@ def record_step(pkt, worker, summary, meta=None, files=None, notes_seen=None, st
         m.update(meta or {})
         m.update(step=n, attempt=1, worker=worker)
         fsutil.atomic_write(os.path.join(sd, "meta.json"), json.dumps(m, indent=2) + "\n")
+        change = (prepare(pkt) if prepare else None) or {}
+        diff = []
+        for rel, text in sorted((change.get("state") or {}).items()):
+            path = os.path.join(pkt.state_dir, rel)
+            old = fsutil.read_text(path) if os.path.isfile(path) else ""
+            if text == old:
+                continue
+            name = os.path.join("state", rel)
+            diff += [ln if ln.endswith("\n") else ln + "\n\\ No newline at end of file\n"
+                     for ln in difflib.unified_diff(old.splitlines(keepends=True),
+                                                    text.splitlines(keepends=True),
+                                                    "a/" + name, "b/" + name)]
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fsutil.atomic_write(path, text)
+        if change.get("memento") is not None:
+            fsutil.atomic_write(pkt.memento_path, change["memento"])
         if os.path.isfile(pkt.memento_path):
             shutil.copyfile(pkt.memento_path, os.path.join(sd, "result.md"))
-        fsutil.atomic_write(os.path.join(sd, "state.diff"), "")
+        fsutil.atomic_write(os.path.join(sd, "state.diff"), "".join(diff))
         fsutil.atomic_write(os.path.join(sd, "summary.md"), summary.rstrip() + "\n")
         decision = {
             "state": state or sm["state"], "resume_expr": sm.get("resume_expr"),

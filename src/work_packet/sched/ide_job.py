@@ -53,7 +53,7 @@ def collect(home, key, lid, server, every):
     (docs/vscode-monitor-plan.md §2.4): a daemon thread, so it never holds the
     job up. Its records go to the shared home."""
     import threading
-    from .. import ide_launch, ide_sessions
+    from .. import ide, ide_launch, ide_sessions, scribe
 
     def loop():
         c = None
@@ -66,6 +66,7 @@ def collect(home, key, lid, server, every):
                         c = ide_sessions.Collector(home, rec, root=server.pid)
                 if c is not None:
                     c.pass_once()
+                    scribe.pass_once(home, ide.load_config(home))
             except Exception as e:          # keep watching; say why on the job's log
                 print("wpk: session watch: %s" % e, file=sys.stderr, flush=True)
             if done:

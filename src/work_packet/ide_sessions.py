@@ -118,10 +118,20 @@ def total(usage):
                                          "cache_read_input_tokens", "output_tokens"))
 
 
+WORK = (EDIT, SHELL)            # events that change things (docs/session-checkpoint.md §4.2)
+EDITS_KEPT = 1000
+
+
 def _event(st, ev, t):
     st["last_event"] = ev
     if t is not None:
         st["last_event_t"] = t
+    counts = st.setdefault("counts", {})
+    counts[ev] = counts.get(ev, 0) + 1
+    if t is not None and ev in WORK and t > (st.get("last_work_t") or 0):
+        st["last_work_t"] = t
+    if t is not None and ev == EDIT:
+        st["edit_ts"] = (st.get("edit_ts") or [])[-(EDITS_KEPT - 1):] + [t]
     st["turn_state"] = TURN_STATE.get(ev, st.get("turn_state"))
 
 
@@ -134,6 +144,7 @@ def new_state(harness):
     return {"harness": harness, "session_id": None, "model": None, "usage": {},
             "usage_reported": False, "last_event": None, "last_event_t": None,
             "last_activity_t": None, "turn_state": None, "bad_lines": 0,
+            "counts": {}, "last_work_t": None, "edit_ts": [],
             # harness-specific; not shown
             "entrypoint": None, "source": None, "cwd": None, "_folded": {}, "_recent": [],
             "_usage_src": None}
@@ -540,6 +551,11 @@ FIELDS = {
         k in USAGE_KEYS and isinstance(n, int) and not isinstance(n, bool)
         for k, n in v.items()),
     "usage_reported": lambda v: isinstance(v, bool),
+    "counts": lambda v: isinstance(v, dict) and all(
+        k in EVENTS and isinstance(n, int) and not isinstance(n, bool) for k, n in v.items()),
+    "last_work_t": lambda v: isinstance(v, (int, float)),
+    "edit_ts": lambda v: isinstance(v, list) and len(v) <= EDITS_KEPT and all(
+        isinstance(t, (int, float)) for t in v),
 }
 
 
@@ -777,6 +793,13 @@ class Collector:
         out["usage"] = usage
         out["usage_reported"] = any(s.get("usage_reported") for s in sts)
         out["model"] = next((s["model"] for s in reversed(sts) if s.get("model")), None)
+        counts = {}
+        for s in sts:
+            for kk, v in (s.get("counts") or {}).items():
+                counts[kk] = counts.get(kk, 0) + v
+        out["counts"] = counts
+        out["last_work_t"] = max((s.get("last_work_t") or 0 for s in sts), default=0) or None
+        out["edit_ts"] = sorted(t for s in sts for t in s.get("edit_ts") or ())[-EDITS_KEPT:]
         return out
 
     # -- one pass
@@ -829,6 +852,8 @@ class Collector:
             "first_seen_t": prev.get("first_seen_t") or self.clock(),
             "turn_state": st.get("turn_state"), "status": status if live else None,
             "live": live, "usage": st.get("usage") or {},
+            "counts": st.get("counts") or {}, "last_work_t": st.get("last_work_t"),
+            "edit_ts": st.get("edit_ts") or [],
             "usage_reported": bool(st.get("usage_reported"))})
         _save_cur(self.home, harness, sid, {"files": self.files.get((harness, sid)) or {}})
 
@@ -1063,3 +1088,25 @@ def project_view(home, project, now=None):
     import time
     now = time.time() if now is None else now
     return [row(r, now) for r in _newest(cached_records(home)) if r.get("project") == project]
+
+
+def packet_activity(home, project, wpid, since=None):
+    """What the packet's sessions did after ``since`` (epoch; None: ever), for its
+    card (docs/session-checkpoint.md §5): ``{"live", "active_t", "work_t",
+    "edits"}``, or None when no session of the packet was active since."""
+    out = None
+    for r in cached_records(home):
+        if r.get("project") != project or r.get("wpid") != wpid:
+            continue
+        t = r.get("last_activity_t") or 0
+        if since is not None and t <= since:
+            continue
+        if out is None:
+            out = {"live": False, "active_t": 0, "work_t": None, "edits": 0}
+        out["live"] = out["live"] or bool(r.get("live"))
+        out["active_t"] = max(out["active_t"], t)
+        w = r.get("last_work_t")
+        if w and (since is None or w > since):
+            out["work_t"] = max(out["work_t"] or 0, w)
+        out["edits"] += sum(1 for x in r.get("edit_ts") or () if since is None or x > since)
+    return out

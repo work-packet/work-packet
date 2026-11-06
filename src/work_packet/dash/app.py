@@ -67,6 +67,15 @@ def _inline(text):
     return Markup(h) if h is not None else text
 
 
+WORKER_TITLE = {"studio": "done by a person in the studio, not by a model's step",
+                "session": "a checkpoint by a person, on the board or from their Claude or Codex session",
+                "scribe": "a checkpoint drafted from a session's transcript when it ended"}
+
+
+def _worker_title(w):
+    return WORKER_TITLE.get(w, "done by a person in the %s, not by a model's step" % w)
+
+
 def _money(v):
     return "" if v is None else "$%.2f" % v if v >= 0.995 else "$%.3f" % v
 
@@ -148,7 +157,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     without it the console runs slash commands only."""
     env = Environment(loader=FileSystemLoader(TEMPLATES),
                       autoescape=select_autoescape(["html"]))
-    env.filters.update(epoch=_epoch, inline=_inline, money=_money, secs=_secs, when=_when, bytes=_bytes, tok=_tok, pct=_pct)
+    env.filters.update(epoch=_epoch, inline=_inline, money=_money, secs=_secs, when=_when, bytes=_bytes, tok=_tok, pct=_pct,
+                       worker_title=_worker_title)
     stamp = max(os.path.getmtime(os.path.join(HERE, n)) for n in STATIC)
     env.globals.update(origin_of=data.origin, version=__about__.__version__, refresh_s=REFRESH_S,
                        asset_v="%s-%d" % (__about__.__version__, stamp),
@@ -169,6 +179,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         except Exception:                 # noqa: BLE001: a banner never breaks a page
             ctx["sched_mode"] = None
         ctx.setdefault("ide", ide_config())
+        if "vsc" in ctx:                  # the sessions tables carry the scribe's switch
+            from .. import scribe
+            ctx["scribe_on"] = scribe.enabled(home or registry.home(), ctx["ide"])
         ctx["ide_sizes"] = ide_sizes() if getattr(ide_backend, "slot", False) else []
         ctx["ide_web"] = web_state(request, ctx["ide"])
         return HTMLResponse(env.get_template(name).render(**ctx), status_code=status)
@@ -877,6 +890,14 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                                           op == "recommend", by)
         elif op == "note":
             out = await run_in_threadpool(actions.note, pkt, note, by, one("wake") == "1")
+        elif op == "checkpoint":        # where it stands (docs/session-checkpoint.md §3)
+            from .. import checkpoint
+            try:
+                out, _ = await run_in_threadpool(
+                    checkpoint.record, pkt, one("status"), one("body") or None,
+                    one("next").strip() or None, (), "session", by)
+            except checkpoint.CheckpointError as ex:
+                out = executor.Outcome(executor.USAGE, str(ex))
         elif op == "keep":              # take back a pause that has not happened yet
             out = await run_in_threadpool(executor.withdraw_pause, pkt)
         elif op in ("handoff", "pause", "resume", "wake"):
@@ -893,6 +914,47 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         elif one("back") == "overview":
             url = "/#attention"
         return back(url + "/live" if one("back") == "live" else url, out)
+
+    async def scribe_switch(request):
+        """Turn the scribe on or off for the board (docs/session-checkpoint.md D2)."""
+        from .. import executor, scribe
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        on = one("on") == "1"
+        if not is_owner(request):         # it reads the owner's sessions
+            return back(local(one("back"), "/"), executor.Outcome(
+                executor.USAGE, "only the board's owner can turn this on or off"),
+                poke_runner=False)
+        await run_in_threadpool(scribe.set_enabled, home or registry.home(), on, who(request))
+        return back(local(one("back"), "/"), executor.Outcome(
+            executor.OK, "status drafts when sessions end: %s" % ("on" if on else "off")),
+            poke_runner=False)
+
+    async def checkpoint_draft(request):
+        """A status drafted from the packet's latest session (docs/session-checkpoint.md
+        §4.2), for the Update status form to fill in: JSON ``{status, body, next}``
+        or ``{error}``. Asked for by the person, so it does not wait for
+        ``[ide] sessions_scribe``; nothing is recorded."""
+        from .. import ide_sessions, scribe
+        from ..packet import Packet
+        e = entry(request)
+        wpid = request.path_params["wpid"]
+        if e is None or data.packet(e, wpid) is None:
+            return JSONResponse({"error": "no packet %s" % wpid}, status_code=404)
+        pkt = Packet(layout.run_dir(e["path"], wpid))
+        h = home or registry.home()
+        recs = [r for r in ide_sessions.cached_records(h)
+                if r.get("project") == e["name"] and r.get("wpid") == wpid]
+        recs.sort(key=lambda r: r.get("last_activity_t") or 0, reverse=True)
+        for r in recs:
+            paths = scribe.transcripts(h, r)
+            if paths:
+                got, _ = await run_in_threadpool(scribe.draft, pkt, r["harness"], paths, h)
+                if got is None:
+                    return JSONResponse({"error": "the model gave no draft; try again"})
+                return JSONResponse(got)
+        return JSONResponse({"error": "no session of this packet whose transcript this "
+                                      "board can read"})
 
     async def project_run(request):
         """Pause, Resume or Stop now a whole project (docs/pause-v1.md): from its
@@ -1823,6 +1885,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/p/{project}/markup", markup_post, methods=["POST"]),
         *studio_routes,
         Route("/p/{project}/{wpid}/act", act, methods=["POST"]),
+        Route("/p/{project}/{wpid}/checkpoint/draft", checkpoint_draft, methods=["POST"]),
+        Route("/sessions/scribe", scribe_switch, methods=["POST"]),
         Route("/p/{project}/{wpid}/live", live_view),
         Route("/p/{project}/{wpid}/file", deliverable),
         Route("/p/{project}/{wpid}/plan", plan_view),

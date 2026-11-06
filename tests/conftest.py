@@ -23,6 +23,15 @@ def _no_site_config(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_user_skills(monkeypatch, tmp_path_factory):
+    """Opening an editor installs /wpk-checkpoint (skills.py): never in the host's
+    ~/.claude or ~/.codex."""
+    d = str(tmp_path_factory.mktemp("skills"))     # an env var: subprocesses get it too
+    monkeypatch.setenv("WPK_SKILLS_DIRS", os.pathsep.join([os.path.join(d, "claude"),
+                                                           os.path.join(d, "codex")]))
+
+
+@pytest.fixture(autouse=True)
 def _clone_with_git(monkeypatch):
     """New packets clone with git unless a test asks for ivpm: the host's ivpm
     (or none) must not decide what a test does."""

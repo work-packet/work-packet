@@ -101,6 +101,8 @@ def resolve(t, repo=None, packet=False):
         raise IdeError(str(e)) from None
     pkt = _packet_of(t, tg)
     who = owner(pkt)
+    from . import skills
+    skills.install()            # /wpk-checkpoint for its sessions (docs/session-checkpoint.md §4.1)
     if layout.is_packet_layout(tg.proj):
         return _packet_folder(tg, pkt, who, repo)
     if repo is None:

@@ -15,3 +15,13 @@
   {% endfor %}
 </table>
 {%- endmacro %}
+
+{#- The scribe's switch (docs/session-checkpoint.md §4.2): one for the board. -#}
+{% macro scribe_switch(scribe_on, back, csrf) -%}
+<form class="act row" method="post" action="/sessions/scribe" style="margin:6px 0 12px;font-size:12.5px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="back" value="{{ back }}">
+  <span class="muted">Status drafts when a session ends: <strong>{{ "on" if scribe_on else "off" }}</strong>{% if scribe_on %}. A small model reads the end of a packet's session (what was asked and said, the tools used; not their output) and records where the packet stands.{% else %}. When on, a small model reads the end of a packet's session that changed things and records where the packet stands, so its card stays current.{% endif %}</span>
+  <button class="go" name="on" value="{{ '0' if scribe_on else '1' }}">Turn {{ "off" if scribe_on else "on" }}</button>
+</form>
+{%- endmacro %}

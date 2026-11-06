@@ -113,9 +113,11 @@ class Runner:
     def _sessions_loop(self):
         """Claude and Codex sessions in the board's own web VS Code servers
         (docs/vscode-monitor-plan.md §2.4); a server in a job watches its own.
-        Off with ``[ide] web = false`` or ``[ide] sessions = false``."""
+        Off with ``[ide] web = false`` or ``[ide] sessions = false``. With
+        ``[ide] sessions_scribe``, the scribe drafts a status for those that
+        ended (docs/session-checkpoint.md §4.2)."""
         import time
-        from .. import ide, ide_sessions
+        from .. import ide, ide_sessions, scribe
         collectors, pruned = {}, 0.0
         while not self._stopping.is_set():
             try:
@@ -126,6 +128,7 @@ class Runner:
             if cfg.get("web") and cfg.get("sessions", True):
                 try:
                     ide_sessions.local_pass(self.home, collectors)
+                    scribe.pass_once(self.home, cfg)
                     if time.time() - pruned > 3600:
                         ide_sessions.prune(self.home, time.time(),
                                            keep_days=cfg.get("sessions_keep_days") or 30)

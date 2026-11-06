@@ -166,6 +166,48 @@ def _next(meta, now, tz):
     return ""
 
 
+def _intent(body):
+    """The ``Next:`` line of a status body (a checkpoint's), or None."""
+    from ..checkpoint import next_of
+    return next_of(body)
+
+
+def intent(pkt, row):
+    """What comes next, for a card's second line (docs/session-checkpoint.md §5):
+    the status's ``Next:`` line, else what the next autonomous step starts from
+    (the memento's first line) while the runner has it."""
+    if row.get("intent"):
+        return row["intent"]
+    if row.get("state") not in ("RUNNABLE", "SLEEPING") or row.get("taken_by"):
+        return None
+    try:
+        _, body = pkt.load_memento()
+    except (OSError, frontmatter.FrontMatterError):
+        return None
+    return _first_line(body) or None
+
+
+def since_checkpoint(entry, row, tz, now):
+    """The card's "as of" marker: ``{"as_of", "active", "live", "edits"}``, where
+    ``active`` says how long ago a session of the packet was last active after
+    its status was written (None: none was)."""
+    if not row or not row.get("updated"):
+        return None
+    from .. import ide_sessions, registry
+    out = {"as_of": _local(row["updated"], tz)[-5:] if row["updated"].astimezone(tz).date()
+           == now.astimezone(tz).date() else _local(row["updated"], tz),
+           "active": None, "live": False, "edits": 0}
+    try:
+        got = ide_sessions.packet_activity(registry.home(), entry["name"], row["wpid"],
+                                           since=row["updated"].timestamp())
+    except Exception:              # the marker is a nicety; never fail the board for it
+        got = None
+    if got:
+        out.update(active=relative(min(0, got["active_t"] - now.timestamp())), live=got["live"],
+                   edits=got["edits"])
+    return out
+
+
 def tree(entry, now=None):
     """Every packet of a project, in tree order, with what a board row needs."""
     now = now or clock.now()
@@ -189,7 +231,7 @@ def tree(entry, now=None):
             "state": meta.get("state"), "step": meta.get("step"),
             "attempts": meta.get("attempts"), "reason": meta.get("reason"),
             "next": _next(meta, now, tz), "summary": _first_line(body),
-            "updated": _ts(meta.get("updated")), "wake_at": _ts(meta.get("wake_at")),
+            "intent": _intent(body), "updated": _ts(meta.get("updated")), "wake_at": _ts(meta.get("wake_at")),
             "stopped": _ts(meta.get("stopped")) if stopped(meta) else None,
             "seen": _ts(meta.get("seen")),
             "pausing": _pausing(pkt) is not None, "resumable": resumable(meta),
@@ -344,9 +386,13 @@ def card(entry, now=None, nodes=None):
         at = max(t for t in (root["stopped"], last) if t)
         if not root.get("seen") or root["seen"] < at:
             unread = finished(entry, nodes, at, tz, now)
+    nxt = since = None
+    if root and root.get("state") != "?":
+        nxt = intent(Packet(root["path"]), root)
+        since = since_checkpoint(entry, root, tz, now)
     return {
         "name": entry["name"], "column": column, "root": root, "running": run,
-        "setup": held,
+        "setup": held, "intent": nxt, "since": since,
         "counts": sorted(counts.items(), key=lambda kv: str(kv[0])),
         "packets": len(nodes), "trouble": len(trouble),
         "stalled": stalled, "stuck": stuck,
@@ -644,7 +690,8 @@ def packet(entry, wpid, now=None):
         "taken_by": meta.get("taken_by"), "taken": _ts(meta.get("taken")),
         "taking": _taking(pkt), "studio": _studio_ok(entry, wpid),
         "fields": [(k, meta.get(k)) for k in schema.STATUS_FIELDS if k in meta],
-        "summary": body.strip(), "summary_html": md(body.strip()), "memento": memento, "files": files, "children": kids,
+        "summary": body.strip(), "summary_html": md(body.strip()),
+        "status_line": _first_line(body), "intent": _intent(body), "memento": memento, "files": files, "children": kids,
         "parent": parent, "steps": list(reversed(steps(pkt))), "running": running(pkt, now),
         "next": _next(meta, now, tz), "journal": pkt.journal().records[-200:],
         "notes": notes_mod.queued(pkt),

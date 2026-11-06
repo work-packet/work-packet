@@ -225,6 +225,7 @@ ul.list button.x:hover { color: var(--FAILED); }
 {% if vsc %}
 <h2 id="vscode-sessions">Recent VS Code sessions</h2>
 {{ vsm.table(vsc, where=True) }}
+{{ vsm.scribe_switch(scribe_on, "/#vscode-sessions", csrf) }}
 {% endif %}
 
 {% endif %}
