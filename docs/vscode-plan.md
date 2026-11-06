@@ -329,6 +329,50 @@ Launch history is kept in `ide/servers/<key>/launches.jsonl` and
 - The Claude pid file is Claude Code's own, undocumented. Tested with
   2.1.280.
 
+### 4.6 Localhost links
+
+An extension that serves a page (vscode-print, a preview) listens on a free
+loopback port where VS Code's server runs and opens
+`http://localhost:<port>/...`. A terminal link to a dev server is the same.
+`serve-web` has no port forwarding, so in the browser that URL is your own
+machine. With `[ide] forward = true` (the default) the board forwards it:
+
+```
+workbench  window.open("http://localhost:40731/s/")     (ide_forward.js wraps it)
+  -> GET /ide/<key>/__wpk/open?u=<url>                   owner only, Sec-Fetch-Site: same-origin
+  <- 303 /fwd/<token>/s/
+  -> GET /fwd/<token>/s/...  ->  localhost:40731 where the server runs
+```
+
+- **The shim** (`dash/ide_forward.js`) goes ahead of the first script of
+  the workbench page only, and rewrites `window.open` calls to a loopback
+  URL. Safari and installed PWAs open a blank window first and set its
+  location afterwards, so the shim never sees the URL there: not supported.
+- **`/fwd/<token>/`** is served like `/sc/` (server.md §6a): a sandboxed
+  opaque origin (`sandbox allow-scripts allow-forms allow-modals
+  allow-popups allow-downloads`), no cookies either way, GET and HEAD only,
+  `no-referrer`, and `Access-Control-Allow-Origin: *` so the page can read
+  its own answers. The page's own CSP is kept too. Upstream gets
+  `Host: localhost:<port>`, and a redirect to its own origin or to a root
+  path stays under `/fwd/<token>/`. A token is bound to the server process
+  (or the job's certificate) and ends with it, after 1 h idle, or after 12 h.
+- **Which ports.** Only a listener on loopback (or a wildcard) owned by your
+  uid, and not wpk's own (the board's or the relay's); every listener on
+  that port must be yours. It is checked from `/proc/net/tcp` on every
+  request, on the host where the port is (`work_packet/ide_ports.py`).
+  Linux only.
+- **Where.** A local server: directly from wpkd. A job over `mtls`: through
+  the relay, with the port in the TLS server name (scheduler.md §8.1). Over
+  `tcp-token`: not supported (501).
+- A forwarded page in use keeps its server from the idle stop and from
+  LRU eviction for 5 minutes.
+
+What works: pages with relative links (vscode-print, `python -m
+http.server`, static reports and doc builds). What does not, yet:
+root-absolute links (`/assets/x.js`: Vite, Next.js, Jupyter, Flask and
+Django apps), which need an origin per port; WebSocket (live reload) and
+POST on `/fwd/`; pages an extension frames inside a webview.
+
 ## 5. Opening a packet the runner owns
 
 This plan does not build take-back. It builds only the protection that
@@ -366,6 +410,7 @@ max_servers  = 8               # one server per open target
 sessions     = true            # list Claude/Codex sessions (§4.5)
 sessions_poll_s    = 5
 sessions_keep_days = 30
+forward      = true            # localhost links from web VS Code (§4.6)
 ```
 
 ## 7. Build plan

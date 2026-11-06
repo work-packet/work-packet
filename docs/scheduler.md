@@ -607,6 +607,18 @@ browser ──board (TLS + login, or ssh -L)──► wpkd proxy
   host able to open TCP to a high port on them. If that is not allowed, the
   alternatives in the design (a reverse connection, or ssh) would be further
   transports behind the same setting.
+- **Localhost links** (vscode-plan.md §4.6). A connection whose TLS server
+  name is `p<port>.fwd.wpk` is spliced to `localhost:<port>` on the exec
+  host instead of the unix socket, after the relay checks that the port is
+  the user's and not its own (`ide_ports.check`, on every connection). A
+  refused or dead port gets an HTTP 403 or 502 from the relay itself, saying
+  why. Any other name goes to the socket as before. wpkd pins the
+  certificate and does not check the host name, so the name is free to
+  carry the port. The relay publishes `features` (`fwd-sni`), and wpkd
+  forwards only to a relay that has it: an older one would splice the
+  request to VS Code's server. wpkd uses one HTTP client per forwarded
+  port, because httpx pools connections by host and port, not by server
+  name.
 - Not secured by this: the board's own listener (`[server] listen`, TLS), and
   the browser shell, which runs on wpkd's host.
 

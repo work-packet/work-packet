@@ -38,7 +38,7 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pane.js"), "
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Served from the package: compose.js, shell.js and the other scripts (no CDN, the CSP
 # is script-src 'self'); vendored libraries go through dash/vendored.py. Name -> media type.
-STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript", "studio_wait.js": "text/javascript", "studio_files.js": "text/javascript", "studio_edit.js": "text/javascript"}
+STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript", "studio_wait.js": "text/javascript", "studio_files.js": "text/javascript", "studio_edit.js": "text/javascript", "ide_forward.js": "text/javascript"}
 REFRESH_S = 10
 LIVE_MS = 3000             # the live view refreshes faster
 log = logging.getLogger("wpk.dash")
@@ -1747,6 +1747,15 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             return PlainTextResponse("not found\n", status_code=404)
         return await dide.proxy_http(ide_backend, request)
 
+    async def fwd_http(request):
+        """``/fwd/<token>/<path>``: a localhost page of web VS Code's host, on the
+        sandboxed content origin (``dash/ide_forward.py``; the guard checked the token)."""
+        from . import ide_forward
+        if ide_backend is None or not ide_config().get("web") or \
+                not ide_backend.cfg.get("forward", True):
+            return PlainTextResponse("not found\n", status_code=404)
+        return await ide_forward.proxy_forward(ide_backend, request)
+
     async def ide_ws(websocket):
         from . import ide as dide
         if ide_backend is None or not ide_config().get("web"):
@@ -1793,6 +1802,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/static/pane.js", pane_js),
         Route("/static/{name:path}", static),
         Route("/sc/{token}/{path:path}", content_file),
+        Route("/fwd/{token}/{path:path}", fwd_http, methods=["GET", "HEAD"]),
         Route("/new", new_form),
         Route("/new/search", new_search),
         Route("/new", new_create, methods=["POST"]),

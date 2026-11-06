@@ -146,7 +146,7 @@ def job(tmp_path):
 
 def test_the_job_publishes_only_public_files_and_keeps_its_key_local(job):
     names = sorted(os.listdir(job.dir))
-    assert names == ["client.crt", "endpoint", "fingerprint", "server.crt"]
+    assert names == ["client.crt", "endpoint", "features", "fingerprint", "server.crt"]
     assert ide_tls.fingerprint(os.path.join(job.dir, "server.crt")) == open(os.path.join(job.dir, "fingerprint")).read().strip()
     for n in names:
         assert "PRIVATE KEY" not in open(os.path.join(job.dir, n)).read()
@@ -188,6 +188,41 @@ def test_a_pinned_client_reaches_the_server_and_nobody_else_does(job):
     finally:
         for f in (k2, c2):
             os.unlink(f)
+
+
+def _tls_get(job, sni, path):
+    """One GET through the relay, with ``sni`` as the TLS server name."""
+    ctx = ide_tls.pinned_client_context(job.pc, job.pk, os.path.join(job.dir, "server.crt"))
+    t = ctx.wrap_socket(socket.create_connection(("127.0.0.1", job.port_), timeout=5),
+                        server_hostname=sni)
+    t.sendall(b"GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" % path)
+    data = b""
+    while True:
+        chunk = t.recv(65536)
+        if not chunk:
+            return data
+        data += chunk
+
+
+def test_the_relay_forwards_an_owned_port_named_in_the_server_name(job, tmp_path):
+    """port-forward plan §3.4: ``p<port>.fwd.wpk`` reaches localhost:<port> on the node."""
+    wait_for(str(tmp_path / "pids") + ".port")
+    port = int(open(str(tmp_path / "pids") + ".port").read())
+    data = _tls_get(job, "p%d.fwd.wpk" % port, b"/s/")
+    assert data.startswith(b"HTTP/1.0 200") and b'<pre id="host">localhost</pre>' in data
+    assert open(os.path.join(job.dir, "features")).read().split() == ["fwd-sni"]
+    data = _tls_get(job, "p%d.fwd.wpk" % job.port_, b"/")        # the relay's own port
+    assert data.startswith(b"HTTP/1.1 403") and b"wpk's own" in data
+    free = socket.socket()
+    free.bind(("127.0.0.1", 0))
+    p = free.getsockname()[1]
+    free.close()
+    data = _tls_get(job, "p%d.fwd.wpk" % p, b"/")
+    assert data.startswith(b"HTTP/1.1 403") and b"nothing listens" in data
+    # any other name still goes to VS Code's server, as before
+    for name in ("x", "fwd.wpk", "p%d.fwd.wpk.evil" % port):
+        data = _tls_get(job, name, b"/ide/k/")
+        assert data.startswith(b"HTTP/1.1 200") and b'<pre id="seen">' in data, name
 
 
 def test_the_servers_own_socket_is_private_and_not_in_the_shared_dir(job):
@@ -325,6 +360,63 @@ def test_proxy_to_a_job_over_mtls(home, tmp_path):
             pool.poke.set()
     finally:
         pool.close()
+
+
+def test_a_localhost_link_through_a_job_over_mtls(home, tmp_path):
+    """port-forward plan F3: the open endpoint, then /fwd/ through the relay."""
+    import urllib.parse
+    from work_packet.dash.app import create_app
+    config(home, jobs=2, ide={"slot": True, "transport": "mtls"})
+    pool = Pool(home)
+    try:
+        bs = mtls_backends(home, tmp_path, poke=pool.poke.set)
+        key = bs.register("/x", size="look")
+        with TestClient(create_app(home, ide_backend=bs), base_url="http://127.0.0.1:7878",
+                        follow_redirects=False) as c:
+            get_until_up(c, "/ide/%s/" % key)
+            wait_for(str(tmp_path / "pids") + ".port")
+            port = int(open(str(tmp_path / "pids") + ".port").read())
+
+            def open_(url):
+                return c.get("/ide/%s/__wpk/open?u=%s" % (key, urllib.parse.quote(url, safe="")),
+                             headers={"sec-fetch-site": "same-origin"})
+            r = open_("http://localhost:%d/s/" % port)
+            assert r.status_code == 303
+            loc = r.headers["location"]
+            r = c.get(loc)
+            assert r.status_code == 200 and '<pre id="host">localhost:%d</pre>' % port in r.text
+            assert "color: red" in c.get(loc + "style.css").text
+            base = loc[:-len("/s/")]
+            assert c.get(base + "/redir").headers["location"] == base + "/x"
+            # many ports, one relay: each port's requests stay on its own connections
+            r = open_("http://localhost:1/")
+            r = c.get(r.headers["location"])
+            assert r.status_code == 403 and "nothing listens" in r.text   # the relay says why
+            assert "color: red" in c.get(loc + "style.css").text
+            # a relay from before forwarding: wpkd does not send it a forwarded request
+            sdir = os.path.join(home, "ide", "servers", key)
+            os.rename(os.path.join(sdir, "features"), os.path.join(sdir, "features.x"))
+            r = open_("http://localhost:%d/s/" % port)
+            assert r.status_code == 501 and "open it again" in r.text
+            assert c.get(loc).status_code == 501
+            os.rename(os.path.join(sdir, "features.x"), os.path.join(sdir, "features"))
+            bs.get(key)._stop_now()
+            pool.poke.set()
+            deadline = time.time() + 30
+            while jobs.all(home) and time.time() < deadline:
+                time.sleep(0.1)
+            assert c.get(loc).status_code in (403, 410)             # dies with its job
+    finally:
+        pool.close()
+
+
+def test_a_tcp_token_server_says_forwarding_needs_mtls(home):
+    from work_packet.dash.ide import JobBackend, Unforwardable
+    be = JobBackend(home, dict(schema.IDE_DEFAULTS), "0123456789ab")
+    with pytest.raises(Unforwardable) as e:
+        be.forward(8000)
+    assert e.value.status == 501 and "mtls" in str(e.value)
+    assert be.forward_identity() is None
 
 
 def test_a_server_with_a_different_certificate_is_refused_by_the_proxy(home, tmp_path):

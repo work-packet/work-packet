@@ -7,21 +7,34 @@ Listens on a free TCP port with a required client certificate: only wpkd's
 handshake. After the handshake the stream is spliced byte for byte to the unix
 socket, so HTTP and WebSocket upgrades pass through unchanged.
 
+A connection whose TLS server name is ``p<port>.fwd.wpk`` is spliced instead
+to ``localhost:<port>`` on this host: a page an extension serves, forwarded to
+the browser (port-forward plan §3.4). Only a port this user listens on, and not
+the relay's own, is reached (``ide_ports.check``, before every connection);
+otherwise the relay answers the request itself with a 403 or 502 saying why.
+Any other server name goes to the unix socket, as before. ``features`` in the
+publish directory tells wpkd this relay knows the rule.
+
 The job's key is made in ``--key-dir`` (local to the node, 0700) and never
 leaves it. ``--publish-dir`` (the shared server directory) gets only the public
-``server.crt``, its ``fingerprint``, and, last, ``endpoint`` (``host:port``).
+``server.crt``, its ``fingerprint``, ``features``, and, last, ``endpoint``
+(``host:port``).
 It exits on SIGTERM, or when nothing answers on the socket any more.
 """
 import argparse
 import asyncio
 import os
+import re
 import signal
 import socket
 import sys
 
 from . import ide_tls
+from .. import ide_ports
 
 CHUNK = 65536
+FORWARD = re.compile(r"p(\d{1,5})\.fwd\.wpk\Z")
+FEATURES = "fwd-sni\n"
 
 
 async def _pump(r, w):
@@ -41,9 +54,54 @@ async def _pump(r, w):
             pass
 
 
-async def _handle(sock_path, reader, writer):
+def _sni(sslobj, name, ctx):
+    """Remember the server name for ``_handle`` (the handshake goes on)."""
+    sslobj.wpk_name = name
+
+
+async def _answer(reader, writer, status, why):
+    """An HTTP answer of the relay's own, after reading the request's head
+    (closing on unread data would reset the connection and lose the answer)."""
     try:
-        ur, uw = await asyncio.open_unix_connection(sock_path)
+        await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 10)
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError,
+            ConnectionError, OSError):
+        pass
+    body = (why + "\n").encode()
+    writer.write(b"HTTP/1.1 %s\r\ncontent-type: text/plain; charset=utf-8\r\n"
+                 b"content-length: %d\r\nconnection: close\r\n\r\n%s"
+                 % (status.encode(), len(body), body))
+    try:
+        await writer.drain()
+    except (ConnectionError, OSError):
+        pass
+    writer.close()
+
+
+async def _open_forward(reader, writer, port):
+    """A connection to ``localhost:<port>`` here, or None (answered already)."""
+    host, why = ide_ports.check(port)
+    if host is None:
+        await _answer(reader, writer, "403 Forbidden", why)
+        return None
+    try:
+        return await asyncio.open_connection(host, port)
+    except OSError as e:
+        await _answer(reader, writer, "502 Bad Gateway", "localhost:%d: %s" % (port, e))
+        return None
+
+
+async def _handle(sock_path, reader, writer):
+    so = writer.get_extra_info("ssl_object")
+    m = FORWARD.match(getattr(so, "wpk_name", None) or "")
+    try:
+        if m:
+            up = await _open_forward(reader, writer, int(m.group(1)))
+            if up is None:
+                return
+            ur, uw = up
+        else:
+            ur, uw = await asyncio.open_unix_connection(sock_path)
     except OSError:
         writer.close()
         return
@@ -84,12 +142,14 @@ async def serve(sock_path, client_crt, key_dir, publish_dir, host="0.0.0.0", por
     key, crt = os.path.join(key_dir, "server.key"), os.path.join(key_dir, "server.crt")
     ide_tls.make_cert(key, crt, ide_tls.SERVER_DAYS, "wpk-ide-relay")
     ctx = ide_tls.pinned_server_context(crt, key, client_crt)
+    ctx.sni_callback = _sni
     stop = asyncio.Event()
     srv = await asyncio.start_server(lambda r, w: _handle(sock_path, r, w), host, port, ssl=ctx)
     port = srv.sockets[0].getsockname()[1]
     with open(crt) as f:
         _publish(os.path.join(publish_dir, "server.crt"), f.read())
     _publish(os.path.join(publish_dir, "fingerprint"), ide_tls.fingerprint(crt) + "\n")
+    _publish(os.path.join(publish_dir, "features"), FEATURES)
     _publish(os.path.join(publish_dir, "endpoint"), "%s:%d\n" % (socket.gethostname(), port))
     watcher = asyncio.ensure_future(_watch(sock_path, stop))
     loop = asyncio.get_running_loop()
@@ -98,10 +158,11 @@ async def serve(sock_path, client_crt, key_dir, publish_dir, host="0.0.0.0", por
     try:
         await stop.wait()
     finally:
-        try:
-            os.unlink(os.path.join(publish_dir, "endpoint"))
-        except OSError:
-            pass
+        for n in ("endpoint", "features"):
+            try:
+                os.unlink(os.path.join(publish_dir, n))
+            except OSError:
+                pass
         srv.close()
         await srv.wait_closed()
         watcher.cancel()

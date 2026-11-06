@@ -264,8 +264,36 @@ def _ide_tools():
             how, url = "`code serve-web`", "https://code.visualstudio.com/download"
         return [Check("tools.code", "tools", "warn", "%s is not on PATH" % code,
                       "[ide] web = true serves VS Code under the board's /ide/ with "
-                      "%s; the board hides the button without it." % how, [url])]
-    return [Check("tools.code", "tools", "ok", "%s (web VS Code)" % code)]
+                      "%s; the board hides the button without it." % how, [url]),
+                _ide_forward(cfg)]
+    return [Check("tools.code", "tools", "ok", "%s (web VS Code)" % code), _ide_forward(cfg)]
+
+
+def _ide_forward(cfg):
+    """Localhost links from web VS Code (the port-forward plan): on, and can they work here?"""
+    cid = "tools.ide_forward"
+    if not cfg.get("forward", True):
+        return Check(cid, "tools", "info", "localhost links from web VS Code are not forwarded",
+                     "[ide] forward = false: a link to http://localhost:<port>/ opens on "
+                     "your own machine.")
+    from .sched import config as sconfig, ide as side
+    try:
+        scfg = sconfig.load(registry.home())
+        slot = side.enabled(scfg)
+        transport = (scfg.get("ide") or {}).get("transport") or "tcp-token"
+    except registry.ConfigError:
+        slot, transport = False, "tcp-token"
+    if slot and transport != "mtls":
+        return Check(cid, "tools", "warn",
+                     "localhost links from web VS Code cannot be forwarded (tcp-token)",
+                     "VS Code runs in scheduler jobs reached over tcp-token; forwarding "
+                     "needs the pinned TLS relay.", ['[sched.ide] transport = "mtls"'])
+    if not os.path.exists("/proc/net/tcp"):
+        return Check(cid, "tools", "warn",
+                     "localhost links from web VS Code cannot be forwarded on this OS",
+                     "Forwarding checks who owns a port in /proc/net/tcp (Linux only).")
+    return Check(cid, "tools", "ok", "localhost links from web VS Code are forwarded (%s)"
+                 % (transport if slot else "local"))
 
 
 def _project(tg, meta):

@@ -25,7 +25,7 @@ import socket
 import subprocess
 import time
 
-from .. import ide_launch
+from .. import ide_launch, ide_ports
 
 log = logging.getLogger("wpk.dash")
 
@@ -38,6 +38,10 @@ HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "te", "traile
        "forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
        "x-real-ip", "via", "x-csrf-token"}
 TRUST = (b"&quot;enableWorkspaceTrust&quot;:true", b"&quot;enableWorkspaceTrust&quot;:false")
+# Localhost links from the workbench go through the board (port-forward plan §3.1).
+SHIM = b'<script src="/static/ide_forward.js"></script>'
+OPEN = "/__wpk/open"
+FORWARD_HOLD_S = 300        # a server whose forwarded page was used this recently is not evicted
 KEY = re.compile(r"[0-9a-f]{12}\Z")
 COOKIE_ROOT = re.compile(r"(;\s*path=)/(?=\s*(;|$))", re.I)
 # Installing a gallery extension in the browser fetches its files through the
@@ -49,6 +53,14 @@ EXT_RESOURCE = re.compile(r"/ide/[0-9a-f]{12}/(?:[^/]+/)?web-extension-resource/
 EXT_HOSTS = re.compile(r"([a-z0-9-]+\.vscode-unpkg\.net|open-vsx\.org)\Z")
 EXT_REQUEST_HEADERS = ("x-client-name", "x-client-version", "x-machine-id", "x-client-commit")
 EXT_RESPONSE_HEADERS = ("cache-control", "content-type")
+
+
+class Unforwardable(Exception):
+    """A localhost link of this server cannot be forwarded: ``status``, and why."""
+
+    def __init__(self, status, why):
+        super().__init__(why)
+        self.status = status
 
 
 class IdeUnavailable(Exception):
@@ -135,6 +147,8 @@ class Backend:
         self._lock = asyncio.Lock()
         self._idle = None
         self._http = None
+        self._fwd_http = None
+        self.forwarded = float("-inf")      # when a forwarded page was last used
 
     # -- the process ---------------------------------------------------------
 
@@ -295,6 +309,27 @@ class Backend:
                                            timeout=httpx.Timeout(60.0, connect=5.0))
         return self._http
 
+    # -- localhost links (port-forward plan §3.4) ----------------------------
+
+    def forward_identity(self):
+        """What a forward token is bound to: this server process. A new one has
+        other ports, so its tokens die with it. None when it is not running."""
+        if not self.running():
+            return None
+        return self.proc if isinstance(self.proc, int) else self.proc.pid
+
+    def forward(self, port):
+        """``(client, origin, extensions)`` for a request to ``localhost:<port>``
+        where this server runs; raises ``Unforwardable``. Checked on every request."""
+        import httpx
+        host, why = ide_ports.check(port)
+        if host is None:
+            raise Unforwardable(403, why)
+        if self._fwd_http is None:
+            self._fwd_http = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
+        return self._fwd_http, "http://%s:%d" % ("[%s]" % host if ":" in host else host,
+                                                port), {}
+
 
 class IdeWaiting(IdeUnavailable):
     """The server's job has no room or has not started yet: the page waits."""
@@ -454,6 +489,15 @@ class JobBackend(Backend):
             self._http = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
         return self._http
 
+    def forward_identity(self):
+        return None
+
+    def forward(self, port):
+        # The extension's port is on the exec host's loopback; this transport
+        # reaches only the server's own plaintext port.
+        raise Unforwardable(501, 'forwarding localhost links needs [sched.ide] transport = '
+                                 '"mtls"; this board uses "tcp-token"')
+
     def url(self, path):
         host, port = self._ep or self.endpoint()
         return "http://%s:%d%s" % (host, port, path)
@@ -490,6 +534,7 @@ class MtlsJobBackend(JobBackend):
         super().__init__(home, cfg, key, argv=argv, clock=clock, poke=poke, by=by)
         self._ctx = None
         self._pin = None            # the job certificate's fingerprint the context was made for
+        self._fwd = {}              # port -> client: httpx pools by host and port, not by SNI
 
     def listen_argv(self, fake):
         if fake:
@@ -517,7 +562,7 @@ class MtlsJobBackend(JobBackend):
         if self._ctx is None or self._pin != fp:
             key, crt = ide_tls.client_cert(self.home)
             self._ctx = ide_tls.pinned_client_context(crt, key, server_crt)
-            self._pin, self._http = fp, None       # a new job, a new certificate
+            self._pin, self._http, self._fwd = fp, None, {}     # a new job, a new certificate
         return self._ctx
 
     def _connectable(self):
@@ -537,6 +582,8 @@ class MtlsJobBackend(JobBackend):
             return False
         if ep != self._ep and self._http is not None:
             self._http = None
+        if ep != self._ep:
+            self._fwd = {}
         self._ep = ep
         return True
 
@@ -545,6 +592,29 @@ class MtlsJobBackend(JobBackend):
         if self._http is None:
             self._http = httpx.AsyncClient(verify=self._context(), timeout=httpx.Timeout(60.0, connect=5.0))
         return self._http
+
+    def forward_identity(self):
+        """The job's certificate: a new job is new processes, with other ports."""
+        return self._pin if self._context() is not None else None
+
+    def forward(self, port):
+        """Through the relay, with the port in the TLS server name; the relay
+        checks the port (``ide_ports``) on the exec host."""
+        import httpx
+        try:
+            with open(os.path.join(self.dir, "features")) as fp:
+                ok = "fwd-sni" in fp.read().split()
+        except OSError:
+            ok = False
+        if not ok:
+            raise Unforwardable(501, "this IDE job's relay is older than forwarding; "
+                                     "close the IDE and open it again to restart its job")
+        ep, ctx = self._ep or self.endpoint(), self._context()
+        if ep is None or ctx is None:
+            raise Unforwardable(502, "the IDE's job is not running")
+        if port not in self._fwd:
+            self._fwd[port] = httpx.AsyncClient(verify=ctx, timeout=httpx.Timeout(60.0, connect=5.0))
+        return self._fwd[port], "https://%s:%d" % ep, {"sni_hostname": "p%d.fwd.wpk" % port}
 
     def url(self, path):
         host, port = self._ep or self.endpoint()
@@ -648,7 +718,9 @@ class Backends:
             limit = int(self.cfg.get("max_servers") or 8)
             others = [b for b in self.servers.values() if b is not be and b.running()]
             while len(others) >= limit:
-                idle = [b for b in others if b.clients == 0]
+                now = self._clock()
+                idle = [b for b in others
+                        if b.clients == 0 and now - b.forwarded > FORWARD_HOLD_S]
                 if not idle:
                     raise IdeUnavailable("%d VS Code servers are in use ([ide] max_servers); "
                                          "close one and reload" % len(others))
@@ -772,12 +844,28 @@ GONE = ("404 this VS Code page is not open on the board; open it again from "
         "the project's page\n")
 
 
+def rewrite_workbench(body, trust_off, shim):
+    """VS Code's HTML: the workspace-trust prompt off (V0 finding 4), and on the
+    workbench page the localhost-link shim ahead of its first script, so it wraps
+    ``window.open`` before ``workbench.js`` loads (port-forward plan §3.1)."""
+    if trust_off:
+        body = body.replace(*TRUST)
+    if shim:
+        i = body.find(b"<script")
+        if i >= 0:
+            body = body[:i] + SHIM + body[i:]
+    return body
+
+
 async def proxy_http(backends, request):
     from starlette.background import BackgroundTask
     from starlette.responses import PlainTextResponse, Response, StreamingResponse
     backend = backends.get(key_of(request.url.path))
     if backend is None:
         return PlainTextResponse(GONE, status_code=404)
+    if request.url.path == backend.base + OPEN:
+        from . import ide_forward
+        return await ide_forward.open_link(backends, backend, request)
     ext = ext_resource_url(request.scope.get("raw_path", b"").decode("latin-1")
                            or request.url.path)
     if ext and request.method in ("GET", "HEAD"):
@@ -805,12 +893,15 @@ async def proxy_http(backends, request):
            for k, v in r.headers.multi_items()
            if k.lower() not in ("connection", "keep-alive", "transfer-encoding",
                                 "content-length")]
-    if r.headers.get("content-type", "").startswith("text/html") and \
-            not backend.cfg.get("workspace_trust", False):
-        body = (await r.aread()).replace(*TRUST)
+    trust_off = not backend.cfg.get("workspace_trust", False)
+    shim = request.url.path == backend.base + "/" and backend.cfg.get("forward", True)
+    if r.headers.get("content-type", "").startswith("text/html") and (trust_off or shim):
+        body = rewrite_workbench(await r.aread(), trust_off, shim)
         await r.aclose()
         resp = Response(body, status_code=r.status_code)
-        resp.raw_headers = out + [(b"content-length", str(len(body)).encode())]
+        # aread() decoded the body: it goes out as it is now
+        resp.raw_headers = [(k, v) for k, v in out if k.lower() != b"content-encoding"] + \
+            [(b"content-length", str(len(body)).encode())]
         return resp
     resp = StreamingResponse(r.aiter_raw(), status_code=r.status_code,
                              background=BackgroundTask(r.aclose))

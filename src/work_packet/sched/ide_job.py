@@ -185,7 +185,8 @@ def run_mtls(d, rest, started):
             return relay.returncode or 1
         return server.returncode
     finally:
-        _unlink(os.path.join(d, "endpoint"), os.path.join(d, "server.crt"), os.path.join(d, "fingerprint"))
+        _unlink(os.path.join(d, "endpoint"), os.path.join(d, "server.crt"), os.path.join(d, "fingerprint"),
+                os.path.join(d, "features"))
         if relay is not None and relay.poll() is None:
             relay.terminate()
             try:

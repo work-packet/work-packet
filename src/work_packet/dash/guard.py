@@ -234,22 +234,21 @@ class Guard:
         await self.app(scope, receive, send_with_headers)
 
     async def _content(self, scope, receive, send):
-        """``/sc/<token>/...`` (``studio/content.py``): a live token or nothing;
-        reading only; the sandbox headers on the answer, and no cookies."""
-        from ..studio import content
-        token, _ = content.split(scope.get("path", ""))
+        """``/sc/<token>/...`` (``studio/content.py``) and ``/fwd/<token>/...``
+        (``dash/ide_forward.py``): a live token or nothing; reading only; the
+        sandbox headers on the answer, and no cookies."""
+        token, state, headers, drop = _content_kind(scope.get("path", ""))
         if scope["type"] == "websocket" or scope.get("method") not in ("GET", "HEAD"):
             return await _refuse(send, 405, "content is read-only", scope)
-        if content.TOKENS.resolve(token) is None:
+        got = state(token)
+        if got is None:
             return await _refuse(send, 403, "no such content, or it has expired", scope)
-        scope.setdefault("state", {}).update(user=None, csrf=None, listener=self.kind,
-                                             content_root=content.TOKENS.resolve(token))
+        scope.setdefault("state", {}).update(user=None, csrf=None, listener=self.kind, **got)
 
         async def send_sandboxed(msg):
             if msg["type"] == "http.response.start":
-                drop = {b"set-cookie"} | {k for k, _ in content.HEADERS}
                 msg = dict(msg, headers=[(k, v) for k, v in msg.get("headers", [])
-                                         if k.lower() not in drop] + content.HEADERS)
+                                         if k.lower() not in drop] + headers)
             await send(msg)
         await self.app(scope, receive, send_sandboxed)
 
@@ -311,7 +310,29 @@ class Guard:
 
 
 def _content(scope):
-    return scope.get("path", "").startswith("/sc/")
+    return scope.get("path", "").startswith(("/sc/", "/fwd/"))
+
+
+def _content_kind(path):
+    """``(token, state, headers, drop)`` for a sandboxed-content path: ``state``
+    gives the request's state for a live token (None for a dead one); ``headers``
+    go on every answer, after the upstream's ``drop`` are removed."""
+    if path.startswith("/fwd/"):
+        from . import ide_forward
+        token, _ = ide_forward.split(path)
+
+        def state(t):
+            f = ide_forward.TOKENS.resolve(t)
+            return None if f is None else {"forward": f}
+        # the upstream's own CSP stays: both apply
+        return token, state, ide_forward.HEADERS, ide_forward.DROP
+    from ..studio import content
+    token, _ = content.split(path)
+
+    def state(t):
+        root = content.TOKENS.resolve(t)
+        return None if root is None else {"content_root": root}
+    return token, state, content.HEADERS, {b"set-cookie"} | {k for k, _ in content.HEADERS}
 
 
 def _header(headers, name):

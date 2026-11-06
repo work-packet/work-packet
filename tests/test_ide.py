@@ -705,6 +705,16 @@ def test_doctor_reports_the_vscode_cli_only_when_web_is_on(home, monkeypatch):
     open(os.path.join(home, "config.toml"), "w").write('[ide]\nweb = true\ncode = "nope-vs"\n')
     [c] = [c for c in setup._tools() if c.id == "tools.code"]
     assert c.level == "warn" and "nope-vs" in c.title
+    [f] = [c for c in setup._tools() if c.id == "tools.ide_forward"]
+    assert f.level == "ok" and "(local)" in f.title
+    open(os.path.join(home, "config.toml"), "w").write('[ide]\nweb = true\nforward = false\n')
+    [f] = [c for c in setup._tools() if c.id == "tools.ide_forward"]
+    assert f.level == "info"
+    for transport, level in (("tcp-token", "warn"), ("mtls", "ok")):
+        open(os.path.join(home, "config.toml"), "w").write(
+            '[ide]\nweb = true\n[sched.ide]\nslot = true\ntransport = "%s"\n' % transport)
+        [f] = [c for c in setup._tools() if c.id == "tools.ide_forward"]
+        assert f.level == level, transport
 
 
 # --- while the runner owns it (V5) -----------------------------------------------------

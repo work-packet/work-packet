@@ -11,12 +11,19 @@ and refuses (403) any request without the token in the ``vscode-tkn`` cookie
 or a ``tkn`` query parameter.
 
 Each start also appends its ``WPK_IDE_*`` environment, as JSON, to ``<pids file>.env``.
+
+It also serves an extension's page on ``127.0.0.1:<random>`` (port-forward
+plan), and writes the port to ``<pids file>.port``: ``/`` is HTML with a
+relative stylesheet that echoes the Host, ``/redir`` redirects to ``/x`` and
+``/abs`` to ``http://localhost:<port>/y``.
 """
 
+import http.server
 import json
 import os
 import subprocess
 import sys
+import threading
 
 import uvicorn
 from starlette.applications import Starlette
@@ -42,12 +49,56 @@ with open(pids + ".env", "a") as fp:           # what an extension or terminal w
     fp.write(json.dumps({k: v for k, v in os.environ.items() if k.startswith("WPK_IDE_")}) + "\n")
 
 
+class ExtensionPage(http.server.BaseHTTPRequestHandler):
+    """What an extension serves on loopback, as vscode-print does."""
+
+    def log_message(self, *a):
+        pass
+
+    def answer(self, status, body=b"", ctype="text/plain", **headers):
+        self.send_response(status)
+        self.send_header("content-type", ctype)
+        self.send_header("content-length", str(len(body)))
+        for k, v in headers.items():
+            self.send_header(k.replace("_", "-"), v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path in ("/", "/s/"):
+            body = ('<link rel="stylesheet" href="style.css"><pre id="host">%s</pre>'
+                    '<pre id="path">%s</pre><pre id="cookie">%s</pre>'
+                    % (self.headers.get("host"), self.path, self.headers.get("cookie")))
+            return self.answer(200, body.encode(), "text/html", set_cookie="app=1; Path=/",
+                               content_security_policy="img-src 'self'",
+                               access_control_allow_credentials="true")
+        if path == "/s/style.css":
+            return self.answer(200, b"pre { color: red }", "text/css")
+        if path == "/redir":
+            return self.answer(302, location="/x")
+        if path == "/abs":
+            return self.answer(302, location="http://localhost:%d/y#top" % EXT_PORT)
+        return self.answer(404, b"no such page")
+
+    do_HEAD = do_GET
+
+
+ext = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ExtensionPage)
+EXT_PORT = ext.server_address[1]
+threading.Thread(target=ext.serve_forever, daemon=True).start()
+with open(pids + ".port", "w") as fp:
+    fp.write("%d\n" % EXT_PORT)
+
+
 async def page(request):
     if not has_token(request):
         return Response("forbidden: no connection token", status_code=403)
     seen = json.dumps(dict(request.headers))
     return HTMLResponse('<meta data-settings="{&quot;enableWorkspaceTrust&quot;:true}">'
-                        '<pre id="seen">%s</pre>' % seen.replace("<", "&lt;"),
+                        '<pre id="seen">%s</pre><script>/* workbench */</script>'
+                        % seen.replace("<", "&lt;"),
                         headers={"content-security-policy": "default-src 'self' fake",
                                  "set-cookie": "vscode-cli-secret-half=abc; Path=/"})
 

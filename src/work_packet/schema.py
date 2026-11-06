@@ -82,6 +82,7 @@ IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
     "sessions": True,                  # Claude/Codex sessions in web VS Code on the board
     "sessions_poll_s": 5,              # docs/vscode-monitor-plan.md §2.4
     "sessions_keep_days": 30,
+    "forward": True,                   # localhost links from web VS Code (port-forward plan)
 }
 CONSOLE_DEFAULTS = {                  # docs/console.md §3
     "model": "haiku",                  # the agent's model; /model changes one conversation's
@@ -616,7 +617,7 @@ def _validate_ide(d):
     if not isinstance(t, dict):
         return [_err("ide", "must be a table")]
     out = _unknown(t, tuple(IDE_DEFAULTS), "ide")
-    for k in ("desktop", "web", "workspace_trust", "sessions"):
+    for k in ("desktop", "web", "workspace_trust", "sessions", "forward"):
         if k in t and not isinstance(t[k], bool):
             out.append(_err("ide." + k, "must be true or false"))
     for k in ("code", "ssh_host"):

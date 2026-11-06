@@ -349,6 +349,16 @@ is served under `/sc/<token>/<path>`:
   `document.cookie`, storage or its parent, and its POST to the board is
   refused (Origin `null`).
 
+`/fwd/<token>/<path>` (vscode-plan.md §4.6) is the same kind of content: a
+page served on loopback where web VS Code runs, opened from a localhost
+link. The guard treats it as `/sc/` (no login, GET and HEAD, cookies
+dropped), with its own headers: `sandbox allow-scripts allow-forms
+allow-modals allow-popups allow-downloads; frame-ancestors 'none'`, beside
+the page's own CSP, and `Access-Control-Allow-Origin: *`. Only the owner
+can mint a token (`/ide/<key>/__wpk/open`, under `/ide/`, with
+`Sec-Fetch-Site: same-origin`), and only for a port of the owner's uid that
+is not the board's.
+
 ## 7. Build plan
 
 Order relative to long-running.md §11: **S1 can start now**, against the
