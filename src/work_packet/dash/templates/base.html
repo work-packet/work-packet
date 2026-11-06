@@ -232,6 +232,17 @@ td.path { font-family: ui-monospace, monospace; font-size: 12px; word-break: bre
   border-top: 1px solid var(--line); padding: 8px 16px; background: var(--code); color: var(--ink);
   outline: none; width: 100%; }
 body.con-open main { padding-bottom: 46vh; }
+/* Your plan on cards and rows (docs/collaboration.md §9.2). */
+.prio { font-size: 10px; font-weight: 700; border-radius: 8px; padding: 0 5px; border: 1px solid var(--line); color: var(--muted); }
+.prio-now { color: #fff; background: var(--NEEDS_INPUT); border-color: var(--NEEDS_INPUT); }
+.due { font-size: 11px; color: var(--muted); }
+.due.late { color: var(--FAILED); font-weight: 600; }
+.planmenu { display: inline-block; position: relative; }
+.planmenu > summary { list-style: none; cursor: pointer; }
+.planmenu > summary::-webkit-details-marker { display: none; }
+.planmenu .planitems { position: absolute; right: 0; z-index: 6; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 210px; }
+.planmenu button.on { font-weight: 700; }
 </style>
 {% block head %}{% endblock %}
 </head>
@@ -258,6 +269,7 @@ body.con-open main { padding-bottom: 46vh; }
 {% endif %}
 {% if live %}
 <script src="/static/live.js"></script>
+<script src="/static/page.js?v={{ asset_v }}"></script>
 {% endif %}
 </body>
 </html>

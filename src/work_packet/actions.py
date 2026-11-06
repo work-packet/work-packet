@@ -156,12 +156,13 @@ def drop_draft(pkt):
 
 
 def continue_(pkt, instruction, note=None, archive_outline=None, carry_session=False,
-              force=False, by=None):
+              force=False, by=None, defer=False):
     """Give a stopped packet (``COMPLETED`` too) a new instruction and hand it to the
-    runner. The draft, if any, is removed once the hand-off is recorded."""
+    runner. The draft, if any, is removed once the hand-off is recorded. ``defer``:
+    start only once nobody is working on the project (docs/collaboration.md §5.2)."""
     out = executor.admin(pkt, "continue", note=note, by=by or executor._who(),
                          instruction=instruction, archive_outline=archive_outline,
-                         carry_session=carry_session, force=force)
+                         carry_session=carry_session, force=force, defer=defer)
     if out.code == executor.OK:
         try:
             drop_draft(pkt)
@@ -205,6 +206,22 @@ def pause_project(entry, by=None, reason=None):
     return _summary(entry, "paused", now, later, bad)
 
 
+def claim(entry, by=None):
+    """Opening a project to work on it yourself takes it from the runner
+    (docs/collaboration.md §5.1): every packet it would run is paused with reason
+    ``claimed`` (a running step finishes first), and it stays yours, however long
+    the editor is open, until you hand it back (a hand-off of the root packet, or
+    Resume). Nothing to take: an OK outcome that says so."""
+    from . import schema
+    if not any(m["state"] in ("RUNNABLE", "SLEEPING") for _, m in _tree(entry)):
+        return executor.Outcome(executor.OK, "%s: yours; the runner has nothing of it"
+                                % entry["name"])
+    out = pause_project(entry, by=by, reason=schema.REASON_CLAIMED)
+    if out.code == 0:
+        out = executor.Outcome(out.code, "%s; yours until you hand it back" % out.msg)
+    return out
+
+
 def resume_project(entry, by=None):
     """Give back to the runner what was paused by hand, and take back pauses
     that have not happened yet. Setup, limits and questions are left alone."""
@@ -213,7 +230,12 @@ def resume_project(entry, by=None):
         if executor.pause_request(pkt) is not None:
             executor.withdraw_pause(pkt)
             kept += 1
-        elif resumable(meta):
+            continue
+        try:                    # as it is now: handing back the root hands back a claim
+            meta = pkt.load_status()[0]
+        except Exception:       # noqa: BLE001: unreadable now; the snapshot says what it was
+            pass
+        if resumable(meta):
             out = executor.admin(pkt, "resume", by=by)
             if out.code:
                 bad.append(out.msg)

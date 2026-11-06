@@ -17,6 +17,7 @@ by signalling the whole group (V0 finding 6).
 import asyncio
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import re
@@ -40,7 +41,10 @@ HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "te", "traile
 TRUST = (b"&quot;enableWorkspaceTrust&quot;:true", b"&quot;enableWorkspaceTrust&quot;:false")
 # Localhost links from the workbench go through the board (port-forward plan §3.1).
 SHIM = b'<script src="/static/ide_forward.js"></script>'
+# Which tabs are open and seen (docs/collaboration.md §7.4): the presence beacon.
+PRESENCE_SHIM = b'<script src="/static/ide_presence.js"></script>'
 OPEN = "/__wpk/open"
+VIS = "/__wpk/vis"
 FORWARD_HOLD_S = 300        # a server whose forwarded page was used this recently is not evicted
 KEY = re.compile(r"[0-9a-f]{12}\Z")
 COOKIE_ROOT = re.compile(r"(;\s*path=)/(?=\s*(;|$))", re.I)
@@ -844,16 +848,18 @@ GONE = ("404 this VS Code page is not open on the board; open it again from "
         "the project's page\n")
 
 
-def rewrite_workbench(body, trust_off, shim):
+def rewrite_workbench(body, trust_off, shim, presence=False):
     """VS Code's HTML: the workspace-trust prompt off (V0 finding 4), and on the
     workbench page the localhost-link shim ahead of its first script, so it wraps
-    ``window.open`` before ``workbench.js`` loads (port-forward plan §3.1)."""
+    ``window.open`` before ``workbench.js`` loads (port-forward plan §3.1), and
+    the presence beacon (docs/collaboration.md §7.4)."""
     if trust_off:
         body = body.replace(*TRUST)
-    if shim:
+    add = (SHIM if shim else b"") + (PRESENCE_SHIM if presence else b"")
+    if add:
         i = body.find(b"<script")
         if i >= 0:
-            body = body[:i] + SHIM + body[i:]
+            body = body[:i] + add + body[i:]
     return body
 
 
@@ -866,6 +872,8 @@ async def proxy_http(backends, request):
     if request.url.path == backend.base + OPEN:
         from . import ide_forward
         return await ide_forward.open_link(backends, backend, request)
+    if request.url.path == backend.base + VIS:
+        return await visibility(backend, request)
     ext = ext_resource_url(request.scope.get("raw_path", b"").decode("latin-1")
                            or request.url.path)
     if ext and request.method in ("GET", "HEAD"):
@@ -894,9 +902,13 @@ async def proxy_http(backends, request):
            if k.lower() not in ("connection", "keep-alive", "transfer-encoding",
                                 "content-length")]
     trust_off = not backend.cfg.get("workspace_trust", False)
-    shim = request.url.path == backend.base + "/" and backend.cfg.get("forward", True)
-    if r.headers.get("content-type", "").startswith("text/html") and (trust_off or shim):
-        body = rewrite_workbench(await r.aread(), trust_off, shim)
+    page = request.url.path == backend.base + "/"
+    shim = page and backend.cfg.get("forward", True)
+    from .. import sessionhooks
+    beacon = page and sessionhooks.enabled(backend.cfg, backend.home)
+    if r.headers.get("content-type", "").startswith("text/html") and (
+            trust_off or shim or beacon):
+        body = rewrite_workbench(await r.aread(), trust_off, shim, beacon)
         await r.aclose()
         resp = Response(body, status_code=r.status_code)
         # aread() decoded the body: it goes out as it is now
@@ -907,6 +919,40 @@ async def proxy_http(backends, request):
                              background=BackgroundTask(r.aclose))
     resp.raw_headers = out
     return resp
+
+
+TAB = re.compile(r"[a-z0-9]{1,16}\Z")
+
+
+async def visibility(backend, request):
+    """``POST /ide/<key>/__wpk/vis`` from the presence beacon: ``{tab, visible, gone}``.
+    The tab's presence record goes to the project the server was opened for."""
+    from starlette.responses import Response
+    if request.method != "POST":
+        return Response(status_code=405)
+    try:
+        d = json.loads((await request.body())[:1024] or b"{}")
+        tab = str(d.get("tab") or "")
+    except (ValueError, AttributeError):
+        return Response(status_code=400)
+    if not TAB.match(tab):
+        return Response(status_code=400)
+    from .. import ide_launch, presence, registry
+    project, wpid = ide_launch.packet_of(backend.home, backend.key)
+    e = registry.get(project, backend.home) if project else None
+    if e is None:
+        return Response(status_code=204)
+    src = "ide-web-%s-%s" % (backend.key, tab)
+    if d.get("gone"):
+        presence.end(e["path"], src)
+        return Response(status_code=204)
+    visible = bool(d.get("visible"))
+    cur = ide_launch.current(backend.home, backend.key) or {}
+    user = (request.scope.get("state") or {}).get("user")
+    presence.beat(e["path"], src, kind="ide-web", via="ide-web", attached=True,
+                  visible=visible, active=time.time() if visible else None, wpid=wpid,
+                  launch=cur.get("launch_id"), by=user if isinstance(user, str) else None)
+    return Response(status_code=204)
 
 
 async def proxy_ws(backends, websocket):

@@ -787,21 +787,22 @@ def test_git_waits_once_for_index_lock(tmp_path, monkeypatch):
         workspace._git(str(repo), "add", "a")
 
 
-def test_board_pause_and_open(home, source, tmp_path):
+def test_board_open_claims_it(home, source, tmp_path):
+    """Opening it in VS Code takes it from the runner until you hand it back
+    (docs/collaboration.md §5.1); in this layout, its files open writable."""
     proj, pkt = setup_root(tmp_path, source)
     assert executor.step(proj).code == 0
     c, origin, tok = _board_client("loopback")
     page = c.get("/p/dvs/" + pkt.wpid).text
-    assert "Pause and open" in page and "read-only" in page
-    r = c.post("/p/dvs/ide", headers=origin,
-               data={"csrf": tok, "wpid": pkt.wpid, "pause": "1"})
-    assert r.status_code == 200 and "Paused" in r.text
-    assert pkt.load_status()[0]["state"] == "PAUSED"
+    assert "Pause and open" not in page and "yours until you hand it back" in page
+    r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "wpid": pkt.wpid})
+    assert r.status_code == 200 and "yours until you hand it back" in r.text
+    meta = pkt.load_status()[0]
+    assert meta["state"] == "PAUSED" and meta["reason"] == "claimed"
     assert "files.readonlyInclude" not in load(ide.workspace_path(pkt))["settings"]
-    # paused already: the action is refused and nothing opens
-    r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "wpid": pkt.wpid, "pause": "1"},
-               follow_redirects=False)
-    assert r.status_code == 303 and "nothing+to+pause" in r.headers["location"]
+    # opening again: it is yours already, nothing to take
+    r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "wpid": pkt.wpid})
+    assert r.status_code == 200 and "the runner has nothing of it" in r.text
 
 
 def test_the_window_is_titled_after_the_packet(home, source, tmp_path):
@@ -861,13 +862,16 @@ def test_board_opens_the_packet_folder(home, source):
     plan = new_here(source)
     c, origin, tok = _board_client("loopback")
     page = c.get("/p/sr/" + plan.root).text
-    assert "Pause and open" in page and "The runner works in this folder" in page
+    # opening it takes it from the runner until you hand it back (collaboration.md §5.1)
+    assert "Pause and open" not in page and "yours until you hand it back" in page
     r = c.post("/p/sr/ide", headers=dict(origin, **{"user-agent": LINUX}),
                data={"csrf": tok, "wpid": plan.root, "go": "desktop"})
     assert r.status_code == 200 and "sr packet folder" in r.text
+    assert "yours until you hand it back" in r.text
     assert 'data-kind="local" href="vscode://file%s"' % source in r.text
     r = c.post("/p/sr/ide", headers=dict(origin, **{"user-agent": LINUX}),
                data={"csrf": tok, "go": "desktop"})
     assert 'href="vscode://file%s"' % source in r.text
-    executor.admin(Packet(os.path.join(plan.path, "runs", plan.root)), "pause", None, None, "me")
+    root = Packet(os.path.join(plan.path, "runs", plan.root))
+    assert root.load_status()[0]["reason"] == "claimed"
     assert "The packet folder, <code>%s</code>" % source in c.get("/p/sr/" + plan.root).text

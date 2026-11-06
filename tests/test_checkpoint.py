@@ -118,12 +118,23 @@ def test_missing_ticks_are_named(tmp_path, fake):
     assert out.code == 0 and "not in the outline: 7" in out.msg
 
 
-def test_refused_while_a_step_runs(tmp_path, fake):
+def test_while_a_step_runs_it_is_a_note(tmp_path, fake):
+    """docs/collaboration.md §5.5: no lease, no status change; the step sees a note."""
+    from work_packet import notes
     from work_packet.lease import Lease
     e, pkt = _stepped()
+    before = pkt.load_status()
     lease = Lease(pkt.lease_path, 2, 1, 60).acquire()
     try:
-        out, n = checkpoint.record(pkt, "x")
+        out, n = checkpoint.record(pkt, "parser half done", next_action="write tests",
+                                   by="alice@h")
+        assert out.code == executor.OK and n is None and "left as a note" in out.msg
+        assert pkt.load_status() == before
+        [note] = notes.queued(pkt)
+        assert "alice's checkpoint" in note["text"] and "Next: write tests" in note["text"]
+        rec = pkt.journal().records[-1]
+        assert rec["type"] == "note" and "parser half done" in rec["msg"]
+        out, n = checkpoint.record(pkt, "x", worker="scribe")        # the scribe: refused
         assert out.code == executor.LEASED and n is None
     finally:
         lease.release()

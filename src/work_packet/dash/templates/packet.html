@@ -6,6 +6,7 @@
 {% import "_console.html" as cv %}
 {% import "_vscode.html" as vsm %}
 {% import "_answer.html" as ans with context %}
+{% import "_plan.html" as plm with context %}
 {% block title %}{{ p.short }} · {{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <code>{{ p.short }}</code>{% endblock %}
 {% block main %}
@@ -14,7 +15,42 @@
   {% if p.meta.state == "NEEDS_INPUT" and p.questions and not p.running %}<a class="state NEEDS_INPUT" href="#answer" title="Answer its questions">NEEDS_INPUT</a>
   {% else %}<span class="state {{ p.meta.state }}">{{ p.meta.state or "?" }}</span>{% endif %}
   {% if p.taken_by %}<span class="state PAUSED studio" title="taken for the studio: the runner leaves it alone">IN STUDIO</span>{% endif %}</h1>
+{#- Now (docs/collaboration.md §8.4): who is on it, whose move it is, how much the runner may do. -#}
+<div class="nowline row" id="now">
+  <span><span class="muted">Now:</span> {{ {"runner": "the runner is on it", "you": "you have it", "you + runner": "you and the runner are both on it", "nobody": "nobody is on it"}[p.driver] }}
+    · <span class="muted">next move:</span> <strong>{{ {"you": "yours", "agent": "the runner's", "scheduled": "scheduled", "nobody": "none"}[p.ball.who] }}</strong> ({{ p.ball.text }})
+    {% if p.lifecycle != "open" %}· <span class="state COMPLETED">{{ p.lifecycle|upper }}</span>{% endif %}</span>
+  {% if p.wpid == e.root %}
+  <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    <label class="muted" for="autonomy" title="manual: the runner runs only what you hand it. On hand-off: it works a hand-off until it stops. Runner: it may also act on schedules and children.">Autonomy</label>
+    <select id="autonomy" name="autonomy">{% for a, t in (("manual", "manual"), ("handoff", "on hand-off"), ("runner", "runner")) %}<option value="{{ a }}"{{ " selected" if a == p.autonomy }}>{{ t }}</option>{% endfor %}</select>
+    <button class="mini" name="action" value="autonomy"{% if p.running %} disabled title="a step is running: change it when it ends"{% endif %}>Set</button>
+  </form>
+  {% if p.plan %}{{ plm.chips(p.plan, "") }}{{ plm.menu(e.name, p.plan, "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid) }}{% endif %}
+  {% if not p.running and not p.taken_by %}
+  <form class="act" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act"{% if p.lifecycle == "open" %} data-confirm="Close {{ e.name }}? It leaves the active views; Reopen brings it back."{% endif %}>
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+    {% if p.lifecycle == "open" %}<button class="go" name="action" value="done" title="It is finished: take it off the active views">Mark done</button>
+    <button class="go" name="action" value="drop" title="Close it without finishing it">Drop</button>
+    {% else %}<button class="go" name="action" value="reopen">Reopen</button>{% endif %}
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
 {% set sbase = "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid ~ "/studio" %}
+{% if autoopen %}
+{#- Just made, to work on yourself (docs/collaboration.md W1): open it now. The form
+    is the fallback when the script does not run. -#}
+<form class="act panel row" id="autoopen" method="post" action="{{ sbase ~ '/open' if autoopen == 'studio' else '/p/' ~ (e.name|urlencode) ~ '/ide' }}" style="margin-bottom:12px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  {% if autoopen != "studio" %}<input type="hidden" name="wpid" value="{{ p.wpid }}">
+  <input type="hidden" name="go" value="{{ 'web' if autoopen == 'ide-web' else 'desktop' }}">{% endif %}
+  <span>Opening it {{ "in the studio" if autoopen == "studio" else "in VS Code" ~ (" (in the browser)" if autoopen == "ide-web" else "") }}…</span>
+  <button class="go primary">Open it</button>
+</form>
+
+{% endif %}
 {% if p.taken_by %}
 <div class="panel" style="margin-bottom:12px">In studio ({{ p.taken_by }}) since {{ p.taken|when }}: the runner leaves it alone until it is released.
   {% if p.taken_by == user %}<a href="{{ sbase }}"><strong>Return to the studio</strong></a>{% else %}<a href="{{ sbase }}">See the studio</a>{% endif %}</div>
@@ -41,8 +77,8 @@
 {{ rpm.panel(e, p) }}
 {% if p.wpid == e.root and not p.running and st in ("COMPLETED", "NEEDS_INPUT", "PAUSED", "FAILED") %}
 <div class="panel row" style="margin:0 0 12px">
-  {% if p.meta.reason == "setup" %}<a href="/p/{{ e.name|urlencode }}/compose"><strong>Set it up</strong></a><span class="muted">: instruction, inputs, settings and a shell, then hand it off.</span>
-  {% else %}<a href="/p/{{ e.name|urlencode }}/compose"><strong>Next batch</strong></a><span class="muted">: {{ "it is done; " if st == "COMPLETED" }}give it a new instruction, change files in a shell, and hand it off.</span>{% endif %}
+  {% if p.meta.reason == "setup" %}<a href="/p/{{ e.name|urlencode }}/compose"><strong>Hand to runner…</strong></a><span class="muted">: write what it should do (inputs, settings and a shell are there too), then hand it off. Or work on it yourself: open it in VS Code below.</span>
+  {% else %}<a href="/p/{{ e.name|urlencode }}/compose"><strong>Hand off…</strong></a><span class="muted">: {{ "the runner finished; " if st == "COMPLETED" }}give it a new instruction, change files in a shell, and hand it off.</span>{% endif %}
 </div>
 {% endif %}
 {% if p.questions and not p.running and not p.taken_by %}
@@ -54,7 +90,8 @@
   {% if p.meta.reason %}<p class="{{ 'err' if st == 'FAILED' }}">{{ p.meta.reason }}</p>{% endif %}
   <label class="muted" for="note">Note for the next step (optional)</label>
   <textarea id="note" name="note"></textarea>
-  <div class="row"><button class="go primary" name="action" value="handoff">Hand off to the runner</button></div>
+  <div class="row"><button class="go primary" name="action" value="handoff">Hand off to the runner</button>
+    <label class="muted" style="font-size:12.5px" title="It waits while you (or a Claude session) work on the project, and starts when you leave"><input type="checkbox" name="after" value="1"> after I leave</label></div>
 </form>
 {% elif st in ("RUNNABLE", "SLEEPING") and not p.taking %}
 <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:12px">
@@ -71,11 +108,18 @@
 <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/ide" style="margin-bottom:12px">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
   <input type="hidden" name="wpid" value="{{ p.wpid }}">
-  {% if st in ("RUNNABLE", "SLEEPING") %}<button class="go" name="pause" value="1"{% if p.running %} disabled title="a step is running: pause after it ends"{% endif %}>Pause and open</button>
-  {% endif %}<button class="go" name="go" value="desktop">Open in VS Code</button>
+  <button class="go" name="go" value="desktop"{% if st in ("RUNNABLE", "SLEEPING") %} title="Takes it from the runner{{ ' after its running step' if p.running }}: it is yours until you hand it back"{% endif %}>Open in VS Code</button>
   {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
-  <span class="muted ide-hint" style="font-size:12px">{% if packet_layout(e.path) %}{% if p.running or st in ("RUNNABLE", "SLEEPING") %}The runner works in this folder: pause it before you edit.{% else %}The packet folder, <code>{{ packet_folder(e.path) }}</code>.{% endif %}{% elif p.running or st in ("RUNNABLE", "SLEEPING") %}The runner owns it: files open read-only until you pause it.{% else %}Its worktrees, <code>state/</code> and the packet folder.{% endif %}</span>
+  <span class="muted ide-hint" style="font-size:12px">{% if p.running %}Opening it takes it from the runner once its running step ends; it is yours until you hand it back.{% elif st in ("RUNNABLE", "SLEEPING") %}Opening it takes it from the runner: it is yours until you hand it back.{% elif packet_layout(e.path) %}The packet folder, <code>{{ packet_folder(e.path) }}</code>.{% else %}Its worktrees, <code>state/</code> and the packet folder.{% endif %}</span>
 </form>
+{% endif %}
+{% if p.hooks and p.hooks != "installed" %}
+<form class="act row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin:-4px 0 12px;font-size:12.5px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <span class="muted" title="They tell the board when Claude in this folder is working, waiting for you or asking permission (docs/collaboration.md §4.3)">Claude Code hooks in the folder: <strong>{{ {"installed": "installed", "missing": "not installed", "modified": "changed by hand", "unreadable": "settings file unreadable"}[p.hooks] }}</strong></span>
+  <button class="mini" name="action" value="hooks">{{ "Install" if p.hooks == "missing" else "Repair" }}</button>
+</form>
+{{ vsm.hooks_switch(hooks_on, "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid, csrf) }}
 {% endif %}
 {% if vsc and (vsc[0] or vsc[1]) %}
 <h2 id="vscode-sessions">VS Code sessions</h2>
@@ -84,9 +128,8 @@
 {{ vsm.table(vsc[1]) }}{% endif %}
 {{ vsm.scribe_switch(scribe_on, "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid ~ "#vscode-sessions", csrf) }}
 {% endif %}
-{% if not p.running and p.meta.reason != "setup" %}
 <details class="panel" id="checkpoint" style="margin-bottom:12px">
-  <summary><strong>Update status</strong> <span class="muted">where it stands after work by hand; the board's card shows it</span></summary>
+  <summary><strong>Checkpoint</strong> <span class="muted">{% if p.running %}a step is running: this becomes a note it sees, and the status stays as it is{% else %}where it stands after work by hand; the board's card shows it{% endif %}</span></summary>
   <form class="act" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act">
     <input type="hidden" name="csrf" value="{{ csrf or '' }}">
     <label class="muted" for="cp-status">Status (one line)</label>
@@ -96,31 +139,9 @@
     <label class="muted" for="cp-body">What changed, decisions, open questions (optional)</label>
     <textarea id="cp-body" name="body"></textarea>
     <div class="row"><button class="go primary" name="action" value="checkpoint">Record</button>
-      {% if vsc and vsc[0] %}<button class="go" type="button" id="cp-draft" title="draft it from the end of this packet's latest VS Code session (a small model call); you can edit it before you record it">Draft from session</button><span class="muted" id="cp-msg" style="font-size:12px"></span>{% endif %}</div>
+      {% if vsc and vsc[0] %}<button class="go" type="button" id="cp-draft" data-url="/p/{{ e.name|urlencode }}/{{ p.wpid }}/checkpoint/draft" title="draft it from the end of this packet's latest VS Code session (a small model call); you can edit it before you record it">Draft from session</button><span class="muted" id="cp-msg" style="font-size:12px"></span>{% endif %}</div>
   </form>
 </details>
-{% if vsc and vsc[0] %}<script>
-(function () {
-  var b = document.getElementById("cp-draft"), msg = document.getElementById("cp-msg");
-  b.addEventListener("click", function () {
-    b.disabled = true; msg.textContent = " drafting…";
-    var csrf = b.form.querySelector("[name=csrf]").value;
-    fetch("/p/{{ e.name|urlencode }}/{{ p.wpid }}/checkpoint/draft",
-          {method: "POST", headers: {"x-csrf-token": csrf}})
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d.error) { msg.textContent = " " + d.error; return; }
-        document.getElementById("cp-status").value = d.status || "";
-        document.getElementById("cp-next").value = d.next || "";
-        document.getElementById("cp-body").value = d.body || "";
-        msg.textContent = " drafted: check it, then Record";
-      })
-      .catch(function () { msg.textContent = " could not draft"; })
-      .finally(function () { b.disabled = false; });
-  });
-})();
-</script>{% endif %}
-{% endif %}
 {{ box(e, p.wpid, st, p.running, p.notes) }}
 <p>{% if not p.running %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live">Live view</a>: the last step's activity, the outline and the steps done. {% endif %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/plan">Plan</a>: the outline as a tree, and how it changed step by step.</p>
 <div class="grid2">
@@ -174,6 +195,16 @@
 {% if tk.tools %}<h3 id="context">Where the context went</h3>{{ tkm.tools(tk.tools) }}{% endif %}
 {% endif %}
 
+{% if p.timeline %}
+<h2 id="timeline">Timeline</h2>
+<p class="muted" style="font-size:12.5px;margin-top:-6px">Everything that happened, by whoever did it: the runner's steps, your checkpoints and hand-offs, sessions in VS Code. The runner's detail is under Steps.</p>
+<ul class="list timeline">
+{% for ev in p.timeline[:25] %}<li class="tl-{{ ev.kind }}"><span class="muted" style="white-space:nowrap">{{ ev.t|epoch }}</span> <strong>{{ ev.actor }}</strong> <span class="what">{{ ev.text }}</span></li>{% endfor %}
+</ul>
+{% if p.timeline|length > 25 %}<details><summary class="muted">{{ p.timeline|length - 25 }} older</summary><ul class="list timeline">
+{% for ev in p.timeline[25:] %}<li class="tl-{{ ev.kind }}"><span class="muted" style="white-space:nowrap">{{ ev.t|epoch }}</span> <strong>{{ ev.actor }}</strong> <span class="what">{{ ev.text }}</span></li>{% endfor %}
+</ul></details>{% endif %}
+{% endif %}
 <h2 id="steps">Steps</h2>
 {% if p.steps %}
 <div class="wrap"><table>

@@ -39,6 +39,28 @@ class ShellError(Exception):
     pass
 
 
+PRESENCE_BEAT_S = 60
+
+
+def _presence(s, gone=False):
+    """An attached shell is someone working on its project (docs/collaboration.md
+    §4.2): its presence record, refreshed while they type; ended on detach."""
+    from .. import presence, registry
+    s.beat_at = time.monotonic()
+    try:
+        e = registry.get(s.project)
+        if e is None:
+            return
+        src = "shell-%s" % s.sid
+        if gone:
+            presence.end(e["path"], src)
+        else:
+            presence.beat(e["path"], src, kind="shell", via="shell", attached=True,
+                          by=s.by if isinstance(s.by, str) else None)
+    except Exception as ex:             # noqa: BLE001: presence never breaks a shell
+        log.warning("shell presence: %s", ex)
+
+
 class Session:
     def __init__(self, sid, project, cwd, by, pid, fd):
         self.sid, self.project, self.cwd, self.by = sid, project, cwd, by
@@ -49,6 +71,7 @@ class Session:
         self.queue = None            # the attached socket's outbox
         self.detached_at = time.monotonic()
         self.exit = None
+        self.beat_at = 0.0           # presence: when it last said someone types here
 
     def info(self):
         return {"sid": self.sid, "project": self.project, "cwd": self.cwd, "by": self.by,
@@ -209,16 +232,20 @@ class Shells:
             s.queue.put_nowait(("ctl", {"taken": True}))
             s.queue.put_nowait(None)
         s.queue = asyncio.Queue()
+        _presence(s)
         return s.queue, bytes(s.buf)
 
     def detach(self, s, queue):
         if s.queue is queue:
             s.queue = None
             s.detached_at = time.monotonic()
+            _presence(s, gone=True)
 
     def write(self, s, data):
         if s.fd is None:
             return
+        if time.monotonic() - s.beat_at > PRESENCE_BEAT_S:
+            _presence(s)                # typing: still here
         try:
             os.write(s.fd, data)
         except OSError:

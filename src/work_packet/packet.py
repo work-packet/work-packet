@@ -81,6 +81,15 @@ class Packet:
         return out
 
 
+def user():
+    """The person running this: a new packet's ``owner`` (docs/collaboration.md §3 P2)."""
+    import getpass
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):
+        return "unknown"
+
+
 def new_status(wpid, project, model, updated, parent=None, spawn_key=None):
     """Status for a packet that has never run."""
     return {

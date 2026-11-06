@@ -129,6 +129,7 @@ class Runner:
                 try:
                     ide_sessions.local_pass(self.home, collectors)
                     scribe.pass_once(self.home, cfg)
+                    _reap_presence(self.home)
                     if time.time() - pruned > 3600:
                         ide_sessions.prune(self.home, time.time(),
                                            keep_days=cfg.get("sessions_keep_days") or 30)
@@ -164,3 +165,16 @@ class Runner:
             except Exception:
                 log.exception("pull request pass failed")
             self._stopping.wait(self.watch_tick)
+
+
+def _reap_presence(home):
+    """Presence records of sessions on this host whose process is gone
+    (docs/collaboration.md §4.2): their project is no longer attended."""
+    import socket
+    from .. import presence, registry
+    host = socket.gethostname()
+    for e in registry.entries(home):
+        try:
+            presence.reap(e["path"], host)
+        except OSError:
+            pass

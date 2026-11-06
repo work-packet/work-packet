@@ -119,11 +119,15 @@ def test_cli_new_here(home, source):
 
 def _no_ide_hint(pages):
     """Intended: what the VS Code button opens differs (the packet folder in the
-    packet layout), and its hint says so."""
+    packet layout), and its hint says so; so does the folder a step's conversation
+    is resumed in (docs/collaboration.md §7.3)."""
     import re
     hint = re.compile(r'<span class="muted ide-hint"[^>]*>.*?</span>')
-    return {u: (st, hint.sub("@IDE-HINT@", b) if isinstance(b, str) else b)
-            for u, (st, b) in pages.items()}
+    resume = re.compile(r'<details class="panel" id="resume".*?</details>', re.S)
+
+    def strip(b):
+        return resume.sub("@RESUME@", hint.sub("@IDE-HINT@", b))
+    return {u: (st, strip(b) if isinstance(b, str) else b) for u, (st, b) in pages.items()}
 
 
 def _crawl_one(tmp_path, monkeypatch, packet):
@@ -246,7 +250,7 @@ def test_convert_a_nested_project(home, tmp_path, monkeypatch):
     p = convert.convert("sr")
     assert p["checks"] == []
     assert os.path.isfile(p["backup"])
-    assert sorted(os.listdir(folder)) == [".work-packet", "sr.wp.md"]
+    assert sorted(os.listdir(folder)) == [".claude", ".work-packet", "sr.wp.md"]
     dot = str(folder / ".work-packet")
     assert registry.get("sr")["path"] == dot
     assert sorted(os.listdir(os.path.join(dot, "runs"))) == sorted(
@@ -289,7 +293,7 @@ def test_convert_in_place_and_refusals(home, tmp_path):
     (folder / "notes.txt").write_text("mine\n")
     p = convert.convert("sr")
     assert p["in_place"] and p["checks"] == []
-    assert sorted(os.listdir(folder)) == [".work-packet", "notes.txt", "sr.wp.md"]
+    assert sorted(os.listdir(folder)) == [".claude", ".work-packet", "notes.txt", "sr.wp.md"]
     import pytest
     with pytest.raises(convert.ConvertError, match="already"):
         convert.convert("sr")
@@ -368,7 +372,8 @@ def test_dash_new_makes_packets(home, source, tmp_path):
     (d / "c" / "notes.txt").write_text("x\n")
     ok, msg = _post_new(c, name="c", dir=str(d))
     assert ok, msg
-    assert sorted(os.listdir(d / "c")) == [".work-packet", "c.wp.md", "notes.txt"]
+    # .claude/: the hooks that report Claude sessions to the board (collaboration.md §4.3)
+    assert sorted(os.listdir(d / "c")) == [".claude", ".work-packet", "c.wp.md", "notes.txt"]
     # Refusals leave nothing behind.
     (d / "e").mkdir()
     (d / "e" / "f").write_text("x\n")

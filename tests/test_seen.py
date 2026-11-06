@@ -71,7 +71,8 @@ def test_overview_lists_finished_work_until_seen(tmp_path, fake, monkeypatch):
     executor.admin(held, "pause", by="wpkd", reason="over the day's cap", stopped=True)
     c = _client()
     html = c.get("/").text
-    assert html.count('class="state COMPLETED">DONE<') == 2 and ">STOPPED<" in html
+    # Finished by the runner: yours to review (docs/collaboration.md §4.1).
+    assert html.count('>REVIEW<') == 2 and ">STOPPED<" in html
     assert "over the day&#39;s cap" in html or "over the day's cap" in html
     assert 'data-pick-all="form"' in html and "Clear all finished (3)" in html
 
@@ -92,7 +93,7 @@ def test_overview_lists_finished_work_until_seen(tmp_path, fake, monkeypatch):
     r = c.post("/seen", data={"all": "1"}, follow_redirects=False)
     assert _flash(r) == ("marked 1 seen", True)
     html = c.get("/").text
-    assert ">DONE<" not in html and ">STOPPED<" not in html and "Clear all finished" not in html
+    assert ">REVIEW<" not in html and ">STOPPED<" not in html and "Clear all finished" not in html
     r = c.post("/seen", data={}, follow_redirects=False)
     assert _flash(r)[1] is False
 
@@ -103,13 +104,13 @@ def test_a_next_task_that_finishes_comes_back(tmp_path, fake, monkeypatch):
     e, pkt = _done("a")
     c = _client()
     c.get("/p/a/" + pkt.wpid)                  # the packet page marks it seen too
-    assert ">DONE<" not in c.get("/").text
+    assert ">REVIEW<" not in c.get("/").text
     _at(monkeypatch, "2026-10-28T12:00:00Z")
     assert actions.continue_(pkt, "Read state/count.md (0 if missing), add one.").code == 0
-    assert ">DONE<" not in c.get("/").text     # running, not stopped
+    assert ">REVIEW<" not in c.get("/").text     # running, not stopped
     scheduler.tick([e], until_idle=True)
     html = c.get("/").text
-    assert html.count(">DONE<") == 1 and "task 2" in html
+    assert html.count(">REVIEW<") == 1 and "task 2" in html
 
 
 def test_waits_for_the_whole_project(tmp_path, fake, monkeypatch):

@@ -25,3 +25,13 @@
   <button class="go" name="on" value="{{ '0' if scribe_on else '1' }}">Turn {{ "off" if scribe_on else "on" }}</button>
 </form>
 {%- endmacro %}
+
+{#- Claude Code hooks in packet folders (docs/collaboration.md §4.3, §10): one switch for the board. -#}
+{% macro hooks_switch(hooks_on, back, csrf) -%}
+<form class="act row" method="post" action="/sessions/hooks" style="margin:6px 0 12px;font-size:12.5px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="back" value="{{ back }}">
+  <span class="muted">Claude Code hooks in packet folders: <strong>{{ "on" if hooks_on else "off" }}</strong>. {% if hooks_on %}The board adds them to each packet folder's <code>.claude/settings.local.json</code> (your own hooks there are kept), so it can tell when Claude is working, waiting for you or asking permission, in any editor or terminal. They record times and states, never what was said.{% else %}Without them the board can tell only roughly whether Claude is waiting for you.{% endif %}</span>
+  <button class="go" name="on" value="{{ '0' if hooks_on else '1' }}">Turn {{ "off" if hooks_on else "on" }}</button>
+</form>
+{%- endmacro %}

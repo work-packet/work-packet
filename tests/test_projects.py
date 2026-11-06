@@ -164,23 +164,31 @@ def test_ps_each_state(home, capsys):
                   "resume_expr": "in 1 hour"}),
         ("pause", {"state": "PAUSED", "reason": "by hand"}),
         ("fail", {"state": "FAILED", "reason": "no input"}),
-        ("done", {"state": "COMPLETED"}),
+        ("done", {"state": "COMPLETED", "stopped": "2026-10-21T17:00:00Z"}),
+        ("closed", {"state": "COMPLETED"}),
     ]:
         plans[name] = new(name, tz="UTC")
         _set(root_of(plans[name]), **change)
+    assert executor.mark(root_of(plans["closed"]), "done").code == 0
     assert main(["ps"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[0].split() == ["PROJECT", "WPID", "STATE", "STEP", "NEXT", "LAST", "SUMMARY"]
+    assert out[0].split() == ["PROJECT", "WPID", "BALL", "STEP", "NEXT", "LAST", "SUMMARY"]
     rows = {line.split()[0]: line for line in out[1:]}
-    assert set(rows) == {"run", "sleep", "late", "pause"}       # finished ones hidden
-    assert "RUNNABLE" in rows["run"] and "due now" in rows["run"]
+    # Marked done: hidden. Finished by the runner or failed: yours to look at.
+    assert set(rows) == {"run", "sleep", "late", "pause", "fail", "done"}
+    assert "agent:queued" in rows["run"] and "due now" in rows["run"]
+    assert "scheduled:scheduled" in rows["sleep"]
     assert "2026-10-31 18:00 (in 10d)" in rows["sleep"]
     assert "2026-10-21 17:00 (due)" in rows["late"]
-    assert "PAUSED" in rows["pause"] and "[by hand]" in rows["pause"]
+    assert "you:parked" in rows["pause"] and "[by hand]" in rows["pause"]
+    assert "you:failure" in rows["fail"] and "[no input]" in rows["fail"]
+    assert "you:review" in rows["done"]
     assert plans["run"].root[:8] in rows["run"]
-    main(["ps", "--all"])
-    rows = {line.split()[0]: line for line in capsys.readouterr().out.splitlines()[1:]}
-    assert "[no input]" in rows["fail"] and "COMPLETED" in rows["done"]
+    main(["ps", "--all", "--raw"])
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].split()[2] == "STATE"
+    rows = {line.split()[0]: line for line in out[1:]}
+    assert "COMPLETED" in rows["done"] and "COMPLETED" in rows["closed"]   # done keeps the state
     main(["ps", "--project", "sleep"])
     assert len(capsys.readouterr().out.splitlines()) == 2
     assert main(["ps", "--project", "nope"]) == 4
@@ -193,7 +201,7 @@ def test_ps_shows_children_indented(home, capsys):
     _set(root_of(plan), state="RUNNABLE")        # keep the project active
     lines = views.ps(registry.entries())
     assert len(lines) == 3 and "  " + lines[2].split()[1] in lines[2]
-    assert lines[2].split()[2] == "RUNNABLE" and "step" not in lines[2]
+    assert lines[2].split()[2] == "agent:queued" and "step" not in lines[2]
 
 
 def test_relative():

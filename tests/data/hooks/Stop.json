@@ -1,0 +1,12 @@
+{
+ "session_id": "00000000-0000-4000-8000-000000000001",
+ "transcript_path": "@HOME@/.claude/projects/-pkt/00000000-0000-4000-8000-000000000001.jsonl",
+ "cwd": "@PKT@",
+ "prompt_id": "00000000-0000-4000-8000-0000000000aa",
+ "permission_mode": "default",
+ "hook_event_name": "Stop",
+ "stop_hook_active": false,
+ "last_assistant_message": "SENTINEL-REPLY do not store",
+ "background_tasks": [],
+ "session_crons": []
+}

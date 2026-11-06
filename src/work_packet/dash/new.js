@@ -243,13 +243,22 @@
   }
 
   if (form) {
+    // Web or desktop VS Code: as you chose last time on this board.
+    var pick = form.elements.ide;
+    if (pick && pick.tagName === "SELECT") {
+      try { var was = localStorage.getItem("wpk.new.ide"); if (was) pick.value = was; } catch (x) { /* private */ }
+    }
     form.addEventListener("submit", function (e) {
       var b = e.submitter;
-      if (b && b.value !== "create") return;
+      if (b && b.value !== "create" && b.name !== "start") return;
       if (!window.fetch || !window.WebSocket) return;     // the plain post still works
       e.preventDefault();
       var body = new URLSearchParams(new FormData(form));
       body.set("action", "create");
+      if (b && b.name === "start") body.set("start", b.value);
+      if (form.elements.ide && form.elements.ide.tagName === "SELECT") {
+        try { localStorage.setItem("wpk.new.ide", form.elements.ide.value); } catch (x) { /* private */ }
+      }
       enable(false);
       fetch("/new", {method: "POST", body: body, credentials: "same-origin",
                      headers: {"accept": "application/json", "x-csrf-token": panel.dataset.csrf}})

@@ -4,7 +4,7 @@
 {% block main %}
 <h1>Opening in VS Code</h1>
 <div class="panel">
-  {% if paused %}<p class="flash ok">Paused ({{ paused.msg }}). It is yours until you hand it off.</p>{% endif %}
+  {% if paused %}<p class="flash ok">{{ paused.msg }}.</p>{% endif %}
   <p><strong>{{ op.label }}</strong><br><code>{{ op.path }}</code></p>
   {% if op.note %}<p class="muted">{{ op.note }}.</p>{% endif %}
   {% if op.owner == "runner" and op.kind == "folder" %}<p class="err">The runner works in this folder: your edits and a step's may mix. Pause it to edit.</p>{% elif op.owner == "runner" %}<p class="err">The runner owns this packet: its files open read-only (a guard, not a lock). Pause it to edit.</p>{% endif %}

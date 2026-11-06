@@ -196,7 +196,8 @@ def test_dash(forge, tmp_path):
     r = c.post("/new", data={"starter": "issue", "action": "create", "recipe": rec,
                              "name": "fix7", "objective": "Edited objective.\n"},
                follow_redirects=False)
-    assert r.headers["location"].startswith("/p/fix7/compose"), r.headers["location"]
+    root = registry.get("fix7")["root"]                  # nothing started: its page
+    assert r.headers["location"].startswith("/p/fix7/%s?" % root), r.headers["location"]
     e = registry.get("fix7")
     assert open(os.path.join(e["path"], "prompt.md")).read() == "Edited objective.\n"
     page = c.get("/p/fix7").text
@@ -685,7 +686,8 @@ def test_dash_create_runs_as_a_job(home, source, tmp_path, fake_ivpm):
         assert r.status_code == 200, r.text
         job = r.json()
         got = _job_events(c, token, base, job["ws"])
-        assert got[-1]["ok"] and got[-1]["url"].startswith("/p/dv-solve/compose?")
+        assert got[-1]["ok"] and got[-1]["url"].startswith(
+            "/p/dv-solve/%s?" % registry.get("dv-solve")["root"])
         assert [e["n"] for e in got] == list(range(1, len(got) + 1))
         assert ("deps", "ok") in _steps(got)
         assert (tmp_path / "t" / "dv-solve" / "packages" / "python" / "marker").exists()

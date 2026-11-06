@@ -94,7 +94,23 @@ def owner(pkt):
 
 
 def resolve(t, repo=None, packet=False):
-    """What ``wpk ide <t> [<repo>] [--packet]`` opens."""
+    """What ``wpk ide <t> [<repo>] [--packet]`` opens. Its code folders get the
+    Claude Code hooks that report sessions to the board (``sessionhooks``)."""
+    op = _resolve(t, repo, packet)
+    from . import sessionhooks
+    sessionhooks.ensure(hook_folders(op), load_config(), home=registry.home())
+    return op
+
+
+def hook_folders(op):
+    """Where Claude runs when ``op`` is open: its code folders, not ``state/`` or
+    the packet's own directory (Claude takes its settings from the folder it starts in)."""
+    if op.folders:
+        return [p for n, p in op.folders if n not in ("state", "packet", "project")]
+    return [op.path] if os.path.isdir(op.path) else []
+
+
+def _resolve(t, repo=None, packet=False):
     try:
         tg = setup.target(t)
     except setup.SetupError as e:

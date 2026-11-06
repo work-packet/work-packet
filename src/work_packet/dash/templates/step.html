@@ -27,6 +27,15 @@ pre.diff .hunk { background: var(--hunk); color: var(--muted); }
 </div>
 <h1>Step {{ s.label }} <span class="state {{ s.info.outcome }}{{ ' pulse' if s.info.outcome == 'running' }}">{{ s.info.outcome }}</span>{% if s.info.worker and s.info.worker != "agent" %} <span class="badge" title="{{ s.info.worker|worker_title }}">{{ s.info.worker }}</span>{% endif %}</h1>
 {% if s.info.why %}<p class="err">{{ s.info.why }}</p>{% endif %}
+{% if s.resume %}
+<details class="panel" id="resume" style="margin-bottom:12px">
+  <summary><strong>Continue this conversation yourself</strong> <span class="muted">the step was a Claude session; pick it up in a terminal (in VS Code, say), on a copy, so the step's record stays as it was</span></summary>
+  <p style="margin:6px 0 2px">Carry on from where the step left off:</p>
+  <code class="fix" style="display:block;white-space:pre-wrap">{{ s.resume.fork }}</code>
+  <p style="margin:8px 0 2px">Ask it why it did what it did, without changing anything (plan mode):</p>
+  <code class="fix" style="display:block;white-space:pre-wrap">{{ s.resume.why }}</code>
+</details>
+{% endif %}
 
 <div class="grid2">
   <section>

@@ -271,6 +271,10 @@ present, unknown keys are errors.
 | `wait_mode` | `all` \| `any` | set exactly when `waiting_on` is |
 | `taken_by` | string | optional: who has taken the packet for the studio (`wpk take`, docs/interaction.md §6b). While set, the runner leaves it alone and only a pause changes it; a take of a `RUNNABLE` or `SLEEPING` packet makes it `PAUSED` with reason `studio`. Removed by `wpk release` |
 | `taken` | timestamp | set exactly when `taken_by` is: when the take happened |
+| `lifecycle` | string | optional: `open`, `done` or `dropped`, a person's say (`wpk done`, `drop`, `reopen`; docs/collaboration.md §4.1). A hand-off sets `open`. Missing on a `COMPLETED` packet means done (packets from before the field) |
+| `autonomy` | string | optional: `manual`, `handoff` (the default) or `runner`: how much the runner may do on its own (`wpk autonomy`, docs/collaboration.md §4.4) |
+| `review` | string | optional, with `autonomy: runner`: `each`, `failure` or `never`. With `never`, the runner finishing means done |
+| `owner` | string | optional: the accountable person, a user name; written when the packet is made |
 
 `NEEDS_INPUT` means the last step asked a question (`ask:`, §4.2) and the
 packet waits for a hand-off (`wpk handoff`); nothing runs it until then.
@@ -361,12 +365,13 @@ a warning, not an error; the executor ignores it.
 | `step-nudge` | the model's turn ended with `.pending/` incomplete; the session is resumed once | `step`, `attempt`, `why` |
 | `commit-begin` | before any committed file changes | `step`, `decision` (below) |
 | `commit-end` | after every committed file is in place | `step`; optional `cost_usd`, `tokens`, `duration_s` |
-| `admin` | `pause`, `resume`, `wake` (a note's `--wake`), other changes made through `wpk` | `op`, `by` |
-| `handoff` | `wpk handoff`: `NEEDS_INPUT`, `PAUSED` or `FAILED` to `RUNNABLE`; `wpk next` (the next batch, docs/dash-tasks.md §6): those or `COMPLETED` to `RUNNABLE`, with a new instruction | `by`, `from`, `to`; optional `asked` (the one-line summary, from `NEEDS_INPUT`), `questions` (the normalised list), `answers` (`{id: text}`), `note`, `heads` (`{repo: sha}` of the packet's `work/` repos) and `commits` (`{repo: ["sha subject", …]}` since the last step's `heads`). A next batch adds `batch` (2, 3, …), `instruction`, `outline` (where the finished `state/outline.md` went) and `carry_session`. The step prompt shows every `handoff` after the last `commit-end` under "Hand-off" |
+| `admin` | `pause`, `resume`, `wake` (a note's `--wake`), `done`, `drop`, `reopen`, `autonomy` (docs/collaboration.md §4.1; `note`, and `autonomy`/`review` for that op, are optional), other changes made through `wpk` | `op`, `by` |
+| `handoff` | `wpk handoff`: `NEEDS_INPUT`, `PAUSED` or `FAILED` to `RUNNABLE`; `wpk next` (the next batch, docs/dash-tasks.md §6): those or `COMPLETED` to `RUNNABLE`, with a new instruction | `by`, `from`, `to`; optional `asked` (the one-line summary, from `NEEDS_INPUT`), `questions` (the normalised list), `answers` (`{id: text}`), `note`, `heads` (`{repo: sha}` of the packet's `work/` repos) and `commits` (`{repo: ["sha subject", …]}` since the last step's `heads`). A next batch adds `batch` (2, 3, …), `instruction`, `outline` (where the finished `state/outline.md` went) and `carry_session`. The step prompt shows every `handoff` after the last `commit-end` under "Hand-off". `defer` (also on `admin` resume and wake): `false` for a go-ahead made now, which starts the runner even while someone works on the project; `true` waits until they leave (docs/collaboration.md §5.2). `reopened`: the packet was done or dropped |
 | `config` | `wpk allow`, `deny`, `set` changed `project.toml` (root packet only) | `by`, `changes` (a list of strings) |
 | `seed` | the root's first step copied the project's `state/` and `prompt.md` into it (docs/setup.md §10); at most once, and only if something was copied | `files` (the paths written) |
 | `request` | a request to another project (docs/delegation.md): `sent` (requester: `to`, `title`), `received` (the delegate's root: `from`, `title`), `done` (requester: `outcome`, `note`, the id of the note that carried the result) | `op`, `id`, `by` |
 | `seen` | someone looked at the packet after its run stopped (`wpk seen`, the board) | `by` |
+| `session-start`, `session-end` | an interactive Claude session in the packet's folder began or ended (its hooks, docs/collaboration.md §4.3) | `by`, `session`, `actor` (`{kind, via, session}`); optional `source` (start) and `reason` (end). Never what was said |
 | `note` | anything else worth recording (stale lease removed, ...) | `msg` |
 
 `decision` holds everything needed to finish the commit without the model:

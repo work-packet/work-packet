@@ -1,0 +1,26 @@
+{#- Open ▾ (docs/collaboration.md §8.3): work on a project yourself, from wherever its
+    card is. Import "with context" (csrf, ide, ide_web). ``c``: a card. -#}
+{% macro menu(c, cls="mini") -%}
+{% if c.root and c.lifecycle == "open" %}
+<details class="openmenu">
+  <summary class="{{ cls }}" title="Work on it yourself in VS Code: it is yours, and the runner leaves it, until you hand it back">Open ▾</summary>
+  <div class="openitems">
+    {% if ide.desktop or ide_web == "ok" %}
+    <form class="act" method="post" action="/p/{{ c.name|urlencode }}/ide">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      <input type="hidden" name="wpid" value="{{ c.root.wpid }}">
+      {% if ide_web == "ok" %}<button class="{{ cls }}" name="go" value="web" formtarget="_blank">VS Code (browser)</button>{% endif %}
+      {% if ide.desktop %}<button class="{{ cls }}" name="go" value="desktop">VS Code (desktop)</button>{% endif %}
+    </form>
+    {% endif %}
+    {% if not c.running %}
+    <form class="act" method="post" action="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}/studio/open">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+      <button class="{{ cls }}">Studio</button>
+    </form>
+    {% endif %}
+    <a class="{{ cls }}" href="/p/{{ c.name|urlencode }}/compose">Shell and files</a>
+  </div>
+</details>
+{% endif %}
+{%- endmacro %}

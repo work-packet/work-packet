@@ -71,7 +71,7 @@ def test_tree_mapping(pk):
     assert not {".work-packet", ".git", "node_modules", ".studio"} & set(top)
     shown = [n for n in tree.tree(e, e["root"], show_hidden=True)["files"]]
     assert {n["name"]: n.get("hidden") for n in shown if n["dir"]} == {
-        ".git": True, "node_modules": True, "src": None}
+        ".claude": True, ".git": True, "node_modules": True, "src": None}
     assert ".work-packet" not in [n["name"] for n in shown]
     assert [n["path"] for n in tree.listing(e, e["root"], "src")] == ["src/cli.py"]
 

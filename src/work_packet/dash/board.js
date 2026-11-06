@@ -47,14 +47,22 @@
   document.addEventListener("wpk:swap", restore);
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", restore); else restore();
 
-  // Drag a card onto a board in the side tab. live.js leaves the page alone meanwhile.
-  var dragged = null;
-  function target(e) { return e.target.closest && e.target.closest(".side [data-board]"); }
-  function clear() { document.querySelectorAll(".side .drop").forEach(function (x) { x.classList.remove("drop"); }); }
+  // Drag a card onto a board in the side tab, or onto a column (docs/collaboration.md
+  // §8.2): Done marks it done, Parked pauses the runner, Working: agent opens the
+  // hand-off. live.js leaves the page alone meanwhile.
+  var dragged = null, root = null;
+  var COLS = {"Done": "done", "Parked": "pause", "Working: agent": "handoff"};
+  function target(e) {
+    if (!e.target.closest) return null;
+    var c = e.target.closest(".col[data-col]");
+    if (c && COLS[c.dataset.col] && root) return c;
+    return e.target.closest(".side [data-board]");
+  }
+  function clear() { document.querySelectorAll(".side .drop, .col.drop").forEach(function (x) { x.classList.remove("drop"); }); }
   document.addEventListener("dragstart", function (e) {
     var c = e.target.closest && e.target.closest(".card[data-project]");
     if (!c) return;
-    dragged = c.dataset.project;
+    dragged = c.dataset.project; root = c.dataset.root || null;
     c.classList.add("dragging"); h.classList.add("wpk-dragging");
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", dragged);
@@ -77,6 +85,18 @@
     var t = dragged && target(e), side = document.querySelector(".side");
     if (!t || !side) return;
     e.preventDefault();
+    if (t.dataset.col) {
+      var op = COLS[t.dataset.col], p = "/p/" + encodeURIComponent(dragged);
+      if (op === "handoff") { location.href = p + "/compose"; return; }
+      if (op === "done" && !window.confirm("Mark " + dragged + " done? It leaves the active views; Reopen brings it back.")) return;
+      var form = new URLSearchParams(op === "done" ? {action: "done", back: location.pathname}
+                                                     : {op: "pause", back: location.pathname});
+      fetch(op === "done" ? p + "/" + root + "/act" : p + "/run", {method: "POST", body: form,
+        headers: {"X-CSRF-Token": side.dataset.csrf}}).then(function (r) {
+        location.href = r.url;
+      }).catch(function () { location.reload(); });
+      return;
+    }
     var body = new URLSearchParams({board: t.dataset.board, back: location.pathname});
     fetch("/p/" + encodeURIComponent(dragged) + "/board", {method: "POST", body: body,
       headers: {"X-CSRF-Token": side.dataset.csrf}}).then(function (r) {

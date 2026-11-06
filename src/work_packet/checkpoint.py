@@ -147,7 +147,25 @@ def record(pkt, status, body=None, next_action=None, ticks=(), worker="session",
     m["checkpoint"].update({"by": by or executor._who(), "next": next_action or None,
                             "ticked": ticks})
     out, n = executor.record_step(pkt, worker, text, meta=m, files=files, prepare=prepare)
+    if out.code == executor.LEASED and worker in BY_HAND:
+        return during_step(pkt, text, by), None
     if out.code == 0 and missing:
         out = executor.Outcome(out.code, "%s; not in the outline: %s" % (
             out.msg, ", ".join(missing)))
     return out, n
+
+
+def during_step(pkt, text, by=None):
+    """A person's checkpoint while a runner step runs (docs/collaboration.md §5.5):
+    it takes no lease and changes no status. It becomes a note, which the running
+    step sees (through its hook) or the next one does, and a ``note`` journal
+    record for the history. Its next action reaches the runner as part of the note."""
+    from . import journal, notes
+    by = by or executor._who()
+    note = notes.add(pkt, "Where it stands, from %s's checkpoint:\n%s" % (
+        by.split("@")[0], text.strip()), by)
+    journal.append(pkt.journal_path, {"type": "note", "t": note["t"], "by": by,
+                                      "msg": "checkpoint during a step: %s" % (
+                                          text.strip().splitlines() or [""])[0]})
+    return executor.Outcome(executor.OK, "%s: a step is running, so this was left as a "
+                            "note it will see (%s)" % (pkt.wpid[:8], note["id"]))

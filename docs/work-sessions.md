@@ -1,5 +1,8 @@
 # Work sessions: start it in a terminal, hide it, watch it on the board (direction, 2026-10-27)
 
+> Superseded in part (2026-11-06) by `collaboration.md` §14: the `worker: person`
+> step is folded into checkpoints with `worker: session`.
+
 Revised the same day: §3.5, an agent scribe that writes the notes people skip.
 
 See `docs/work-data-design.md` §13.4 for how runs, person-steps and the

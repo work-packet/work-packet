@@ -17,3 +17,15 @@
 {% if c.studio %}<span class="state PAUSED studio" title="taken for the studio: the runner leaves it alone">IN STUDIO</span><span class="muted"> ({{ c.studio|join(", ") }})</span>{% endif %}
 {% if c.pausing %}<span class="state PAUSED" title="pauses when the running step ends">PAUSING</span>{% endif %}
 {%- endmacro %}
+
+{#- Done / Reopen for a project's card (docs/collaboration.md §4.1, W9). -#}
+{% macro mark(c, back, cls="mini") -%}
+{% if c.root and not c.running %}
+<form class="act pz" method="post" action="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}/act"{% if c.lifecycle == "open" %} data-confirm="Mark {{ c.name }} done? It leaves the active views; Reopen brings it back."{% endif %}>
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="back" value="{{ back }}">
+  {% if c.lifecycle == "open" %}<button class="{{ cls }}" name="action" value="done" title="It is finished: take it off the active views">Done</button>
+  {% else %}<button class="{{ cls }}" name="action" value="reopen" title="Open it again">Reopen</button>{% endif %}
+</form>
+{% endif %}
+{%- endmacro %}

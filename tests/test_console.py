@@ -355,3 +355,16 @@ def test_one_console_id_per_page(tmp_path, fake):
     ag.wait(_run(c, "hi", "/p/a/" + pkt.wpid)["conv"])     # the packet page lists it
     for url in ("/", "/p/a", "/p/a/" + pkt.wpid, "/p/a/console", "/console"):
         assert c.get(url).text.count('id="console"') == 1, url
+
+
+def test_done_and_reopen(tmp_path, fake):
+    e, pkt = _new("a")
+    c = _client()
+    r = _run(c, "/done shipped it", "/p/a")              # a project page: its root
+    assert r["ok"], r
+    meta = pkt.load_status()[0]
+    assert meta["lifecycle"] == "done" and pkt.journal().records[-1]["note"] == "shipped it"
+    assert _run(c, "/reopen @a")["ok"]
+    assert pkt.load_status()[0]["lifecycle"] == "open"
+    assert _run(c, "/drop", "/p/a/" + pkt.wpid)["ok"]
+    assert pkt.load_status()[0]["lifecycle"] == "dropped"

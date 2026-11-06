@@ -1,7 +1,9 @@
 # Session checkpoints: current state for human-driven sessions
 
-Status: proposal (2026-11-06). Builds on the scribe (`work-sessions.md` §3.5) and
-orientation (`orientation.md` §2.2–2.3); neither is built yet.
+Status: built and committed (`c242bfe`, 2026-11-06): `wpk checkpoint`, the
+board's Checkpoint form, the scribe and `/wpk-checkpoint`. `collaboration.md`
+builds on it (a checkpoint during a running step is its phase C5). Builds on the
+scribe (`work-sessions.md` §3.5) and orientation (`orientation.md` §2.2–2.3).
 
 ## 1. Problem
 

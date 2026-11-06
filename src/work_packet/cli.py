@@ -65,8 +65,26 @@ def _err(msg, code=4) -> int:
 
 
 def _packet(target):
+    """A packet from a target: a WPID, project name or directory. None or ``.``:
+    ``$WPK_WPID``, else the packet whose folder you are in (a Claude session's
+    skill runs where it works)."""
     from . import registry
     from .packet import Packet
+    if not target or target == ".":
+        if os.environ.get("WPK_WPID"):
+            target = os.environ["WPK_WPID"]
+        else:
+            from . import layout, presence
+            from .tomlio import load_toml
+            proj = presence.find_project(os.getcwd())
+            if proj is None:
+                raise registry.LookupFailed("which packet? Name it, or run this in a "
+                                            "packet's folder")
+            try:
+                root = load_toml(os.path.join(proj, "project.toml"))["root"]
+            except (OSError, ValueError, KeyError) as e:
+                raise registry.LookupFailed("%s: %s" % (proj, e)) from None
+            return Packet(layout.run_dir(proj, root))
     return Packet(registry.resolve(target))
 
 
@@ -445,11 +463,11 @@ def cmd_ps(args) -> int:
         es = [e for e in es if e["name"] == args.project]
         if not es:
             return _err("no registered project named %r" % args.project)
-    lines = views.ps(es, show_all=args.all)
+    lines = views.ps(es, show_all=args.all, raw=args.raw)
     for line in lines:
         print(line)
     if not lines:
-        print("No active projects%s." % ("" if args.all else " (--all shows finished ones)"),
+        print("No open projects%s." % ("" if args.all else " (--all shows those done)"),
               file=sys.stderr)
     return 0
 
@@ -522,18 +540,55 @@ def cmd_admin(args) -> int:
                 return _err(str(ex))
         else:
             note = args.message
+        note = _first_instruction(pkts, note)
     if op in ("resume", "handoff") and not args.force:
         refused = _setup_guard(pkts)
         if refused:
             return refused
     code = 0
     for p in pkts:
-        out = executor.admin(Packet(p.path), op, note=note)
+        out = executor.admin(Packet(p.path), op, note=note,
+                             defer=bool(getattr(args, "after_me", False)))
         print("wpk: %s" % out.msg, file=sys.stderr)
         code = max(code, out.code)
         if op == "pause" and out.code == 0:
             _cancel_pending(p.wpid)
     return code
+
+
+def _first_instruction(pkts, note):
+    """Handing off a packet that never had an instruction (you started it yourself,
+    docs/collaboration.md W1): the note is its instruction. Returns the note left."""
+    from . import project, setup
+    from .project import project_of
+    if len(pkts) != 1 or not (note or "").strip():
+        return note
+    try:
+        meta = pkts[0].load_status()[0]
+        if not project.held_for_setup(meta):
+            return note
+        tg = setup.target(project_of(pkts[0].path))
+        if setup.instruction(tg)[0].strip():
+            return note
+        setup.instruct(tg, note)
+    except Exception:                   # noqa: BLE001: then it goes as a note, as before
+        return note
+    return None
+
+
+def _entry_of(target):
+    """The registered project ``target`` (a name, WPID or directory) is in, or None."""
+    from . import registry
+    from .project import project_of
+    e = registry.get(target)
+    if e is not None:
+        return e
+    try:
+        proj = project_of(registry.resolve(target))
+    except (registry.LookupFailed, OSError):
+        return None
+    return next((x for x in registry.entries() if proj and os.path.realpath(x["path"])
+                 == os.path.realpath(proj)), None)
 
 
 def cmd_take(args) -> int:
@@ -553,15 +608,108 @@ def cmd_take(args) -> int:
     return out.code
 
 
+def cmd_mark(args) -> int:
+    """wpk done | reopen | drop | autonomy (docs/collaboration.md §4.1, §4.4)."""
+    from . import executor, registry
+    try:
+        pkt = _packet(args.target)
+    except registry.LookupFailed as ex:
+        return _err(str(ex))
+    out = executor.mark(pkt, args.cmd, note=getattr(args, "message", None),
+                        autonomy=getattr(args, "mode", None), review=getattr(args, "review", None))
+    print("wpk: %s" % out.msg, file=sys.stderr)
+    return out.code
+
+
+def cmd_plan(args) -> int:
+    """wpk plan [target] --priority ... (docs/collaboration.md §9.2)."""
+    from . import planning, registry
+    e = _entry_of(args.target) if args.target and args.target != "." else None
+    if e is None:
+        try:
+            e = _entry_of(_packet(args.target).path)
+        except registry.LookupFailed as ex:
+            return _err(str(ex))
+    if e is None:
+        return _err("not a registered project")
+    changes = {k: getattr(args, k) for k in planning.KEYS if getattr(args, k) is not None}
+    try:
+        if changes:
+            got = planning.set_(e, changes, entries=registry.entries(), force=args.force)
+        else:
+            got = planning.get(e)
+    except planning.PlanError as ex:
+        return _err(str(ex))
+    for k in planning.KEYS:
+        if got.get(k) not in (None, []):
+            print("%-10s %s" % (k + ":", ", ".join(got[k]) if isinstance(got[k], list)
+                                else got[k]))
+    return 0
+
+
+def cmd_todo(args) -> int:
+    """wpk todo "text" | --list | --drop ID (docs/collaboration.md §9.6)."""
+    from . import inbox, registry
+    h = registry.home()
+    if args.drop:
+        return 0 if inbox.drop(h, args.drop) else _err("no item %s" % args.drop)
+    if args.list or not args.text:
+        for d in inbox.items(h):
+            print("%s  %s" % (d["id"], d["text"].splitlines()[0]))
+        return 0
+    try:
+        e = _entry_of(_packet(None).path)
+    except Exception:                   # noqa: BLE001: captured from outside a packet
+        e = None
+    try:
+        d = inbox.add(h, " ".join(args.text), source="cli", project=e["name"] if e else None,
+                      board=args.board)
+    except ValueError as ex:
+        return _err(str(ex))
+    print("wpk: captured %s" % d["id"], file=sys.stderr)
+    return 0
+
+
+def cmd_hooks(args) -> int:
+    """wpk hooks install|remove|status [target] (docs/collaboration.md §4.3)."""
+    from . import ide, registry, sessionhooks
+    from .project import project_of
+    target = args.target or os.environ.get("WPK_PROJECT_DIR") or "."
+    try:
+        proj = project_of(registry.resolve(target))
+    except (registry.LookupFailed, OSError, ValueError) as ex:
+        return _err(str(ex))
+    if proj is None:
+        return _err("%s is not in a project" % target)
+    e = {"path": proj}
+    folder = sessionhooks.packet_folder(e)
+    if folder is None:
+        try:
+            folders = ide.hook_folders(ide._resolve(proj))
+        except ide.IdeError as ex:
+            return _err(str(ex))
+    else:
+        folders = [folder]
+    code = 0
+    for f in folders:
+        try:
+            if args.op == "install":
+                got = sessionhooks.install(f)
+            elif args.op == "remove":
+                got = sessionhooks.uninstall(f)
+            else:
+                got = sessionhooks.status(f)
+        except (sessionhooks.HooksError, OSError) as ex:
+            got, code = str(ex), 1
+        print("%s: %s" % (os.path.join(f, sessionhooks.REL), got))
+    return code
+
+
 def cmd_checkpoint(args) -> int:
     """wpk checkpoint: where the packet stands, recorded as a step (docs/session-checkpoint.md §3)."""
     from . import checkpoint, registry
-    target = args.target or os.environ.get("WPK_WPID")
-    if not target:
-        return _err("which packet? Name it, or run this where WPK_WPID is set "
-                    "(a terminal or session VS Code opened for a packet)")
     try:
-        pkt = _packet(target)
+        pkt = _packet(args.target)
     except registry.LookupFailed as ex:
         return _err(str(ex))
     body = None
@@ -1553,7 +1701,14 @@ def cmd_dash(args) -> int:
 
 def cmd_ide(args) -> int:
     import json
-    from . import ide, registry, setup
+    from . import actions, ide, registry, setup
+    if not args.look:           # yours until you hand it back (docs/collaboration.md §5.1)
+        e = _entry_of(args.target)
+        if e is not None:
+            out = actions.claim(e)
+            print("wpk: %s" % out.msg, file=sys.stderr)
+            if out.code:
+                return out.code
     try:
         op = ide.resolve(args.target, args.repo, packet=args.packet)
         cfg = ide.load_config()
@@ -1890,8 +2045,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="say what it would do")
     p.set_defaults(func=cmd_pr)
 
-    p = sub.add_parser("ps", help="list packets of registered projects")
-    p.add_argument("--all", action="store_true", help="include finished projects")
+    p = sub.add_parser("ps", help="list packets of registered projects",
+                       description="Each packet with whose move it is (BALL, who:why; "
+                       "docs/collaboration.md §4.1). Projects marked done are left out.")
+    p.add_argument("--all", action="store_true", help="include projects that are done")
+    p.add_argument("--raw", action="store_true", help="the executor's state instead of the ball")
     p.add_argument("--project", help="only this project")
     p.set_defaults(func=cmd_ps)
 
@@ -1979,6 +2137,66 @@ def build_parser() -> argparse.ArgumentParser:
                                 "something missing")
         p.set_defaults(func=cmd_admin, force=False)
 
+    for op, h in (("done", "mark a project done: it leaves the active views"),
+                  ("drop", "drop a project: done, without finishing it"),
+                  ("reopen", "open a project marked done or dropped again")):
+        p = sub.add_parser(op, help=h, description=h + " (docs/collaboration.md §4.1). "
+                           "A runner that has it (RUNNABLE or SLEEPING) leaves it.")
+        p.add_argument("target", nargs="?", help="project name, WPID (or unique prefix) or "
+                       "directory; default $WPK_WPID")
+        if op != "reopen":
+            p.add_argument("-m", "--message", help="a closing note, kept in the journal")
+        p.set_defaults(func=cmd_mark)
+
+    p = sub.add_parser("plan", help="your planning fields for a project: priority, due, ...",
+                       description="Priority (now, next, later, someday), rank, due date "
+                       "and kind, estimate, what it is blocked by, and an area tag, kept in "
+                       "the project's card (docs/collaboration.md §9.2). With no change, "
+                       "prints them. \"\" unsets a field.")
+    p.add_argument("target", nargs="?", help="project name, WPID or directory; default the "
+                   "packet you are in")
+    p.add_argument("--priority", choices=("now", "next", "later", "someday", ""))
+    p.add_argument("--rank")
+    p.add_argument("--due", help="YYYY-MM-DD")
+    p.add_argument("--due-kind", dest="due_kind", choices=("hard", "soft", ""))
+    p.add_argument("--estimate", help="like 4h, 2d, 1w")
+    p.add_argument("--blocked-by", dest="blocked_by", help="comma-separated")
+    p.add_argument("--area")
+    p.add_argument("--force", action="store_true", help="put it in now even if now is full")
+    p.set_defaults(func=cmd_plan)
+
+    p = sub.add_parser("todo", help="capture a line into the board's Inbox",
+                       description="A thing to do, kept on the board until you make it a "
+                       "packet or drop it (docs/collaboration.md §9.6).")
+    p.add_argument("text", nargs="*")
+    p.add_argument("--board", help="the board it belongs to")
+    p.add_argument("--list", action="store_true", help="list what is captured")
+    p.add_argument("--drop", metavar="ID", help="drop an item")
+    p.set_defaults(func=cmd_todo)
+
+    p = sub.add_parser("hooks", help="the Claude Code hooks that tell the board about "
+                       "sessions in a packet folder",
+                       description="install, remove or show wpk's hooks in the folder's "
+                       ".claude/settings.local.json (your own hooks there are kept). They "
+                       "record when Claude works, waits or asks permission, never what was "
+                       "said (docs/collaboration.md §4.3).")
+    p.add_argument("op", choices=("install", "remove", "status"))
+    p.add_argument("target", nargs="?", help="project name, WPID or directory; default the "
+                   "packet you are in")
+    p.set_defaults(func=cmd_hooks)
+
+    p = sub.add_parser("autonomy", help="how much the runner may do on its own",
+                       description="manual: the runner runs only what you hand it. handoff: "
+                       "it works a hand-off until it stops. runner: it may also act on "
+                       "schedules and children; --review says when you look (each task, "
+                       "on failure only, or never: then finishing means done). "
+                       "docs/collaboration.md §4.4.")
+    p.add_argument("mode", choices=("manual", "handoff", "runner"))
+    p.add_argument("target", nargs="?", help="project name, WPID (or unique prefix) or "
+                   "directory; default $WPK_WPID")
+    p.add_argument("--review", choices=("each", "failure", "never"))
+    p.set_defaults(func=cmd_mark)
+
     p = sub.add_parser("take", help="take a packet for yourself (the studio): the runner "
                        "leaves it alone until you release it",
                        description="An idle packet is PAUSED (reason studio) now; a running "
@@ -2054,6 +2272,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--note-file", help="the note, from a file (- for stdin)")
     p.add_argument("--force", action="store_true",
                    help="hand off a root held for setup even if doctor finds something missing")
+    p.add_argument("--after-me", action="store_true",
+                   help="start only once nobody is working on it (you close the editor; "
+                   "docs/collaboration.md §5.2); by default it starts even while you are")
     p.set_defaults(func=cmd_admin)
 
     p = sub.add_parser("next", help="give a stopped packet its next batch of work",
@@ -2306,6 +2527,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="with REPO: the packet's worktree, not your clone")
     p.add_argument("--open", action="store_true",
                    help="open it with `code` (in a VS Code terminal, or with a display)")
+    p.add_argument("--look", action="store_true",
+                   help="open it without taking it from the runner (by default, opening "
+                   "it makes it yours until you hand it back)")
     p.add_argument("--json", action="store_true", help="print JSON")
     p.set_defaults(func=cmd_ide)
 

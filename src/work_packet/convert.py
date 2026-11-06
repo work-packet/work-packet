@@ -115,6 +115,10 @@ def convert(name, dry_run=False, h=None):
     def repoint(e):
         e["path"] = dot
     registry.update(name, repoint, h)
+    # Claude sessions in the folder report to the board, as in a new packet folder
+    # (docs/collaboration.md §4.3).
+    from . import ide, sessionhooks
+    sessionhooks.ensure([p["folder"]], ide.load_config(h), home=h or registry.home())
     p["checks"] = verify(name, h)
     return p
 

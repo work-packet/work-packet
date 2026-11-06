@@ -1080,7 +1080,7 @@ def _archive_report(pkt, batch):
 
 def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
           archive_outline=None, carry_session=False, force=False, reason=None,
-          stopped=False):
+          stopped=False, defer=False):
     """``pause``: RUNNABLE or SLEEPING to PAUSED. ``wake``: SLEEPING to RUNNABLE
     (a note that should not wait, docs/interaction.md §6a). ``resume``: NEEDS_INPUT, PAUSED or
     FAILED to RUNNABLE. ``handoff``: the same as ``resume``, with an optional note
@@ -1097,6 +1097,10 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
     reason in ``status.md`` (default "by hand"; the scheduler's caps name theirs).
     ``stopped``: the pause ended the run without anyone (a budget or a limit),
     so it is recorded as ``stopped`` and listed until seen (``mark_seen``).
+    ``defer`` (resume, wake, handoff, continue): wait while someone is working on
+    the project (docs/collaboration.md §5.2, "after I leave"). Without it, the
+    record says ``defer: false``: a person asked for it now, so the runner starts
+    even while they are there.
 
     Takes the lease, so it never races a running step.
     """
@@ -1163,13 +1167,16 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
                 extra["report"] = rmoved
             meta.update(state="RUNNABLE", reason=None, wake_at=None, attempts=0)
             meta.pop("stopped", None)
+            if meta.get("lifecycle") in ("done", "dropped"):
+                extra["reopened"] = meta["lifecycle"]
+            meta["lifecycle"] = "open"      # handed work is open work (collaboration.md §4.1)
         else:
             raise ValueError(op)
         meta["updated"] = _ts()
         pkt.save_status(meta, body)
         if op in ("handoff", "continue"):
             rec = {"type": "handoff", "t": _ts(), "by": by or _who(), "from": old,
-                   "to": meta["state"]}
+                   "to": meta["state"], "defer": bool(defer)}
             rec.update(extra)
             hd = workspace.heads(pkt)
             if hd:
@@ -1188,11 +1195,113 @@ def admin(pkt, op, note=None, answers=None, by=None, instruction=None,
         else:
             rec = {"type": "admin", "t": _ts(), "op": op, "by": by or _who(),
                    "from": old, "to": meta["state"]}
+            if op in ("resume", "wake"):
+                rec["defer"] = bool(defer)
         journal.append(pkt.journal_path, rec)
-        return Outcome(OK, "%s: %s -> %s" % (pkt.wpid[:8], old, meta["state"]))
+        out = Outcome(OK, "%s: %s -> %s" % (pkt.wpid[:8], old, meta["state"]))
     finally:
         lease.release()
         _ide_owner(pkt)
+        livecard.flush()
+    if op in ("resume", "handoff", "continue") and meta.get("parent") is None:
+        n = _release_claim(pkt, by, defer)
+        if n:
+            out = Outcome(OK, "%s; and %d more packet%s you had claimed" % (
+                out.msg, n, "" if n == 1 else "s"))
+    return out
+
+
+def _release_claim(root, by, defer):
+    """Handing the root back hands back the rest of the project you claimed by
+    opening it (``schema.REASON_CLAIMED``, docs/collaboration.md §5.1)."""
+    from .project import project_of
+    from .views import packets
+    proj = project_of(root.path)
+    if proj is None:
+        return 0
+    n = 0
+    for _, p, m, _ in packets(proj, root.wpid):
+        if p.wpid == root.wpid or m is None:
+            continue
+        if m.get("state") == "PAUSED" and m.get("reason") == schema.REASON_CLAIMED:
+            if admin(p, "resume", by=by, defer=defer).code == OK:
+                n += 1
+    return n
+
+
+MARKS = ("done", "reopen", "drop", "autonomy")
+
+
+def mark(pkt, op, by=None, note=None, autonomy=None, review=None):
+    """A person's facts about the packet (docs/collaboration.md §4.1, §4.4):
+    ``done`` and ``drop`` close it, ``reopen`` opens it again, ``autonomy`` sets
+    how much the runner may do on its own (``autonomy``: manual, handoff or
+    runner; ``review``: each, failure or never, for runner). Closing a packet
+    the runner has (RUNNABLE or SLEEPING) parks it, so the runner leaves it.
+    An ``admin`` journal record with ``op``; ``note``, if given, is kept in it.
+
+    Takes the lease: while a step runs, it says so and changes nothing.
+    """
+    if op not in MARKS:
+        raise ValueError(op)
+    if op == "autonomy":
+        if autonomy not in schema.AUTONOMIES:
+            return Outcome(USAGE, "autonomy must be one of %s" % ", ".join(schema.AUTONOMIES))
+        if review is not None and review not in schema.REVIEWS:
+            return Outcome(USAGE, "review must be one of %s" % ", ".join(schema.REVIEWS))
+    try:
+        meta, body = pkt.load_status()
+    except (OSError, frontmatter.FrontMatterError) as e:
+        return Outcome(USAGE, str(e))
+    try:
+        lease = Lease(pkt.lease_path, meta["step"] + 1, 0, 60).acquire()
+    except LeaseHeld:
+        return Outcome(LEASED, "%s has a step running; try again when it ends, or pause "
+                       "it first" % pkt.wpid[:8])
+    try:
+        meta, body = pkt.load_status()
+        old = meta["state"]
+        if taken_by(meta) and op in ("done", "drop"):
+            return Outcome(NOT_RUNNABLE, "%s is taken by %s; release it first" % (
+                pkt.wpid[:8], meta["taken_by"]))
+        from .views import lifecycle
+        was = lifecycle(meta)
+        rec = {"type": "admin", "t": _ts(), "op": op, "by": by or _who(), "from": old}
+        if op in ("done", "drop"):
+            want = "done" if op == "done" else "dropped"
+            if was == want:
+                return Outcome(OK, "%s is already %s" % (pkt.wpid[:8], want))
+            meta["lifecycle"] = want
+            if old in ("RUNNABLE", "SLEEPING"):
+                if not taking(pkt):
+                    _drop_pause_request(pkt)
+                meta.update(state="PAUSED", reason=schema.REASON_DONE, wake_at=None)
+            msg = "%s: %s" % (pkt.wpid[:8], want)
+        elif op == "reopen":
+            if was == "open":
+                return Outcome(OK, "%s is open" % pkt.wpid[:8])
+            meta["lifecycle"] = "open"
+            msg = "%s: open again" % pkt.wpid[:8]
+        else:
+            meta["autonomy"] = autonomy
+            if autonomy == "runner":
+                meta["review"] = review or meta.get("review") or "each"
+            else:
+                meta.pop("review", None)
+            rec["autonomy"] = autonomy
+            if meta.get("review"):
+                rec["review"] = meta["review"]
+            msg = "%s: autonomy %s%s" % (pkt.wpid[:8], autonomy, " (review %s)" % meta[
+                "review"] if meta.get("review") else "")
+        meta["updated"] = _ts()
+        pkt.save_status(meta, body)
+        rec["to"] = meta["state"]
+        if note and note.strip():
+            rec["note"] = note.strip()
+        journal.append(pkt.journal_path, rec)
+        return Outcome(OK, msg)
+    finally:
+        lease.release()
         livecard.flush()
 
 
@@ -1258,8 +1367,8 @@ def _pause_for(pkt, meta, req, n):
 # ``taken_by`` in status.md names the owner; a taken packet that was not going to run
 # (NEEDS_INPUT, COMPLETED, FAILED, PAUSED) keeps its state.
 
-TAKE_REASON = "studio"
-HELD_REASON = "held"
+TAKE_REASON = schema.REASON_STUDIO
+HELD_REASON = schema.REASON_HELD
 
 
 def taken_by(meta):

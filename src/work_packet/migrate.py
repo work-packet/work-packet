@@ -30,6 +30,25 @@ from .packet import Packet
 
 MIGRATOR = "wpk-migrate"
 RUNNER = "runner"
+# Work recorded by people, not by a model's step (docs/collaboration.md §4.5): how
+# the thread names who did it.
+BY_HAND = {"session": "%s (VS Code)", "studio": "%s (studio)"}
+SCRIBE = "scribe (draft)"
+
+
+def _hand_actor(pkt, step, worker, fallback):
+    """Who recorded step ``step`` by hand: its checkpoint's ``by``, without the host."""
+    if worker == "scribe":
+        return SCRIBE
+    by = None
+    try:
+        with open(os.path.join(pkt.path, "steps", schema.step_dir_name(int(step)),
+                               "meta.json")) as fp:
+            by = (json.load(fp).get("checkpoint") or {}).get("by")
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    who = (by or fallback).split("@")[0]
+    return BY_HAND.get(worker, "%s (" + str(worker) + ")") % who
 NO_ANSWER = "_No answer was given; the packet was resumed._"
 
 
@@ -242,11 +261,20 @@ def rebuild_thread(run_dir, project, requester=None, sent=None, name_of_child=No
             if not did_sent:
                 th.add("sent", who_req, t, src=src)
                 did_sent = True
+            if r.get("worker") not in (None, "agent"):
+                continue                # a person's record: the runner took nothing
             if not did_acc:
                 th.add("accepted", RUNNER, t, trailers=ws_tr, src=src)
                 did_acc = True
             if batch_first is None:
                 batch_first = r.get("step")
+        elif typ == "admin" and r.get("op") in ("done", "drop", "reopen", "autonomy"):
+            what = {"done": "Marked done.", "drop": "Dropped.", "reopen": "Reopened.",
+                    "autonomy": "Autonomy: %s%s." % (r.get("autonomy"), ", review %s" % r[
+                        "review"] if r.get("review") else "")}[r["op"]]
+            if r.get("note"):
+                what += "\n\n" + _demote(r["note"])
+            th.add("note", (r.get("by") or who_req).split("@")[0], t, what, src=src)
         elif typ == "config":
             ch = r.get("changes") or []
             if ch:
@@ -255,12 +283,19 @@ def rebuild_thread(run_dir, project, requester=None, sent=None, name_of_child=No
         elif typ == "commit-begin":
             d = r.get("decision") or {}
             st, step = d.get("state"), r.get("step")
+            worker = d.get("worker")
+            hand = worker not in (None, "agent")
+            actor = _hand_actor(pkt, step, worker, who_req) if hand else RUNNER
             for sp in d.get("spawn") or []:
                 nm = sp.get("name") or (name_of_child or {}).get(sp.get("wpid"))
-                th.add("note", RUNNER, t, "Started sub-packet %s: %s" % (
+                th.add("note", actor, t, "Started sub-packet %s: %s" % (
                     nm, _text(sp.get("instruction")).split("\n")[0]),
                     [("Related", "pkt:%s" % sp.get("wpid"))], src=src)
-            if st == "NEEDS_INPUT":
+            if hand and st not in ("COMPLETED", "FAILED"):
+                # A checkpoint: where it stands, from whoever wrote it.
+                th.add("note", actor, t, _demote(d.get("summary")) or "(no summary)",
+                       [("Record", "run:%s@s%d" % (pkt.wpid, step))], src=src)
+            elif st == "NEEDS_INPUT":
                 asked_t, asked_reason = t, d.get("reason")
             elif st in ("COMPLETED", "FAILED"):
                 last = not any(x.get("type") == "handoff" and x["t"] > t for _, x in recs)
@@ -281,7 +316,7 @@ def rebuild_thread(run_dir, project, requester=None, sent=None, name_of_child=No
                 if rel:
                     tr.append(("Report", "run:%s/%s" % (pkt.wpid, rel)))
                 tr.append(("Record", "run:%s@s%d" % (pkt.wpid, step)))
-                th.add("result", RUNNER, t, body, tr, src=src)
+                th.add("result", actor, t, body, tr, src=src)
                 batch_first = None
     if asked_t and status.get("state") == "NEEDS_INPUT":
         th.add("question", RUNNER, asked_t, _demote(asked_reason) or "(see the step's result)",

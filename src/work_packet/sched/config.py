@@ -26,6 +26,9 @@ def load(h=None, raw=None):
     cfg["max_concurrent"] = raw.get("max_concurrent", schema.CONFIG_DEFAULTS["max_concurrent"])
     cfg["step_timeout"] = raw.get("step_timeout", schema.CONFIG_DEFAULTS["step_timeout"])
     cfg["project_defaults"] = {k: raw.get(k, schema.CONFIG_DEFAULTS[k]) for k in PROJECT_KEYS}
+    # how long a person's presence holds the runner (docs/collaboration.md §5.1)
+    cfg["presence_ttl"] = (raw.get("ide") or {}).get("presence_ttl",
+                                                     schema.IDE_DEFAULTS["presence_ttl"])
     return cfg
 
 

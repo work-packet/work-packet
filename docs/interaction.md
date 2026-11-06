@@ -1,5 +1,8 @@
 # Interaction: questions, answers, and acting on packets from the board and a TUI
 
+> Superseded in part (2026-11-06) by `collaboration.md`: §6b take/release stays
+> for the studio, but presence, not a take, now says "I'm working on it" (§14).
+
 Status: I1–I3 built, I6 partly (live view), 2026-10-23; 376 tests pass. I4, I5 and the Markdown part of I6 to do. Not committed. This file holds the plan and a
 status log, so a fresh session can pick up from it alone.
 

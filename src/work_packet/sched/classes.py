@@ -15,13 +15,22 @@ def packet_settings(entry, wpid):
 
 def effective(entry, wpid):
     """(class, where it came from): the packet's override, the project's class,
-    else ``normal``. Children inherit the project's class, not their parent's."""
+    the class its plan asks for (``planning.sched_class``), else ``normal``.
+    Children inherit the project's class, not their parent's."""
     p = packet_settings(entry, wpid).get("priority")
     if p in VALUE:
         return p, "packet"
     p = entry.get("priority")
     if p in VALUE:
         return p, "project"
+    # Your own priority for it, and how near it is due (docs/collaboration.md §9.2).
+    from .. import planning
+    try:
+        cls = planning.sched_class(planning.get(entry))
+    except (KeyError, OSError):
+        cls = DEFAULT
+    if cls != DEFAULT:
+        return cls, "plan"
     return DEFAULT, "default"
 
 

@@ -133,6 +133,17 @@ def _event(st, ev, t):
     if t is not None and ev == EDIT:
         st["edit_ts"] = (st.get("edit_ts") or [])[-(EDITS_KEPT - 1):] + [t]
     st["turn_state"] = TURN_STATE.get(ev, st.get("turn_state"))
+    if ev == TURN_END and interactive(st):
+        st["turn_state"] = WAITING      # a person drives it: their move (collaboration.md §4.3)
+
+
+# Sessions a person drives: Claude in VS Code or a terminal, Codex in VS Code or its
+# TUI. A turn's end there waits for them; scripted ones (``claude -p``) just finish.
+INTERACTIVE = {"claude-vscode", "cli", "codex-tui", "codex_vscode", "vscode"}
+
+
+def interactive(st):
+    return st.get("entrypoint") in INTERACTIVE or st.get("source") in ("vscode", "cli")
 
 
 def _touch(st, t):
@@ -989,8 +1000,12 @@ def local_pass(home, collectors):
 
 HARNESS_LABEL = {"claude": "Claude Code", "codex": "Codex"}
 CLIENT_LABEL = {"vscode-ext": "extension", "terminal": "terminal", "unknown": ""}
-TURN_LABEL = {WAITING: "waiting for input", BUSY: "working", FINISHED: "turn finished",
+TURN_LABEL = {WAITING: "waiting for you", BUSY: "working", FINISHED: "turn finished",
               INTERRUPTED: "interrupted"}
+# From the session's hooks (presence records, docs/collaboration.md §4.3): these win
+# over what the transcript says, which cannot see a permission prompt.
+PRESENCE_LABEL = {"blocked": "waiting for your permission", "waiting": "waiting for you",
+                  "working": "working"}
 _CACHE = {}
 
 
@@ -1050,6 +1065,28 @@ def row(r, now):
     }
 
 
+def with_presence(home, rows, now=None):
+    """``rows`` with the turn their hooks reported, where one did (presence records,
+    docs/collaboration.md §4.3): a permission prompt shows only there."""
+    from . import presence, registry
+    turns, dirs = {}, {}
+    for r in rows:
+        p = r.get("project")
+        if p and p not in dirs:
+            e = registry.get(p, home)
+            dirs[p] = e["path"] if e else None
+            for rec in presence.records(dirs[p], now, ttl=None) if dirs[p] else ():
+                if rec.get("session") and rec.get("turn") in PRESENCE_LABEL:
+                    turns[rec["session"]] = rec
+    for r in rows:
+        rec = turns.get(r.get("session"))
+        if rec and r.get("process") != "ended":
+            r["turn"] = PRESENCE_LABEL[rec["turn"]]
+            if rec["turn"] == "blocked" and rec.get("tool"):
+                r["turn"] += " (%s)" % rec["tool"]
+    return rows
+
+
 def _newest(recs):
     return sorted(recs, key=lambda r: r.get("last_activity_t") or 0, reverse=True)
 
@@ -1073,21 +1110,22 @@ def packet_view(home, project, wpid, now=None):
                 keys[k] = any(o.get("wpid") == wpid for o in ide_launch.opens(home, k))
             if keys[k]:
                 shared.append(row(r, now))
-    return mine, shared
+    return with_presence(home, mine), with_presence(home, shared)
 
 
 def recent_view(home, limit=8, now=None):
     """The most recently active sessions across packets, for the Overview."""
     import time
     now = time.time() if now is None else now
-    return [row(r, now) for r in _newest(cached_records(home))[:limit]]
+    return with_presence(home, [row(r, now) for r in _newest(cached_records(home))[:limit]])
 
 
 def project_view(home, project, now=None):
     """Every session of a project, newest first, for its tabbed page."""
     import time
     now = time.time() if now is None else now
-    return [row(r, now) for r in _newest(cached_records(home)) if r.get("project") == project]
+    return with_presence(home, [row(r, now) for r in _newest(cached_records(home))
+                                if r.get("project") == project])
 
 
 def packet_activity(home, project, wpid, since=None):

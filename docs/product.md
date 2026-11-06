@@ -35,10 +35,13 @@ Five principles carry the design:
 1. **The packet is the unit.** Not the repository, the branch, the chat
    or the terminal. Everything about a piece of work is in or reachable
    from its packet.
-2. **One owner at a time.** A packet belongs to one person or to the
-   runner. Control moves only by an explicit, recorded hand-off or
-   assign. Asking others for input sends them copies, which are new
-   packets with their own owners.
+2. **One accountable owner; any number of workers.** The owner is a
+   person. People, interactive sessions, the runner and batch jobs all
+   work on the packet; who is on it now is derived, not declared, and a
+   person's presence makes the runner hold off rather than taking a lock
+   (`collaboration.md` §3 P2, P3, which replace "one owner at a time").
+   Asking others for input sends them copies, which are new packets with
+   their own owners.
 3. **Your machine, your account.** Each person runs their own daemon,
    `wpkd`, on their own hosts. The board is equal to a shell on that
    account and is guarded like one. A shared hub connects daemons; it

@@ -1,5 +1,8 @@
 # Long-running projects: hand-off, workspaces and the runner
 
+> Superseded in part (2026-11-06) by `collaboration.md`: the HELD state isn't
+> needed, because the ball's reason covers it (§4.1).
+
 Status (2026-10-21): design, not built. Read this before the build plan at
 the end. A fresh session should be able to pick up from this file alone.
 

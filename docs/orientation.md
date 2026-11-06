@@ -1,5 +1,9 @@
 # Orientation: catching up on a packet
 
+> Superseded in part (2026-11-06) by `collaboration.md`: "Since you were last
+> here" and per-viewer seen markers are built in its phase C4; the `owner/` space
+> is deferred.
+
 Status: proposal, open decisions resolved (§4). Date: 2026-10-27.
 
 A packet builds up a lot of history. This proposal covers how to use that history to answer the question someone asks when they come back to a packet, or take one over: *"what's going on here?"* It also proposes giving the owner a space in the packet for their own notes and plans.

@@ -21,13 +21,26 @@ STATUS_FIELDS = (
     "wpk", "wpid", "project", "state", "step", "attempts", "parent",
     "spawn_key", "children", "resume_expr", "wake_at", "model", "reason",
     "updated", "next_size", "stopped", "seen", "children_seen", "waiting_on", "wait_mode",
-    "taken_by", "taken",
+    "taken_by", "taken", "lifecycle", "autonomy", "review", "owner",
 )
 # next_size: docs/scheduler-plan.md decision 4; stopped, seen: docs/overview-recent.md §2;
 # children_seen, waiting_on, wait_mode: docs/waiting-v1.md §4; taken_by, taken: the studio's
-# take (docs/studio-plan.md P0.1)
+# take (docs/studio-plan.md P0.1); lifecycle, autonomy, review, owner: docs/collaboration.md §4
 STATUS_OPTIONAL = ("next_size", "stopped", "seen", "children_seen", "waiting_on", "wait_mode",
-                   "taken_by", "taken")
+                   "taken_by", "taken", "lifecycle", "autonomy", "review", "owner")
+# The person's facts about a packet (docs/collaboration.md §4.1, §4.4). No lifecycle
+# field is a packet from before them: a finished one counts as done.
+LIFECYCLES = ("open", "done", "dropped")
+AUTONOMIES = ("manual", "handoff", "runner")
+REVIEWS = ("each", "failure", "never")
+# Why a PAUSED packet is paused, where the code names one (the scheduler's caps
+# and pause requests name their own).
+REASON_SETUP = "setup"            # made without an instruction (project.py)
+REASON_BY_HAND = "by hand"
+REASON_STUDIO = "studio"          # taken for the studio (executor.take)
+REASON_HELD = "held"
+REASON_DONE = "done"              # marked done or dropped while the runner had it
+REASON_CLAIMED = "claimed"        # opened in VS Code: yours until you hand it back
 
 MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item", "size")
 ITEM_MAX = 80
@@ -85,6 +98,9 @@ IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
     "sessions_scribe": False,          # draft a status when a session ends (session-checkpoint.md)
     "scribe_idle_s": 1800,             # ... or has been idle this long
     "forward": True,                   # localhost links from web VS Code (port-forward plan)
+    "hooks": True,                     # Claude Code hooks in packet folders (collaboration.md §4.3)
+    "presence_ttl": 600,               # seconds a presence record counts (§4.2)
+    "idle_escalate": 900,              # seconds before "Claude is waiting" needs you (§4.3)
 }
 CONSOLE_DEFAULTS = {                  # docs/console.md §3
     "model": "haiku",                  # the agent's model; /model changes one conversation's
@@ -202,6 +218,9 @@ JOURNAL_TYPES = {
     "seed": ("files",),               # docs/setup.md §10: the root filled from the project root
     "request": ("op", "id", "by"),    # docs/delegation.md: sent, received, done, cancelled
     "seen": ("by",),                  # docs/overview-recent.md §2: someone looked at it
+    # docs/collaboration.md §4.5: an interactive session in the packet (hookcmd)
+    "session-start": ("by", "session", "actor"),
+    "session-end": ("by", "session", "actor"),
 }
 DECISION_FIELDS = ("state", "resume_expr", "wake_at", "reason", "model",
                    "summary", "spawn")
@@ -389,6 +408,11 @@ def validate_status(meta, body=""):
             out.append(_err(k, "must be a UTC timestamp like 2026-10-21T18:02:11Z"))
     if meta.get("stopped") and st not in ("COMPLETED", "PAUSED"):
         out.append(_err("stopped", "only when COMPLETED or PAUSED"))
+    for k, ok in (("lifecycle", LIFECYCLES), ("autonomy", AUTONOMIES), ("review", REVIEWS)):
+        if k in meta and meta[k] not in ok:
+            out.append(_err(k, "must be one of %s" % ", ".join(ok)))
+    if "owner" in meta and not (isinstance(meta["owner"], str) and meta["owner"]):
+        out.append(_err("owner", "must be a non-empty string"))
     if list(k for k in meta if k in STATUS_FIELDS) != [k for k in STATUS_FIELDS if k in meta]:
         out.append(_warn(None, "keys are not in the spec order"))
     return out
@@ -619,7 +643,8 @@ def _validate_ide(d):
     if not isinstance(t, dict):
         return [_err("ide", "must be a table")]
     out = _unknown(t, tuple(IDE_DEFAULTS), "ide")
-    for k in ("desktop", "web", "workspace_trust", "sessions", "forward", "sessions_scribe"):
+    for k in ("desktop", "web", "workspace_trust", "sessions", "forward", "sessions_scribe",
+              "hooks"):
         if k in t and not isinstance(t[k], bool):
             out.append(_err("ide." + k, "must be true or false"))
     for k in ("code", "ssh_host"):
@@ -630,7 +655,8 @@ def _validate_ide(d):
     if t.get("backend", "serve-web") not in IDE_BACKENDS:
         out.append(_err("ide.backend", "must be one of %s" % ", ".join(IDE_BACKENDS)))
     for k, dflt in (("idle_minutes", 60), ("max_servers", 8), ("sessions_poll_s", 5),
-                    ("sessions_keep_days", 30), ("scribe_idle_s", 1800)):
+                    ("sessions_keep_days", 30), ("scribe_idle_s", 1800), ("presence_ttl", 600),
+                    ("idle_escalate", 900)):
         m = t.get(k, dflt)
         if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
             out.append(_err("ide." + k, "must be a positive whole number"))
@@ -892,11 +918,26 @@ def _validate_site(d):
     return out
 
 
+def _validate_plan(d):
+    """``[plan]``: your planning (docs/collaboration.md §9.2)."""
+    t = d.get("plan")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("plan", "must be a table")]
+    out = _unknown(t, ("focus_wip",), "plan")
+    v = t.get("focus_wip", 3)
+    if not (isinstance(v, int) and not isinstance(v, bool) and v > 0):
+        out.append(_err("plan.focus_wip", "must be a positive whole number"))
+    return out
+
+
 def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
                                                 "console", "harnesses", "plugins", "site",
-                                                "studio")) \
+                                                "studio", "plan")) \
         + _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d) \
+        + _validate_plan(d) \
         + _validate_console(d) + _validate_studio(d) + _validate_forges(d.get("forge")) \
         + _validate_harness(d) \
         + _validate_plugins(d) + _validate_site(d)

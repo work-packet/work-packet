@@ -8,21 +8,25 @@ import json
 import os
 import shlex
 import socket
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import quote as urlquote
 
 from .. import (clock, frontmatter, lease as lease_mod, notes as notes_mod, procs as procs_mod,
                questions, registry, report as report_mod, schema, stats)
-from .. import archived, layout
+from .. import archived, layout, planning, views
 from ..packet import Packet
 from ..project import ProjectError, load_project
 from ..views import packets, relative
 
-# Board columns, in display order.
-COLUMNS = ("Needs you", "Running", "Ready", "Sleeping", "Paused", "Failed", "Done")
-COLUMN_OF = {"NEEDS_INPUT": "Needs you", "RUNNABLE": "Ready", "SLEEPING": "Sleeping",
-             "PAUSED": "Paused",
-             "FAILED": "Failed", "COMPLETED": "Done"}
+# Board columns, in display order: by whose move it is (docs/collaboration.md §8.2).
+COLUMNS = views.COLUMNS
+# Each column's colour (a CSS variable of base.html) and its card's class.
+COLUMN_COLOUR = {"Inbox": "muted", "Needs you": "NEEDS_INPUT", "Working: you": "RUNNABLE",
+                 "Working: agent": "running", "Waiting": "SLEEPING", "Parked": "PAUSED",
+                 "Done": "COMPLETED"}
+COLUMN_CLASS = {"Inbox": "Inbox", "Needs you": "Needs", "Working: you": "You",
+                "Working: agent": "Agent", "Waiting": "Waiting", "Parked": "Parked",
+                "Done": "Done"}
 
 TOOL_RESULT_MAX = 4000      # characters of one tool result shown in the step viewer
 
@@ -236,6 +240,10 @@ def tree(entry, now=None):
             "seen": _ts(meta.get("seen")),
             "pausing": _pausing(pkt) is not None, "resumable": resumable(meta),
             "taken_by": meta.get("taken_by"), "taking": _taking(pkt),
+            "waiting_on": meta.get("waiting_on"),
+            # the person's facts (docs/collaboration.md §4.1); views derive the rest
+            "lifecycle": meta.get("lifecycle"), "autonomy": meta.get("autonomy"),
+            "review": meta.get("review"), "owner": meta.get("owner"),
             "running": running(pkt, now),
             "steps": st, "cost_usd": sum(s["cost_usd"] or 0 for s in st), "path": pkt.path,
         })
@@ -338,6 +346,42 @@ def waits(nodes):
     return stalled, stuck
 
 
+def _hooks(entry):
+    """The Claude Code hooks in a packet folder (docs/collaboration.md §4.3):
+    "installed", "missing", "modified" or "unreadable"; None for the legacy layout."""
+    from .. import sessionhooks
+    folder = sessionhooks.packet_folder(entry)
+    return sessionhooks.status(folder) if folder and os.path.isdir(folder) else None
+
+
+def _ide_cfg():
+    try:
+        return registry.load_config_file().get("ide") or {}
+    except Exception:                   # noqa: BLE001: a bad config is reported elsewhere
+        return {}
+
+
+def session_items(entry):
+    """The project's Claude sessions that need you (``attention.session_items``)."""
+    from .. import attention
+    try:
+        return attention.session_items(entry["path"], None, _ide_cfg().get("idle_escalate")
+                                       or attention.IDLE_ESCALATE_S)
+    except OSError:
+        return []
+
+
+def present(entry, now=None):
+    """The project's live presence records (docs/collaboration.md §4.2), by the
+    wall clock (``now`` is not used: records are written in real time, as leases are)."""
+    from .. import presence
+    try:
+        return presence.live(entry["path"], None, _ide_cfg().get("presence_ttl")
+                             or presence.TTL_S)
+    except OSError:
+        return []
+
+
 def card(entry, now=None, nodes=None):
     """One project's card on the board. ``nodes``: its ``tree()``, if already read."""
     now = now or clock.now()
@@ -345,10 +389,13 @@ def card(entry, now=None, nodes=None):
     nodes = tree(entry, now) if nodes is None else nodes
     root = nodes[0] if nodes else None
     live = [n for n in nodes if n["running"]]
-    if live:
-        column = "Running"
-    else:
-        column = COLUMN_OF.get(root["state"] if root else None, "Failed")
+    facts = root or {"state": "?"}
+    lease = live[0]["running"] if live else None
+    here = present(entry, now)
+    sessions = session_items(entry)
+    plan = planning.get(entry)
+    column = views.column(facts, lease, here)
+    ball = views.ball(facts, lease, here)
     counts = {}
     for n in nodes:
         counts[n["state"]] = counts.get(n["state"], 0) + 1
@@ -392,6 +439,14 @@ def card(entry, now=None, nodes=None):
         since = since_checkpoint(entry, root, tz, now)
     return {
         "name": entry["name"], "column": column, "root": root, "running": run,
+        "css": COLUMN_CLASS[column] + (" Failed" if ball["kind"] == "failure" else ""),
+        "ball": ball, "driver": views.driver(facts, lease, here), "present": here,
+        "sessions": sessions,
+        # your planning fields (docs/collaboration.md §9.2)
+        "plan": plan, "due": planning.due_text(plan),
+        "rot": planning.rotting(plan, max((t.timestamp() for t in (last, (root or {}).get(
+            "updated")) if t), default=None)) if views.lifecycle(facts) == "open" else None,
+        "lifecycle": views.lifecycle(facts), "autonomy": views.autonomy(facts),
         "setup": held, "intent": nxt, "since": since,
         "counts": sorted(counts.items(), key=lambda kv: str(kv[0])),
         "packets": len(nodes), "trouble": len(trouble),
@@ -508,6 +563,82 @@ def side(h, cols, broken):
     return out
 
 
+def attention_key(a):
+    """A Needs-you row's identity for a snooze (``attention.key``): its kind, its
+    project and packet, and when its cause began, so anything new brings it back."""
+    from .. import attention
+    c = a["card"]
+    if a.get("item"):
+        return attention.key(c["name"], a["item"])
+    root = c.get("root") or {}
+    at = (c.get("unread") or {}).get("at") if a["kind"] in ("done", "stopped") else \
+        root.get("updated")
+    sub = (a.get("req") or {}).get("id") or (a.get("pkt") or {}).get("wpid") or ""
+    return attention.key(c["name"], {"type": a["kind"], "source": sub,
+                                     "since": at.timestamp() if at else 0})
+
+
+def session_spend(home, now=None):
+    """Today's tokens in the Claude and Codex sessions people drive (docs/collaboration.md
+    §7.5), and their cost where a model profile has a price: ``{"tokens", "usd"}``.
+    Budgets stay on the runner's spend; this is shown beside it."""
+    import time
+    from .. import cost, ide_sessions, profiles
+    now = time.time() if now is None else now
+    start = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0,
+                                                microsecond=0).timestamp()
+    tokens, usd, priced_any = 0, 0.0, False
+    try:
+        profs = profiles.load()
+    except Exception:                   # noqa: BLE001: a bad profile file: tokens only
+        profs = []
+    for r in ide_sessions.cached_records(home):
+        if (r.get("last_activity_t") or 0) < start or not r.get("usage_reported"):
+            continue
+        u = r.get("usage") or {}
+        tokens += ide_sessions.total(u)
+        try:
+            prof = profiles.select(profs, r.get("harness"), r.get("model"))
+        except Exception:               # noqa: BLE001: no profile for it
+            prof = None
+        got = cost.priced(u, getattr(prof, "price", None)) if prof else None
+        if got is not None:
+            usd, priced_any = usd + got, True
+    return {"tokens": tokens, "usd": usd if priced_any else None}
+
+
+def backlog(cols):
+    """The Backlog (docs/collaboration.md §9): open projects by your priority, then
+    rank, then name; ``{"now": [card], ..., "rot": [card]}``."""
+    out = {p: [] for p in planning.PRIORITIES}
+    for col, cards in cols.items():
+        if col == "Done":
+            continue
+        for c in cards:
+            out[c["plan"]["priority"]].append(c)
+    for p in out:
+        out[p].sort(key=lambda c: (c["plan"]["rank"] if isinstance(c["plan"]["rank"], int)
+                                   else 1 << 30, c["name"]))
+    out["rot"] = [c for cards in cols.values() for c in cards if c.get("rot")]
+    return out
+
+
+def since_last(cards, since, per=3, cap=30):
+    """Since you were last here (docs/collaboration.md §8.1): each project's events
+    after ``since`` (epoch), newest first, ``per`` at most per project; ``[{"card",
+    "events", "more"}]``, the most recently active project first."""
+    out = []
+    for c in cards:
+        if not c.get("root") or c["root"].get("state") == "?":
+            continue
+        evs = views.timeline(Packet(c["root"]["path"]), since=since, limit=per + 20)
+        if evs:
+            out.append({"card": c, "events": evs[:per], "more": len(evs) - per
+                        if len(evs) > per else 0, "t": evs[0]["t"]})
+    out.sort(key=lambda x: x["t"], reverse=True)
+    return out[:cap]
+
+
 def overview(cols, broken, side, burn, now=None, coming=8):
     """The Overview (docs/overview.md) from ``board()``, ``side()`` and
     ``tokens.board()``: headline ``tiles``, the ``attention`` list, a row per
@@ -516,21 +647,36 @@ def overview(cols, broken, side, burn, now=None, coming=8):
     cards = [c for v in cols.values() for c in v]
     ago = lambda t: relative(-(now - t).total_seconds()).replace(" ago", "") if t else ""
     needs = cols["Needs you"]
-    attention = [{"kind": "needs", "card": c} for c in needs]
-    attention += [{"kind": "failed", "card": c} for c in cols["Failed"]]
+    # Questions and failures; finished work to review comes in below, with the rest
+    # finished since anyone looked.
+    kind = {"question": "needs", "failure": "failed"}
+    attention = [{"kind": kind[c["ball"]["kind"]], "card": c} for c in needs
+                 if c["ball"]["kind"] in kind]
     attention += [{"kind": "trouble", "card": c} for c in cards
-                  if c["trouble"] and c["column"] != "Failed"]
-    attention += [{"kind": "setup", "card": c} for c in cards if c["setup"]]
+                  if c["trouble"] and c["ball"]["kind"] != "failure"]
     attention += [{"kind": "stalled", "card": c, "req": r} for c in cards
                   for r in c.get("stalled") or ()]
     attention += [{"kind": "stuck", "card": c, "pkt": k} for c in cards
                   for k in c.get("stuck") or ()]
+    # The sessions you drive: blocked, your turn, gone quiet (docs/collaboration.md §4.3)
+    attention += [{"kind": {"your turn": "yourturn"}.get(it["type"], it["type"]), "card": c,
+                   "item": it} for c in cards for it in c.get("sessions") or ()]
+    # Finished (to review) or stopped by a limit since anyone looked.
     unread = sorted((c for c in cards if c["unread"]), key=lambda c: c["unread"]["at"],
                     reverse=True)
     attention += [{"kind": c["unread"]["kind"], "card": c} for c in unread]
+    order = {"needs": 0, "failed": 0, "blocked": 0, "trouble": 1, "stalled": 1, "stuck": 1,
+             "done": 2, "stopped": 2, "yourturn": 3, "stale": 3}
+    attention.sort(key=lambda a: order.get(a["kind"], 2))       # stable: in-kind order kept
+    for a in attention:
+        a["key"] = attention_key(a)
+    reviews = [a for a in attention if a["kind"] == "done" and a["card"]["lifecycle"] == "open"]
     waits = [c["root"]["updated"] for c in needs if c["root"] and c["root"].get("updated")]
-    fails = [c["root"]["updated"] for c in cols["Failed"]
-             if c["root"] and c["root"].get("updated")]
+    failed = [c for c in needs if c["ball"]["kind"] == "failure"]
+    fails = [c["root"]["updated"] for c in failed if c["root"] and c["root"].get("updated")]
+    agent = cols["Working: agent"]
+    running = [c for c in agent if c["running"]]
+    sleepers = [c for c in cols["Waiting"] if c["root"] and c["root"]["state"] == "SLEEPING"]
     rows = []
     for b in side:
         mine = [c for c in cards if c["board"] == b["name"]]
@@ -555,21 +701,24 @@ def overview(cols, broken, side, burn, now=None, coming=8):
     return {
         "tiles": {
             "needs": len(needs), "oldest": ago(min(waits)) if waits else "",
-            "running": len(cols["Running"]), "done": len(unread),
-            "failed": len(cols["Failed"]) + sum(c["trouble"] for c in cards
-                                                 if c["column"] != "Failed"),
+            "progress": len(cols["Working: you"]) + len(agent), "done": len(unread),
+            "reviews": len(reviews),
+            "oldest_review": ago(min(a["card"]["unread"]["at"] for a in reviews))
+            if reviews else "",
+            "failed": len(failed) + sum(c["trouble"] for c in cards
+                                        if c["ball"]["kind"] != "failure"),
             "newest_fail": ago(max(fails)) if fails else "",
             "spend_today": sum(c["spend_today"] for c in cards),
             "spend": total.get("cost_usd"),
             "quota": next((w for w in burn.get("quota") or [] if w["label"] == "Weekly"),
                           None),
         },
-        "attention": attention, "boards": rows, "running": cols["Running"],
-        # What runs next: the ready (due now), then the sleepers by wake time.
-        "coming": (cols["Ready"] + cols["Sleeping"])[:coming],
-        "more_coming": max(len(cols["Ready"]) + len(cols["Sleeping"]) - coming, 0),
-        "next_wake": cols["Sleeping"][0]["root"]["next"].split(", ")[-1]
-                     if cols["Sleeping"] and cols["Sleeping"][0]["root"] else "",
+        "attention": attention, "boards": rows, "running": running,
+        "you": cols["Working: you"],
+        # What runs next: the queued (due now), then the sleepers by wake time.
+        "coming": ([c for c in agent if not c["running"]] + sleepers)[:coming],
+        "more_coming": max(len(agent) - len(running) + len(sleepers) - coming, 0),
+        "next_wake": sleepers[0]["root"]["next"].split(", ")[-1] if sleepers else "",
     }
 
 
@@ -656,6 +805,8 @@ def packet(entry, wpid, now=None):
         meta, body = pkt.load_status()
     except (OSError, frontmatter.FrontMatterError):
         meta, body = {}, ""
+    live = running(pkt, now)
+    here = present(entry, now) if wpid == entry.get("root") else []
     memento = _read(pkt.memento_path) or ""
     files = []
     for dirpath, dirnames, filenames in os.walk(pkt.state_dir):
@@ -688,11 +839,19 @@ def packet(entry, wpid, now=None):
         "wpid": wpid, "short": wpid[:8], "path": pkt.path, "meta": meta,
         "pausing": _pausing(pkt),
         "taken_by": meta.get("taken_by"), "taken": _ts(meta.get("taken")),
+        # whose move it is (docs/collaboration.md §4.1), for the Now line
+        "ball": views.ball(meta or {"state": "?"}, live, here),
+        "driver": views.driver(meta, live, here), "present": here,
+        "hooks": _hooks(entry) if wpid == entry.get("root") else None,
+        "plan": planning.get(entry) if wpid == entry.get("root") else None,
+        "lifecycle": views.lifecycle(meta),
+        "autonomy": views.autonomy(meta), "review": meta.get("review"),
         "taking": _taking(pkt), "studio": _studio_ok(entry, wpid),
         "fields": [(k, meta.get(k)) for k in schema.STATUS_FIELDS if k in meta],
         "summary": body.strip(), "summary_html": md(body.strip()),
         "status_line": _first_line(body), "intent": _intent(body), "memento": memento, "files": files, "children": kids,
-        "parent": parent, "steps": list(reversed(steps(pkt))), "running": running(pkt, now),
+        "parent": parent, "steps": list(reversed(steps(pkt))), "running": live,
+        "timeline": views.timeline(pkt, limit=60),
         "next": _next(meta, now, tz), "journal": pkt.journal().records[-200:],
         "notes": notes_mod.queued(pkt),
         "questions": questions.of_packet(pkt),
@@ -1037,8 +1196,20 @@ def step(entry, wpid, dirname, view="blocks"):
     meta = _json(os.path.join(sd, "meta.json"))
     session = (meta or {}).get("session_id")
     diff = _read(os.path.join(sd, "state.diff"))
+    # Continue the step's conversation yourself (docs/collaboration.md §7.3): it is an
+    # ordinary Claude session, resumed where it ran (Claude finds it by folder).
+    resume = None
+    if session and (meta or {}).get("harness", "claude") == "claude" and \
+            (info.get("worker") or "agent") == "agent":
+        folder = layout.packet_folder(entry["path"]) if layout.is_packet_layout(
+            entry["path"]) else pkt.path
+        resume = {"cwd": folder, "fork": "cd %s && claude --resume %s --fork-session" % (
+            shlex.quote(folder), session),
+                  "why": "cd %s && claude --resume %s --fork-session --permission-mode plan"
+                  % (shlex.quote(folder), session)}
     return {
         "wpid": wpid, "short": wpid[:8], "dir": dirname, "info": info, "meta": meta,
+        "resume": resume,
         "label": "%d%s" % (info["n"], " attempt %s" % info["attempt"]
                            if info["outcome"] == "failed" else ""),
         "prompt": _read(os.path.join(sd, "prompt.md")),
@@ -1398,10 +1569,10 @@ def compose(entry, now=None):
             checks.append(setup.Check(
                 "next.dirty.%s" % repo, "work", "missing",
                 "work/%s has uncommitted changes" % repo,
-                "The next step starts from a clean tree: commit or stash them (%d paths)."
-                % len(lines),
-                ["git -C %s add -A && git -C %s commit -m 'handoff: by hand'"
-                 % ((setup.tilde(os.path.join(tg.packet_work, repo)),) * 2)]))
+                "The next step starts from a clean tree: commit them as work in progress, "
+                "or hand off anyway to include them as they are (%d paths)." % len(lines),
+                ["git -C %s add -A && git -C %s commit -q -m 'WIP before hand-off'"
+                 % ((shlex.quote(os.path.join(tg.packet_work, repo)),) * 2)], safe=True))
     groups = []
     for key, title in STAGES:
         cs = [c for c in checks if c.group == key]
@@ -1417,7 +1588,11 @@ def compose(entry, now=None):
         draft = actions.load_draft(tg.packet)
         text, where = (draft or {}).get("instruction", ""), "draft"
     last = [r for r in records if r.get("type") == "handoff" and r.get("instruction")]
+    summary = tg.packet.load_status()[1].strip()
     return {
+        # Where it stands, when a person wrote it after the runner's last step: the
+        # runner has not seen it, so it is the hand-off note's draft (W4).
+        "context": summary if mode == "next" and _by_hand_last(tg.packet) else "",
         "tg": tg, "meta": meta, "state": state, "running": run, "owned": owned,
         "mode": mode, "held_for_setup": held_for_setup(meta),
         "groups": groups, "missing": len(setup.missing(checks)),
@@ -1427,12 +1602,19 @@ def compose(entry, now=None):
         "templates": setup.TEMPLATES,
         "inputs": _inputs(tg.state),
         "state_where": "the project's state/" if mode == "setup" else "the root packet's state/",
-        "batch": executor.batch_of(records), "summary": tg.packet.load_status()[1].strip(),
+        "batch": executor.batch_of(records), "summary": summary,
         "archive_default": state == "COMPLETED",
         "carry": _carry_estimate(tg.packet, meta) if mode == "next" else None,
         "shell_dir": tg.proj if mode == "setup" else tg.packet.path,
     }
 
+
+
+def _by_hand_last(pkt):
+    """The packet's last step was a person's checkpoint (or the scribe's)."""
+    from .. import checkpoint
+    got = checkpoint.last(pkt)
+    return bool(got) and got["worker"] in ("session", "studio", "scribe")
 
 
 def model_choices(h=None):

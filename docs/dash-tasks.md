@@ -1,5 +1,9 @@
 # The board as a workbench: new tasks, a shell, and the next batch of work
 
+> Superseded in part (2026-11-06) by `collaboration.md`: §2 rule 4 (a hand-off
+> ends your turn) no longer holds by default (§5.2), and §6.6's refusal of a dirty
+> tree becomes a choice in the hand-off dialog (W4).
+
 Status (2026-10-25): T1–T4 built; T5 (a live trial with the real model)
 to do. Recommendations in §9 accepted. 466 tests pass. Not committed. A fresh session should be able to
 pick up from this file and the status log at the end. Read with

@@ -68,7 +68,7 @@ def test_the_packet_page_lists_its_sessions(short_home, tmp_path, monkeypatch, s
     assert "job <code>4242</code> on exec7" in mine and "1.5k" in mine
     codex = _row(mine, SID[1])
     assert codex.count("unreported") == 2 and "workspace match" in codex   # model and tokens
-    assert SID[2][:8] in shared and "Asked for input" in shared and "waiting for input" in shared
+    assert SID[2][:8] in shared and "Asked for input" in shared and "waiting for you" in shared
     assert SID[3][:8] not in page                                    # another packet's
 
 

@@ -7,8 +7,7 @@
 {#- How every board is doing, what needs you, and token use (docs/overview.md). -#}
 {% block title %}Overview{% endblock %}
 {% block head %}
-{% set colour = {"Needs you": "NEEDS_INPUT", "Running": "running", "Ready": "RUNNABLE",
-  "Sleeping": "SLEEPING", "Paused": "PAUSED", "Failed": "FAILED", "Done": "COMPLETED"} %}
+{% set colour = column_colour %}
 <style>
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 6px; }
 .tile { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--line);
@@ -23,6 +22,13 @@ ul.list { list-style: none; margin: 0; padding: 0; background: var(--panel); bor
 ul.list li { display: flex; gap: 10px; align-items: baseline; padding: 6px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 ul.list li:last-child { border-bottom: 0; }
 ul.list .what { flex: 1; min-width: 16ch; }
+.snz { display: inline-block; position: relative; }
+.snz > summary { list-style: none; cursor: pointer; }
+.snz > summary::-webkit-details-marker { display: none; }
+.snz .snzitems { position: absolute; right: 0; z-index: 5; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 3px; white-space: nowrap; }
+ul.since .ev { display: block; font-size: 13px; }
+ul.since .who { font-weight: 600; }
 ul.list .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; display: inline-block; vertical-align: bottom; }
 .bd { font-size: 11px; border: 1px solid var(--line); border-radius: 9px; padding: 0 6px; color: var(--muted); }
 table.bt td.c { text-align: right; font-variant-numeric: tabular-nums; }
@@ -64,14 +70,14 @@ ul.list button.x:hover { color: var(--FAILED); }
 <div class="tiles">
   <a class="tile{{ ' hot' if t.needs }}" href="#attention"><div class="k">Needs you</div><div class="v">{{ t.needs }}</div>
     <div class="s">{% if t.oldest %}oldest waiting {{ t.oldest }}{% endif %}</div></a>
-  <a class="tile" href="#attention" title="Projects that stopped since anyone looked"><div class="k">Done</div><div class="v">{{ t.done }}</div>
-    <div class="s">{% if t.done %}not looked at yet{% endif %}</div></a>
-  <a class="tile{{ ' run' if t.running }}" href="#running"><div class="k">Running</div><div class="v">{{ t.running }}</div>
+  <a class="tile{{ ' hot' if t.reviews }}" href="#attention" title="Work the runner finished that you have not looked at yet"><div class="k">Reviews</div><div class="v">{{ t.reviews }}</div>
+    <div class="s">{% if t.oldest_review %}oldest {{ t.oldest_review }}{% endif %}</div></a>
+  <a class="tile{{ ' run' if t.progress }}" href="#running" title="Packets someone is working on: you, or the runner"><div class="k">In progress</div><div class="v">{{ t.progress }}</div>
     <div class="s">{% if ov.next_wake %}next wake {{ ov.next_wake }}{% endif %}</div></a>
   <a class="tile{{ ' bad' if t.failed }}" href="#attention"><div class="k">Failed</div><div class="v">{{ t.failed }}</div>
     <div class="s">{% if t.newest_fail %}newest {{ t.newest_fail }} ago{% endif %}</div></a>
   <a class="tile" href="/stats?days={{ burn.days }}"><div class="k">Spend today</div><div class="v">{{ t.spend_today|money or "$0" }}</div>
-    <div class="s">{% if burn.days > 1 %}{{ t.spend|money or "$0" }} {{ span }}{% endif %}</div></a>
+    <div class="s">{% if t.sessions and t.sessions.tokens %}runner; your sessions {{ t.sessions.usd|money if t.sessions.usd is not none else t.sessions.tokens|tok ~ " tokens" }}{% if burn.days > 1 %} · {% endif %}{% endif %}{% if burn.days > 1 %}{{ t.spend|money or "$0" }} {{ span }}{% endif %}</div></a>
   {% if t.quota %}
   <a class="tile{{ ' bad' if t.quota.used >= 0.8 and not t.quota.reset }}" href="/stats?days={{ burn.days }}"><div class="k">Weekly quota</div>
     <div class="v">{{ t.quota.used|pct }}</div>
@@ -94,7 +100,21 @@ ul.list button.x:hover { color: var(--FAILED); }
 
 {{ xpm.show(xpanels) }}
 
-<h2 id="attention">Needs attention</h2>
+{% if side|length > 1 %}<nav class="tabs" style="margin:6px 0 0">
+  <a class="{{ 'on' if not board }}" href="/">All boards</a>{% for b in side %}<a class="{{ 'on' if board == b.name }}" href="/?board={{ b.name|urlencode }}">{{ b.name }}</a>{% endfor %}
+</nav>{% endif %}
+
+{% set focus = [] %}{% for col, cs in ov.cols.items() if col != "Done" %}{% for c in cs if c.plan.priority == "now" %}{% set _ = focus.append(c) %}{% endfor %}{% endfor %}
+<div class="row focusbar" style="margin:8px 0 0">
+  {% if focus %}<span><strong>Focus:</strong> {% for c in focus %}<a href="/p/{{ c.name|urlencode }}">{{ c.name }}</a>{% if c.due %} <span class="muted">({{ c.due }})</span>{% endif %}{{ " · " if not loop.last }}{% endfor %}</span>{% else %}<span class="muted">Nothing in <em>now</em>: set a project's priority with Plan ▾, or on the <a href="/backlog">Backlog</a>.</span>{% endif %}
+  <form class="act row" method="post" action="/inbox" style="margin:0 0 0 auto">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="/">
+    <input type="text" name="text" placeholder="capture a to-do…" aria-label="capture a to-do" required style="font:inherit;min-width:16em">
+    <button class="mini">Capture</button>{% if ov.captured %} <a class="muted" href="/backlog#inbox">{{ ov.captured }} in the inbox</a>{% endif %}
+  </form>
+</div>
+<form id="snooze-form" method="post" action="/attention/snooze" data-visit data-csrf="{{ csrf or '' }}"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="/{{ '?board=' ~ (board|urlencode) if board }}#attention"></form>
+<h2 id="attention">Needs you{% if ov.snoozed %} <span class="muted" style="font-size:12.5px;font-weight:400">({{ ov.snoozed }} snoozed)</span>{% endif %}</h2>
 {% if ov.attention %}
 {% set fin = ov.attention|selectattr("kind", "in", ["done", "stopped"])|list %}
 {% if fin %}
@@ -121,10 +141,12 @@ ul.list button.x:hover { color: var(--FAILED); }
   {% endif %}
   <li>
     {% if a.kind == "needs" %}<a class="state NEEDS_INPUT" href="/p/{{ c.name|urlencode }}#answer" title="Answer its questions">ASKS</a>
-    {% elif a.kind == "setup" %}<span class="state PAUSED">SETUP</span>
     {% elif a.kind == "stalled" %}<span class="state {{ a.req.state }}" title="A request this project sent: nobody is working on it">REQUEST</span>
     {% elif a.kind == "stuck" %}<span class="state SLEEPING" title="It sleeps although a child stopped">ASLEEP</span>
-    {% elif a.kind == "done" %}<input type="checkbox" name="project" value="{{ c.name }}" aria-label="tick {{ c.name }}"><span class="state COMPLETED">DONE</span>
+    {% elif a.kind == "blocked" %}<span class="state NEEDS_INPUT" title="Claude waits on a permission prompt">BLOCKED</span>
+    {% elif a.kind == "yourturn" %}<span class="state PAUSED" title="Claude ended its turn: it is your move">YOUR TURN</span>
+    {% elif a.kind == "stale" %}<span class="state PAUSED" title="A session that said it was working has gone quiet">QUIET</span>
+    {% elif a.kind == "done" %}<input type="checkbox" name="project" value="{{ c.name }}" aria-label="tick {{ c.name }}">{% if c.lifecycle == "open" %}<span class="state COMPLETED" title="The runner finished: look it over, then mark it done or hand it the next thing">REVIEW</span>{% else %}<span class="state COMPLETED">DONE</span>{% endif %}
     {% elif a.kind == "stopped" %}<input type="checkbox" name="project" value="{{ c.name }}" aria-label="tick {{ c.name }}"><span class="state PAUSED">STOPPED</span>
     {% else %}<span class="state FAILED">FAILED</span>{% endif %}
     <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
@@ -133,25 +155,32 @@ ul.list button.x:hover { color: var(--FAILED); }
     {% if a.kind == "needs" %}<span class="ell" title="{{ c.root.reason or '' }}">{{ c.root.reason or "has a question" }}</span>
       <span class="muted">· <code>wpk answer {{ c.name }}</code></span>
     {% elif a.kind == "failed" %}<span class="ell err" title="{{ c.root.reason or '' }}">{{ (c.root.reason if c.root else "") or "failed" }}</span>
+
     {% elif a.kind == "trouble" %}{{ c.trouble }} packet{{ "s" if c.trouble != 1 }} below the root failed
     {% elif a.kind == "stalled" %}{% set r = a.req %}request <code>{{ r.id }}</code> to <a href="/p/{{ r.project|urlencode }}">{{ r.project }}</a> is {{ r.state }} at step {{ r.step }}:
       <span class="ell" title="{{ r.reason or '' }}">{{ r.reason or "no reason" }}</span>
       <span class="muted">· nobody is working on it</span>
     {% elif a.kind == "stuck" %}{% set k = a.pkt %}<code>{{ k.name or k.short }}</code> sleeps, but
       {% for ch in k.children %}<code>{{ ch.short }}</code> is {{ ch.state }}{{ ", " if not loop.last }}{% endfor %}
+    {% elif a.kind in ("blocked", "yourturn", "stale") %}{{ a.item.text }}
+      <span class="muted">· {{ a.item.since|epoch }}</span>
     {% elif a.kind in ("done", "stopped") %}{% set u = c.unread %}<span class="ell" title="{{ u.outcome }}">{{ u.outcome or ("finished" if a.kind == "done" else "stopped") }}</span>
       <span class="muted">· {{ u.ago }}{% if u.task > 1 %} · task {{ u.task }}{% endif %}{% if u.cost_usd %} · {{ u.cost_usd|money }}{% endif %}</span>
       {% if u.pr %}<a href="{{ u.pr.url }}">PR #{{ u.pr.number }}</a>{% endif %}
-    {% else %}{% if c.setup.missing is none %}<span class="err">{{ c.setup.next }}</span>{% elif c.setup.missing %}{{ c.setup.missing }} missing · next <code>{{ c.setup.next }}</code>{% else %}ready to hand off{% endif %}
     {% endif %}</span>
     {% if a.kind == "needs" %}<a class="mini" href="/p/{{ c.name|urlencode }}#answer">Answer</a>
-    {% elif a.kind == "setup" %}<a class="mini" href="/p/{{ c.name|urlencode }}/compose">Set up</a>
     {% elif a.kind == "stalled" %}{% if a.req.state != "NEEDS_INPUT" %}<button class="mini" form="act-{{ loop.index }}" title="Start the delegate: it becomes RUNNABLE">Hand off</button>{% endif %}
       <a class="mini" href="/p/{{ a.req.project|urlencode }}{{ '#answer' if a.req.state == 'NEEDS_INPUT' }}">{{ "Answer" if a.req.state == "NEEDS_INPUT" else "Open" }}</a>
     {% elif a.kind == "stuck" %}<button class="mini" form="act-{{ loop.index }}" title="Run it now">Wake</button>
-    {% elif a.kind in ("done", "stopped") %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>
+    {% elif a.kind in ("done", "stopped") %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>{% if a.kind == "done" and c.lifecycle == "open" %}
+      <button class="mini" form="act-{{ loop.index }}" title="It is finished: take it off the active views (Reopen brings it back)">Done</button>{% endif %}
       <button class="x" form="seen-one" name="project" value="{{ c.name }}" title="Take it off the list without opening it" aria-label="dismiss {{ c.name }}">×</button>
+    {% elif a.kind in ("blocked", "yourturn", "stale") %}<a class="mini" href="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}#vscode-sessions">Open</a>
+      {% if a.kind == "yourturn" %}<details class="snz"><summary class="mini" title="The board cannot type into your session: the reply waits as a note, and Claude gets it with your next prompt there">Reply</summary>
+        <span class="snzitems"><input form="reply-{{ loop.index }}" name="note" placeholder="reaches it with your next prompt" aria-label="reply" required><button class="mini" form="reply-{{ loop.index }}" name="action" value="note">Send</button></span></details>{% endif %}
     {% else %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>{% endif %}
+    <details class="snz"><summary class="mini" title="Hide it for a while; anything new about it brings it back">Snooze</summary>
+      <span class="snzitems">{% for u, label in (("1h", "1 hour"), ("tomorrow", "until tomorrow"), ("change", "until it changes")) %}<button class="mini" form="snooze-form" name="item" value="{{ a.key }}@@{{ u }}">{{ label }}</button>{% endfor %}</span></details>
   </li>
 {% endfor %}
 </ul>
@@ -161,6 +190,13 @@ ul.list button.x:hover { color: var(--FAILED); }
 <form id="act-{{ loop.index }}" method="post" action="/p/{{ a.req.project|urlencode }}/{{ a.req.wpid }}/act">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="action" value="handoff">
   <input type="hidden" name="back" value="overview"></form>
+{% elif a.kind == "yourturn" %}
+<form id="reply-{{ loop.index }}" method="post" action="/p/{{ a.card.name|urlencode }}/{{ a.card.root.wpid }}/act">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="overview"></form>
+{% elif a.kind == "done" and a.card.lifecycle == "open" %}
+<form id="act-{{ loop.index }}" method="post" action="/p/{{ a.card.name|urlencode }}/{{ a.card.root.wpid }}/act">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="action" value="done">
+  <input type="hidden" name="back" value="overview"></form>
 {% elif a.kind == "stuck" %}
 <form id="act-{{ loop.index }}" method="post" action="/p/{{ a.card.name|urlencode }}/{{ a.pkt.wpid }}/act">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="action" value="wake">
@@ -168,6 +204,17 @@ ul.list button.x:hover { color: var(--FAILED); }
 {% endif %}{% endfor %}
 {% else %}
 <p class="muted">Nothing needs you.</p>
+{% endif %}
+
+{% if last %}
+<h2 id="since">Since you were last here <span class="muted" style="font-size:12.5px;font-weight:400">({{ since|epoch }})</span></h2>
+<ul class="list since">
+{% for p in last %}{% set c = p.card %}
+  <li><a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
+    <span class="what">{% for ev in p.events %}<span class="ev"><span class="muted">{{ ev.t|epoch }}</span> <span class="who">{{ ev.actor }}</span> {{ ev.text }}</span>{% endfor %}
+      {% if p.more %}<a class="muted" href="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}#timeline">and {{ p.more }} more</a>{% endif %}</span></li>
+{% endfor %}
+</ul>
 {% endif %}
 
 <div class="h2bar"><h2>Boards</h2>
@@ -191,9 +238,15 @@ ul.list button.x:hover { color: var(--FAILED); }
 
 <div class="grid2">
 <div>
-<h2 id="running">Running now</h2>
-{% if ov.running %}
+<h2 id="running">In progress</h2>
+{% if ov.running or ov.you %}
 <ul class="list">
+{% for c in ov.you %}
+  <li><span class="state PAUSED" title="You have it ({{ c.ball.text }})">YOU</span>
+    {{ pz.badge(c) }}<a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
+    <span class="what">{{ c.ball.text }}</span>
+    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}</li>
+{% endfor %}
 {% for c in ov.running %}
   <li><span class="state running pulse">RUNNING</span>
     {{ pz.badge(c) }}<a href="/p/{{ c.name|urlencode }}/{{ c.running.wpid }}/live"><strong>{{ c.name }}</strong></a>
@@ -203,16 +256,16 @@ ul.list button.x:hover { color: var(--FAILED); }
     {{ pz.button(c, "/#running") }}</li>
 {% endfor %}
 </ul>
-{% else %}<p class="muted">Nothing is running.</p>{% endif %}
+{% else %}<p class="muted">Nobody is working on anything.</p>{% endif %}
 </div>
 <div>
 <h2>Coming up</h2>
 {% if ov.coming %}
 <ul class="list">
 {% for c in ov.coming %}
-  <li>{% if c.column == "Ready" %}<span class="state RUNNABLE">READY</span>{% else %}<span class="state SLEEPING">WAKES</span>{% endif %}{{ pz.badge(c) }}
+  <li>{% if c.ball.kind == "queued" %}<span class="state RUNNABLE">QUEUED</span>{% else %}<span class="state SLEEPING">WAKES</span>{% endif %}{{ pz.badge(c) }}
     <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
-    <span class="what muted">{% if c.column == "Ready" %}due now{% if not runner %}: runner off, start the dash with --run or use <code>wpk tick</code>{% endif %}{% else %}{{ c.root.next if c.root }}{% endif %}</span>
+    <span class="what muted">{% if c.ball.kind == "queued" %}due now{% if not runner %}: runner off, start the dash with --run or use <code>wpk tick</code>{% endif %}{% else %}{{ c.root.next if c.root }}{% endif %}</span>
     {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
     {{ pz.button(c, "/#running") }}</li>
 {% endfor %}
@@ -226,6 +279,7 @@ ul.list button.x:hover { color: var(--FAILED); }
 <h2 id="vscode-sessions">Recent VS Code sessions</h2>
 {{ vsm.table(vsc, where=True) }}
 {{ vsm.scribe_switch(scribe_on, "/#vscode-sessions", csrf) }}
+{{ vsm.hooks_switch(hooks_on, "/#vscode-sessions", csrf) }}
 {% endif %}
 
 {% endif %}

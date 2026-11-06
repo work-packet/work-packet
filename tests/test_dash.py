@@ -70,10 +70,33 @@ def tree(tmp_path_factory):
 def test_every_state_in_its_column(tree):
     cols, broken = data.board(now=data._ts(NOW))
     got = {c["name"]: col for col, cards in cols.items() for c in cards}
-    assert got == {"done": "Done", "ready": "Ready", "paused": "Paused",
-                   "running": "Running", "sleeping": "Sleeping", "failed": "Failed",
-                   "asking": "Needs you"}
+    # By whose move it is (docs/collaboration.md §8.2): a finished task is yours to
+    # review until you mark it done.
+    assert got == {"done": "Needs you", "ready": "Working: agent", "paused": "Parked",
+                   "running": "Working: agent", "sleeping": "Waiting",
+                   "failed": "Needs you", "asking": "Needs you"}
+    kinds = {c["name"]: c["ball"]["kind"] for cards in cols.values() for c in cards}
+    assert kinds == {"done": "review", "ready": "queued", "paused": "parked",
+                     "running": "working", "sleeping": "scheduled", "failed": "failure",
+                     "asking": "question"}
     assert broken == []
+
+
+def test_mark_done_and_reopen_from_the_board(tree, client):
+    e, pkt = tree["done"]
+    c = client
+    r = c.post("/p/done/%s/act" % pkt.wpid, data={"action": "done", "note": "all good",
+                                                   "back": "/b/main"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/b/main")
+    assert "ok=1" in r.headers["location"]
+    card = data.card(e, data._ts(NOW))
+    assert card["column"] == "Done" and card["lifecycle"] == "done"
+    rec = pkt.journal().records[-1]
+    assert rec["type"] == "admin" and rec["op"] == "done" and rec["note"] == "all good"
+    assert "Reopen" in c.get("/b/main").text
+    r = c.post("/p/done/%s/act" % pkt.wpid, data={"action": "reopen"}, follow_redirects=False)
+    assert "ok=1" in r.headers["location"]
+    assert data.card(e, data._ts(NOW))["column"] == "Needs you"
 
 
 def test_cards(tree):
@@ -167,14 +190,15 @@ def test_pages(tree, client):
     # The Overview: no cards, but what needs you, the boards' counts, what runs and wakes.
     r = client.get("/")
     assert r.status_code == 200 and 'data-project=' not in r.text
-    assert "Needs attention" in r.text and "Which colour" in r.text \
+    assert "Needs you" in r.text and "Which colour" in r.text \
         and "wpk answer asking" in r.text and "/p/asking#answer" in r.text
     assert "/p/failed\"><strong>failed<" in r.text            # failed root, in the attention list
-    assert 'title="ready">1<' not in r.text and 'title="ready"><a href="/b/main">1<' in r.text
+    # the runner's column counts the queued and the running
+    assert 'title="ready, running"><a href="/b/main">2<' in r.text
     assert "/p/running/%s/live" % tree["running"][1].wpid in r.text
     assert ">sleeping</strong>" in r.text and "Coming up" in r.text
     up = r.text[r.text.index("Coming up"):]                  # ready first, then the sleepers
-    assert ">READY<" in up and up.index(">ready</strong>") < up.index(">sleeping</strong>")
+    assert ">QUEUED<" in up and up.index(">ready</strong>") < up.index(">sleeping</strong>")
     r = client.get("/p/done")
     assert r.status_code == 200 and "<svg" in r.text and "hello" in r.text
     r = client.get("/p/done/" + root)

@@ -32,7 +32,8 @@ def test_claude_fixture():
     assert st["usage"] == {"input_tokens": 18, "output_tokens": 48,
                            "cache_read_input_tokens": 600, "cache_creation_input_tokens": 20}
     assert s.total(st["usage"]) == 686 and st["usage_reported"]
-    assert st["last_event"] == s.TURN_END and st["turn_state"] == s.FINISHED
+    # a session someone drives: the end of its turn is their move
+    assert st["last_event"] == s.TURN_END and st["turn_state"] == s.WAITING
     assert st["last_activity_t"] == s.epoch("2026-11-04T10:00:09.000Z")
     assert cur["offset"] == os.path.getsize(CLAUDE)
 
@@ -81,7 +82,8 @@ def test_codex_fixture():
     assert st["usage"] == {"input_tokens": 500, "cache_read_input_tokens": 2000,
                            "output_tokens": 90, "thinking_tokens": 40}
     assert s.total(st["usage"]) == 2590
-    assert st["last_event"] == s.TURN_END and st["turn_state"] == s.FINISHED
+    # a session someone drives: the end of its turn is their move
+    assert st["last_event"] == s.TURN_END and st["turn_state"] == s.WAITING
 
 
 def test_codex_thread_usage_wins_and_is_never_added_to_token_count():
@@ -180,3 +182,15 @@ def test_an_overlong_line_is_skipped(tmp_path):
     for _ in range(10):
         st, cur = s.scan(str(p), "claude", st, cur, max_bytes=1024)
     assert st["usage"] == {"output_tokens": 2} and st["bad_lines"] == 0
+
+
+def test_a_scripted_session_finishes_one_driven_by_a_person_waits():
+    """docs/collaboration.md §4.3: an interactive turn's end is the person's move."""
+    for ep, want in (("sdk-cli", s.FINISHED), ("cli", s.WAITING), ("claude-vscode", s.WAITING)):
+        st = _feed("claude", [
+            {"type": "user", "entrypoint": ep, "timestamp": "2026-11-04T10:00:00Z",
+             "message": {"role": "user", "content": "hi"}},
+            {"type": "assistant", "timestamp": "2026-11-04T10:00:05Z",
+             "message": {"id": "m1", "model": "claude-sonnet-5", "stop_reason": "end_turn",
+                         "content": [{"type": "text", "text": "done"}]}}])
+        assert st["turn_state"] == want, ep

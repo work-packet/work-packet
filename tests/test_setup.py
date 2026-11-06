@@ -338,18 +338,21 @@ def test_board_card_shows_setup(home):
     from work_packet.dash.app import create_app
     tg = held()
     c = data.card(registry.get("dvs"))
-    assert c["column"] == "Paused"
+    # Not started, not an alarm: Parked (docs/collaboration.md §8.2). Readiness stays
+    # in Compose, the hand-off's pre-flight.
+    assert c["column"] == "Parked" and c["ball"]["text"] == "not started"
     assert c["setup"] == {"missing": 1, "warnings": 1,
                           "next": "wpk instruct dvs --template outline"}
     client = TestClient(create_app())
     r = client.get("/b/main")
-    assert "Setting up:" in r.text and "1 missing" in r.text
-    assert "next: <code>wpk instruct dvs --template outline</code>" in r.text
-    r = client.get("/")                                 # and the Overview's attention list
-    assert ">SETUP<" in r.text and "1 missing" in r.text and 'href="/p/dvs/compose">Set up<' in r.text
+    assert "not started" in r.text and "Setting up" not in r.text
+    assert 'href="/p/dvs/compose"' in r.text            # the card opens Compose
+    r = client.get("/")                                 # not on the Overview's attention list
+    assert ">SETUP<" not in r.text and "missing" not in r.text
+    r = client.get("/p/dvs/compose")
+    assert "1 missing." in r.text
     setup.instruct(tg, "Count to 3.")
     assert data.card(registry.get("dvs"))["setup"]["missing"] == 0
-    assert "ready to hand off" in TestClient(create_app()).get("/").text
 
 
 def test_setup_repo_not_cloned_gives_the_commands(home, source):

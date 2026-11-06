@@ -264,6 +264,21 @@ def c_keep(args, scope, ctx):
     return _out(executor.withdraw_pause(_need_packet(e, wpid, "keep")), "keep", _href(e, wpid))
 
 
+def _mark(op):
+    """/done, /drop, /reopen: a project (its root) or a packet (docs/collaboration.md §4.1)."""
+    def c(args, scope, ctx):
+        t, rest = _split_at(args)
+        e, wpid = resolve(t, scope, ctx)
+        _writable(e)
+        wpid = wpid or e["root"]
+        out = executor.mark(_pkt(e, wpid), op, ctx.by, " ".join(rest).strip() or None)
+        if out.code == 0 and op != "reopen":
+            from ..sched import control
+            control.cancel_pending(wpid, ctx.principal, ctx.home)
+        return _out(out, op, _href(e, wpid))
+    return c
+
+
 def c_stop(args, scope, ctx):
     from .. import actions
     e, wpid = resolve(args[0] if args else None, scope, ctx)
@@ -495,6 +510,9 @@ COMMANDS = {c.name: c for c in [
     Cmd("note", c_note, "[@packet] [--wake] <text>", "leave a note for a packet's next step",
         True),
     Cmd("handoff", c_handoff, "[@packet] [note]", "hand a packet back to the runner", True),
+    Cmd("done", _mark("done"), "[@target] [note]", "mark a project (or packet) done", True),
+    Cmd("drop", _mark("drop"), "[@target] [note]", "drop a project (or packet)", True),
+    Cmd("reopen", _mark("reopen"), "[@target]", "open a project marked done again", True),
     Cmd("answer", c_answer, "[@packet] id=text … [-r] [-m note]",
         "answer a packet's questions; -r takes the recommendations", True),
     Cmd("model", c_model, "[name]", "the agent's model for this conversation (e.g. haiku,"

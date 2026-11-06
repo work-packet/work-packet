@@ -1,5 +1,8 @@
 # Working with packets: making it easy (proposal, 2026-10-26)
 
+> Superseded in part (2026-11-06) by `collaboration.md` §14: `wpk work` opens the
+> packet's session and writes presence, with no state change.
+
 Status: a proposal for review. Nothing here is built. It follows
 `docs/positioning-survey.md` §7 (cheap ways in) and `docs/packet-format.md`
 (levels, packets that work without a daemon).

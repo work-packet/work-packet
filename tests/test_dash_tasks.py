@@ -212,8 +212,9 @@ def test_new_task_form_creates_a_held_project(tmp_path, fake):
     assert r.status_code == 200 and 'name="name"' in r.text
     r = c.post("/new", data={"name": "nt", "dir": str(tmp_path / "pp"), "model": ""},
                follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"].startswith("/p/nt/compose")
     e = registry.get("nt")
+    # nothing started: its page (docs/collaboration.md W1)
+    assert r.status_code == 303 and r.headers["location"].startswith("/p/nt/%s?" % e["root"])
     assert e["path"] == str(tmp_path / "pp" / "nt" / ".work-packet")       # a packet
     assert os.path.isfile(tmp_path / "pp" / "nt" / "nt.wp.md")
     meta, _ = Packet(os.path.join(e["path"], "runs", e["root"])).load_status()
@@ -282,7 +283,7 @@ def test_compose_next_batch(tmp_path, fake):
     scheduler.tick([e], until_idle=True)
     c = _client()
     r = c.get("/p/cn/%s" % pkt.wpid)
-    assert "Next batch" in r.text
+    assert "Hand off…" in r.text
     r = c.get("/p/cn/compose")
     assert "batch 2" in r.text and "Where batch 1 stopped" in r.text
     assert "Count reached 8" in r.text
@@ -447,7 +448,8 @@ def test_websocket_shell(tmp_path, fake, monkeypatch, guarded):
         assert json.loads(ws.receive_text()) == {"gone": True}
 
 
-def test_handoff_closes_the_projects_shells(tmp_path, fake, monkeypatch, guarded):
+def test_handoff_keeps_your_shells(tmp_path, fake, monkeypatch, guarded):
+    """docs/collaboration.md §5.2: you may go on working beside the runner."""
     import json
     monkeypatch.setenv("SHELL", "/bin/bash")
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -458,13 +460,15 @@ def test_handoff_closes_the_projects_shells(tmp_path, fake, monkeypatch, guarded
     with c.websocket_connect("ws://127.0.0.1:7878/p/hc/shell/new", headers=ORIGIN) as ws:
         ws.send_text(json.dumps({"token": token}))
         sid = json.loads(ws.receive_text())["sid"]
-    assert "Closes 1 open shell" in c.get("/p/hc/compose").text
+    assert "while it is open, the runner waits" in c.get("/p/hc/compose").text
     r = c.post("/p/hc/compose", headers=ORIGIN, data={
         "csrf": token, "action": "handoff", "instruction": "Add one.\n", "force": "1"},
         follow_redirects=False)
     msg, ok = _flash(r)
-    assert ok and "closed 1 shell" in msg, msg
-    assert _wait(lambda: shells.get(sid) is None, 10)
+    assert ok and "closed" not in msg, msg
+    assert shells.get(sid) is not None
+    assert Packet(os.path.join(e["path"], "packets", e["root"])).journal().records[-1][
+        "defer"] is False                                  # handed off now: it starts
     # the runner's now: no new shell
     with c.websocket_connect("ws://127.0.0.1:7878/p/hc/shell/new", headers=ORIGIN) as ws:
         ws.send_text(json.dumps({"token": token}))

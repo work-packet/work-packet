@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% import "_side.html" as sidem with context %}
 {% import "_pause.html" as pz with context %}
+{% import "_open.html" as om with context %}
+{% import "_plan.html" as plm with context %}
 {% block title %}{{ here.name }}{% endblock %}
 {% block crumbs %}/ <a href="/b/{{ here.name|urlencode }}">{{ here.name }}</a>{% endblock %}
 {% block head %}
@@ -13,15 +15,23 @@
 @container (max-width: 1120px) { .board { grid-template-columns: repeat(4, minmax(170px, 1fr)); } }
 @container (max-width: 760px) { .board { grid-template-columns: repeat(2, minmax(170px, 1fr)); } }
 @container (max-width: 420px) { .board { grid-template-columns: minmax(0, 1fr); } }
+.col.drop { outline: 2px dashed var(--link); }
 .col { background: var(--code); border-radius: 8px; padding: 0 8px 8px; min-height: 120px; }
 .col h2 { margin: 0 -4px 6px; padding: 10px 8px 4px; display: flex; justify-content: space-between;
   position: sticky; top: 0; z-index: 1; background: var(--code); }
 .card { display: block; color: inherit; background: var(--panel); border: 1px solid var(--line);
   border-left: 4px solid var(--unknown); border-radius: 6px; margin: 0 0 6px; }
 .card:hover { border-color: var(--link); }
-.card.Running { border-left-color: var(--running); } .card.Ready { border-left-color: var(--RUNNABLE); }
-.card.Needs { border-left-color: var(--NEEDS_INPUT); } .card.Sleeping { border-left-color: var(--SLEEPING); } .card.Paused { border-left-color: var(--PAUSED); }
+.card.Agent { border-left-color: var(--running); } .card.You { border-left-color: var(--RUNNABLE); }
+.card.Needs { border-left-color: var(--NEEDS_INPUT); } .card.Waiting { border-left-color: var(--SLEEPING); } .card.Parked { border-left-color: var(--PAUSED); }
 .card.Failed { border-left-color: var(--FAILED); } .card.Done { border-left-color: var(--COMPLETED); }
+.openmenu { display: inline-block; position: relative; }
+.openmenu > summary { list-style: none; cursor: pointer; }
+.openmenu > summary::-webkit-details-marker { display: none; }
+.openmenu .openitems { position: absolute; z-index: 5; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 150px; }
+.openmenu .openitems form { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.card .auto { font-size: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 0 5px; color: var(--muted); font-weight: normal; }
 /* Compact: the name and one line. A click unfolds it, a click on it open folds it;
    its name and buttons only act once it is open. */
 .card > summary { list-style: none; padding: 4px 8px; }
@@ -79,49 +89,59 @@
 {% endif %}
 <div class="board">
 {% for col in columns %}
-  <section class="col" id="col-{{ loop.index }}" data-follow="no">
-    <h2><span>{{ col }}</span><span class="muted">{{ cols[col]|length }}</span></h2>
+  <section class="col" id="col-{{ loop.index }}" data-follow="no" data-col="{{ col }}">
+    <h2><span>{{ col }}</span><span class="muted">{{ cols[col]|length + (captures|length if col == "Inbox" else 0) }}</span></h2>
+    {% if col == "Inbox" %}{% for d in captures %}
+    <div class="card Inbox capture"><div class="brief" title="{{ d.text }}">{{ d.text }}</div>
+      <div class="cardpz"><form class="act" method="post" action="/inbox/{{ d.id }}/accept"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini" title="Make it a packet: New, with this as its objective">Make packet</button></form>
+        <form class="act" method="post" action="/inbox/{{ d.id }}/drop"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini">Drop</button></form></div></div>
+    {% endfor %}
+    <form class="act capture-form" method="post" action="/inbox" style="margin:4px 0 8px">
+      <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="board" value="{{ here.name }}">
+      <input type="hidden" name="back" value="/b/{{ here.name|urlencode }}">
+      <input type="text" name="text" placeholder="capture a to-do…" aria-label="capture a to-do" required style="width:100%;font:inherit">
+    </form>{% endif %}
     {% for c in cols[col] %}
-    {% set href = "/p/" ~ (c.name|urlencode) ~ ("/" ~ c.running.wpid ~ "/live" if c.running else "/compose" if c.setup else "#answer" if c.column == "Needs you" else "") %}
-    <details class="card {{ c.column }}" id="card-{{ c.name }}" draggable="true" data-project="{{ c.name }}">
+    {% set k = c.ball.kind %}
+    {% set href = "/p/" ~ (c.name|urlencode) ~ ("/" ~ c.running.wpid ~ "/live" if c.running else "/compose" if c.setup else "#answer" if k == "question" else "") %}
+    <details class="card {{ c.css }}" id="card-{{ c.name }}" draggable="true" data-project="{{ c.name }}"{% if c.root %} data-root="{{ c.root.wpid }}"{% endif %}>
     <summary>
       <div class="name"><a href="{{ href }}" title="{{ c.name }}">{{ c.name }}</a>
-        <span class="tags">{{ pz.badge(c) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</span></div>
+        <span class="tags">{{ plm.chips(c.plan, c.due) }}{% if c.autonomy != "handoff" %}<span class="auto" title="autonomy: {{ c.autonomy }}">{{ c.autonomy }}</span>{% endif %}{{ pz.badge(c) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</span></div>
       {#- One line, cut to fit; the whole of it is in the body. -#}
       {% if c.running %}{% set brief = (c.running.name or c.running.short) ~ " step " ~ c.running.step ~ (", " ~ c.running.for if c.running.for else "") %}
-      {% elif c.column == "Ready" %}{% set why = waiting.get(c.root.wpid) if c.root and waiting else none %}{% set brief = "waiting on: " ~ why.why if why and why.waiting else "due now" %}
-      {% elif c.column == "Sleeping" %}{% set brief = "wakes " ~ c.root.next %}
-      {% elif c.column == "Needs you" and c.root and c.root.reason %}{% set brief = "Asks: " ~ c.root.reason %}
-      {% elif c.setup %}{% set brief = "Setting up: " ~ (c.setup.next if c.setup.missing is none else (c.setup.missing ~ " missing") if c.setup.missing else "ready to hand off") %}
-      {% elif c.column in ("Paused", "Failed") and c.root and c.root.reason %}{% set brief = c.root.reason %}
-      {% elif c.column == "Done" %}{% set brief = "finished " ~ c.finished %}
-      {% else %}{% set brief = "step " ~ (c.root.step if c.root else "?") ~ " · last step " ~ c.last_step %}{% endif %}
-      <div class="brief {{ 'err' if c.column == 'Failed' }}" title="{{ brief }}">{% if c.running %}<span class="state running pulse">RUN</span> {% endif %}{{ brief }}</div>
-      {% if c.root and c.root.summary and c.root.summary != brief and not c.setup %}<div class="stat" title="{{ c.root.summary }}">{{ c.root.summary }}</div>{% endif %}
+      {% elif k == "queued" %}{% set why = waiting.get(c.root.wpid) if c.root and waiting else none %}{% set brief = "waiting on: " ~ why.why if why and why.waiting else "due now" %}
+      {% elif k == "scheduled" %}{% set brief = "wakes " ~ c.root.next %}
+      {% elif k == "question" %}{% set brief = "Asks: " ~ c.ball.text %}
+      {% elif k == "failure" %}{% set brief = c.ball.text %}
+      {% elif k == "review" %}{% set brief = "finished " ~ c.finished ~ ": review it" %}
+      {% elif c.column == "Done" %}{% set brief = c.lifecycle ~ (" · finished " ~ c.finished if c.finished else "") %}
+      {% else %}{% set brief = c.ball.text %}{% endif %}
+      <div class="brief {{ 'err' if k == 'failure' }}" title="{{ brief }}">{% if c.running %}<span class="state running pulse">RUN</span> {% endif %}{{ brief }}</div>
+      {% if c.root and c.root.summary and c.root.summary != brief %}<div class="stat" title="{{ c.root.summary }}">{{ c.root.summary }}</div>{% endif %}
     </summary>
     <div class="body">
       {% if c.running %}
         <div class="line"><span class="state running pulse">RUNNING</span>
           {{ c.running.name or c.running.short }} step {{ c.running.step }}{% if c.running.for %}, {{ c.running.for }}{% endif %}</div>
         {% if c.running.now %}<div class="line muted">{{ c.running.now }}</div>{% endif %}
-      {% elif c.column == "Ready" %}
+        {% if c.driver == "you + runner" %}<div class="line err" title="you handed it off while you had it open (docs/collaboration.md §5.2)">you and the runner are both working in it</div>{% endif %}
+      {% elif k == "queued" %}
         {% if why and why.waiting %}<div class="line"><span class="cls {{ why['class'] }}">{{ why['class'] }}</span> waiting on: {{ why.why }}</div>
         {% else %}<div class="line">due now, waiting for {{ "the runner" if runner else "<code>wpk tick</code>"|safe }}</div>{% endif %}
-      {% elif c.column == "Sleeping" %}
+      {% elif k == "scheduled" %}
         <div class="line">wakes {{ c.root.next }}</div>
-      {% elif c.column == "Needs you" and c.root and c.root.reason %}
-        <div class="line"><strong>Asks:</strong> {{ c.root.reason }}</div>
+      {% elif k == "question" %}
+        <div class="line"><strong>Asks:</strong> {{ c.ball.text }}</div>
         <div class="line muted">open to answer, or <code>wpk answer {{ c.name }}</code></div>
-      {% elif c.setup %}
-        <div class="line"><strong>Setting up:</strong>
-          {% if c.setup.missing is none %}<span class="err">{{ c.setup.next }}</span>
-          {% elif c.setup.missing %}{{ c.setup.missing }} missing{% if c.setup.warnings %}, {{ c.setup.warnings }} warning{{ "s" if c.setup.warnings != 1 }}{% endif %}
-          {% else %}ready to hand off{% endif %}</div>
-        {% if c.setup.missing is not none %}<div class="line muted">next: <code>{{ c.setup.next }}</code></div>{% endif %}
-      {% elif c.column in ("Paused", "Failed") and c.root and c.root.reason %}
-        <div class="line {{ 'err' if c.column == 'Failed' }}">{{ c.root.reason }}</div>
+      {% elif k == "failure" %}
+        <div class="line err">{{ c.ball.text }}</div>
+      {% elif k == "review" %}
+        <div class="line">the runner finished {{ c.finished }}: look it over, then mark it done or hand it the next thing</div>
       {% elif c.column == "Done" %}
-        <div class="line">finished {{ c.finished }}; open it to give it the next batch</div>
+        <div class="line">{{ c.lifecycle }}{% if c.finished %} · last change {{ c.finished }}{% endif %}</div>
+      {% else %}
+        <div class="line">{{ c.ball.text }}</div>
       {% endif %}
       {% if c.root and c.root.summary %}<div class="sum">{{ c.root.summary }}</div>{% endif %}
       {% if c.intent %}<div class="intent">Next: {{ c.intent }}</div>{% endif %}
@@ -131,7 +151,7 @@
         <span class="muted" style="margin-left:auto">{{ c.spend_total|money }}{% if c.spend_today %} ({{ c.spend_today|money }} today){% endif %}</span>
       </div>
       <div class="line muted">step {{ c.root.step if c.root else "?" }} · last step {{ c.last_step }}</div>
-      <div class="cardpz"><a class="mini" href="{{ href }}">Open</a>{{ pz.button(c, "/b/" ~ (here.name|urlencode)) }}</div>
+      <div class="cardpz"><a class="mini" href="{{ href }}">Page</a>{{ om.menu(c) }}{{ plm.menu(c.name, c.plan, "/b/" ~ (here.name|urlencode)) }}{{ pz.button(c, "/b/" ~ (here.name|urlencode)) }}{{ pz.mark(c, "/b/" ~ (here.name|urlencode)) }}</div>
     </div>
     </details>
     {% endfor %}

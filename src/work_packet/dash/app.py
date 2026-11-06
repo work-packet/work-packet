@@ -38,8 +38,9 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pane.js"), "
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Served from the package: compose.js, shell.js and the other scripts (no CDN, the CSP
 # is script-src 'self'); vendored libraries go through dash/vendored.py. Name -> media type.
-STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript", "studio_wait.js": "text/javascript", "studio_files.js": "text/javascript", "studio_edit.js": "text/javascript", "ide_forward.js": "text/javascript"}
+STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript", "studio_wait.js": "text/javascript", "studio_files.js": "text/javascript", "studio_edit.js": "text/javascript", "ide_forward.js": "text/javascript", "ide_presence.js": "text/javascript", "page.js": "text/javascript"}
 REFRESH_S = 10
+STARTS = ("ide-web", "ide-desktop", "studio", "handoff", "none")   # collaboration.md W1
 LIVE_MS = 3000             # the live view refreshes faster
 log = logging.getLogger("wpk.dash")
 UPLOAD_MAX = 16 << 20      # bytes of one uploaded input
@@ -162,7 +163,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     stamp = max(os.path.getmtime(os.path.join(HERE, n)) for n in STATIC)
     env.globals.update(origin_of=data.origin, version=__about__.__version__, refresh_s=REFRESH_S,
                        asset_v="%s-%d" % (__about__.__version__, stamp),
-                       columns=data.COLUMNS, ask_text=ask_text,
+                       columns=data.COLUMNS, column_colour=data.COLUMN_COLOUR, ask_text=ask_text,
                        packet_layout=layout.is_packet_layout, packet_folder=layout.packet_folder)
 
     jobs = newjobs.CreateJobs(home)       # New task's Create, in the background
@@ -180,8 +181,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             ctx["sched_mode"] = None
         ctx.setdefault("ide", ide_config())
         if "vsc" in ctx:                  # the sessions tables carry the scribe's switch
-            from .. import scribe
+            from .. import scribe, sessionhooks
             ctx["scribe_on"] = scribe.enabled(home or registry.home(), ctx["ide"])
+            ctx["hooks_on"] = sessionhooks.enabled(ctx["ide"], home or registry.home())
         ctx["ide_sizes"] = ide_sizes() if getattr(ide_backend, "slot", False) else []
         ctx["ide_web"] = web_state(request, ctx["ide"])
         return HTMLResponse(env.get_template(name).render(**ctx), status_code=status)
@@ -250,16 +252,34 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     async def overview(request):
         """The Overview (``/``): how every board is doing, what needs you (and what
         finished), the boards' cost over ``?days=`` 1, 7 or 30 (docs/overview.md)."""
+        from .. import attention
         days = days_of(request)
         cols, broken = data.board(home)
         side = data.side(home, cols, broken)
+        board = request.query_params.get("board")      # the Desk for one board (§8.1)
+        if board not in [b["name"] for b in side]:
+            board = None
+        if board:
+            cols, broken = data.only(cols, broken, board)
         burn = tokens.board(archived.entries(home), days=days, on=[b["name"] for b in side])
-        ov = data.overview(cols, broken, side, burn)
+        ov = data.overview(cols, broken, [b for b in side if not board or b["name"] == board],
+                           burn)
+        h, me = home or registry.home(), who(request)
+        snz = attention.snoozes(h, me)
+        ov["snoozed"] = sum(1 for a in ov["attention"] if a["key"] in snz)
+        ov["attention"] = [a for a in ov["attention"] if a["key"] not in snz]
+        since = attention.since(h, me)          # the page's beacon records the visit
+        cards = [c for v in cols.values() for c in v]
+        last = await run_in_threadpool(data.since_last, cards, since) if since else []
+        ov["tiles"]["sessions"] = await run_in_threadpool(data.session_spend, h) \
+            if is_owner(request) else None
+        from .. import inbox
+        ov["cols"], ov["captured"] = cols, len(inbox.items(h))
         snap = await run_in_threadpool(dsched.snapshot, home)
         vsc = await run_in_threadpool(ide_sessions.recent_view, home or registry.home()) \
             if is_owner(request) else None
         return render(request, "overview.html", ov=ov, burn=burn, broken=broken, live=True,
-                      vsc=vsc,
+                      vsc=vsc, board=board, since=since, last=last,
                       sch=dsched.tiles(snap), xpanels=xpanels(request, "overview"),
                       home=home or registry.home(), side=side, here=None,
                       windows=tokens.WINDOWS, main_board=registry.DEFAULT_BOARD)
@@ -334,8 +354,11 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         cols, broken = data.only(cols, broken, name)
         snap = await run_in_threadpool(dsched.snapshot, home)
         watchers = await run_in_threadpool(data.watchers, home, name)
+        from .. import inbox
+        captures = [d for d in inbox.items(home or registry.home())
+                    if (d.get("board") or registry.DEFAULT_BOARD) == name]
         return render(request, "board.html", cols=cols, broken=broken, live=True,
-                      waiting=dsched.waiting(snap), watchers=watchers,
+                      waiting=dsched.waiting(snap), watchers=watchers, captures=captures,
                       side=side, here=here, main_board=registry.DEFAULT_BOARD)
 
     async def all_packets(request):
@@ -830,8 +853,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         vsc = await run_in_threadpool(ide_sessions.packet_view, home or registry.home(),
                                       e["name"], request.path_params["wpid"]) \
             if is_owner(request) else None
+        auto = request.query_params.get("open")    # just made: open it (collaboration.md W1)
         return render(request, "packet.html", e=e, p=p, live=True, classes=CLASSES, dfm=dfm,
                       convs=convs, docs_built=built, vsc=vsc,
+                      autoopen=auto if auto in ("ide-web", "ide-desktop", "studio") else None,
                       sch=dsched.packet_info(snap, e, request.path_params["wpid"]),
                       tk=tokens.packet(e, request.path_params["wpid"]))
 
@@ -900,19 +925,40 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                 out = executor.Outcome(executor.USAGE, str(ex))
         elif op == "keep":              # take back a pause that has not happened yet
             out = await run_in_threadpool(executor.withdraw_pause, pkt)
+        elif op in ("done", "drop", "reopen"):     # docs/collaboration.md §4.1
+            out = await run_in_threadpool(executor.mark, pkt, op, by, note or None)
+        elif op == "hooks":                         # install or repair them (§4.3)
+            from .. import ide, sessionhooks
+            folder = sessionhooks.packet_folder(e)
+            if folder is None:
+                folders = ide.hook_folders(await run_in_threadpool(ide.resolve, e["path"]))
+            else:
+                folders = [folder]
+            got = await run_in_threadpool(sessionhooks.ensure, folders, {"hooks": True})
+            bad = [v for v in got.values() if v not in ("installed", "unchanged", "removed")]
+            out = executor.Outcome(executor.USAGE if bad else executor.OK,
+                                   "; ".join(bad) if bad else "Claude Code hooks: %s" % (
+                                       ", ".join(sorted(set(got.values()))) or "nothing to do"))
+        elif op == "autonomy":                      # §4.4
+            out = await run_in_threadpool(executor.mark, pkt, op, by, None,
+                                          one("autonomy"), one("review") or None)
         elif op in ("handoff", "pause", "resume", "wake"):
-            out = await run_in_threadpool(executor.admin, pkt, op, note or None, None, by)
-            if op == "pause" and out.code == 0:
-                from ..sched import authz, control
-                await run_in_threadpool(control.cancel_pending, wpid,
-                                        authz.principal_of(request), home)
+            defer = one("after") == "1" and op != "pause"     # "after I leave" (§5.2)
+            out = await run_in_threadpool(lambda: executor.admin(
+                pkt, op, note or None, None, by, defer=defer))
         else:
             out = executor.Outcome(executor.USAGE, "unknown action %r" % op)
+        if op in ("pause", "done", "drop") and out.code == 0:
+            from ..sched import authz, control
+            await run_in_threadpool(control.cancel_pending, wpid,
+                                    authz.principal_of(request), home)
         url = "/p/%s/%s" % (urllib.parse.quote(e["name"]), wpid)
         if one("back") == "project":
             url = "/p/%s" % urllib.parse.quote(e["name"])
         elif one("back") == "overview":
             url = "/#attention"
+        elif one("back").startswith("/"):           # a board's page, for instance
+            url = local(one("back"), url)
         return back(url + "/live" if one("back") == "live" else url, out)
 
     async def scribe_switch(request):
@@ -929,6 +975,124 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         return back(local(one("back"), "/"), executor.Outcome(
             executor.OK, "status drafts when sessions end: %s" % ("on" if on else "off")),
             poke_runner=False)
+
+    async def plan_post(request):
+        """Your planning fields for a project (docs/collaboration.md §9.2): any of
+        ``planning.KEYS`` ("" unsets), ``force`` (past the now limit), ``back``."""
+        from .. import executor, planning
+        e = entry(request)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        changes = {k: one(k) for k in planning.KEYS if k in f}
+        if "due" in f and "due_kind" not in f:
+            changes["due_kind"] = ""        # the form's box was left unticked
+        to = local(one("back"), "/p/%s" % urllib.parse.quote(e["name"]))
+        try:
+            wip = int((registry.load_config_file(home).get("plan") or {}).get(
+                "focus_wip") or planning.FOCUS_WIP)
+        except (registry.ConfigError, ValueError, TypeError):
+            wip = planning.FOCUS_WIP
+        try:
+            got = await run_in_threadpool(lambda: planning.set_(
+                e, changes, who(request), archived.entries(home), wip, one("force") == "1"))
+        except planning.PlanError as ex:
+            return back(to, executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+        return back(to, executor.Outcome(executor.OK, "%s: %s%s" % (
+            e["name"], got["priority"], ", " + planning.due_text(got) if got["due"] else "")),
+            poke_runner=False)
+
+    async def backlog_page(request):
+        """The Backlog (docs/collaboration.md §9): your projects by priority, what
+        you captured, and what has gone untouched."""
+        from .. import inbox
+        cols, broken = data.board(home)
+        side = data.side(home, cols, broken)
+        return render(request, "backlog.html", bl=data.backlog(cols), side=side, here=None,
+                      inbox=inbox.items(home or registry.home()))
+
+    async def capture(request):
+        """Quick capture into the Inbox (docs/collaboration.md §9.6)."""
+        from .. import executor, inbox
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        try:
+            d = await run_in_threadpool(inbox.add, home or registry.home(), one("text"),
+                                        who(request), "board", one("project") or None,
+                                        one("board") or None)
+            out = executor.Outcome(executor.OK, "captured: %s" % d["text"][:60])
+        except ValueError as ex:
+            out = executor.Outcome(executor.USAGE, str(ex))
+        return back(local(one("back"), "/"), out, poke_runner=False)
+
+    async def inbox_item(request):
+        """``accept`` (to New, with the text as its objective) or ``drop`` an item."""
+        from .. import executor, inbox
+        h = home or registry.home()
+        iid, op = request.path_params["iid"], request.path_params["op"]
+        d = inbox.get(h, iid) if op in ("accept", "drop") else None
+        if d is None:
+            return back("/backlog#inbox", executor.Outcome(executor.USAGE, "no such item"),
+                        poke_runner=False)
+        inbox.drop(h, iid)
+        if op == "drop":
+            return back("/backlog#inbox", executor.Outcome(executor.OK, "dropped"),
+                        poke_runner=False)
+        from .. import card as cardmod
+        name = cardmod.name_from(d["text"].splitlines()[0])[:40].strip("-") or "todo"
+        q = {"objective": d["text"], "name": name}
+        if d.get("board"):
+            q["board"] = d["board"]
+        return RedirectResponse("/new?" + urllib.parse.urlencode(q), status_code=303)
+
+    async def visited(request):
+        """The Desk's beacon: you are looking at it now (docs/collaboration.md §8.1)."""
+        from starlette.responses import Response
+        from .. import attention
+        await run_in_threadpool(attention.visit, home or registry.home(), who(request))
+        return Response(status_code=204)
+
+    async def snooze(request):
+        """Snooze a Needs-you row (docs/collaboration.md §4.3): ``key``, ``until``
+        (1h, tomorrow or change), ``back``."""
+        from .. import attention, executor
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        k, until = one("key"), one("until")
+        if one("item"):                 # a row's button: "<key>@@<until>"
+            k, _, until = one("item").rpartition("@@")
+        if not k or len(k) > 400:
+            return back(local(one("back"), "/"), executor.Outcome(executor.USAGE, "no item"),
+                        poke_runner=False)
+        await run_in_threadpool(attention.snooze, home or registry.home(), who(request), k,
+                                attention.until_of(until or "1h"))
+        what = {"1h": "for an hour", "tomorrow": "until tomorrow"}.get(
+            until, "until something changes")
+        return back(local(one("back"), "/"), executor.Outcome(executor.OK, "snoozed " + what),
+                    poke_runner=False)
+
+    async def hooks_switch(request):
+        """Claude Code hooks in packet folders on or off for the board
+        (docs/collaboration.md §10): every registered packet folder follows."""
+        from .. import executor, ide, sessionhooks
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        on = one("on") == "1"
+        if not is_owner(request):
+            return back(local(one("back"), "/"), executor.Outcome(
+                executor.USAGE, "only the board's owner can turn this on or off"),
+                poke_runner=False)
+        h = home or registry.home()
+        await run_in_threadpool(sessionhooks.set_enabled, h, on, who(request))
+        got = await run_in_threadpool(sessionhooks.apply_all, h, ide.load_config(h))
+        bad = sorted(k for k, v in got.items()
+                     if v not in ("installed", "unchanged", "removed"))
+        msg = "Claude Code hooks in packet folders: %s" % ("on" if on else "off")
+        if bad:
+            msg += "; could not change %s (see the packet page)" % ", ".join(bad)
+        return back(local(one("back"), "/"), executor.Outcome(
+            executor.USAGE if bad else executor.OK, msg), poke_runner=False)
 
     async def checkpoint_draft(request):
         """A status drafted from the packet's latest session (docs/session-checkpoint.md
@@ -1128,15 +1292,13 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         go = one("go") or "desktop"                  # desktop | web, -packet: the worktree
         how, packet = go.split("-")[0], go.endswith("-packet") or one("packet") == "1"
         t = layout.run_dir(e["path"], wpid) if wpid else e["path"]
-        paused = None
-        if one("pause") == "1" and wpid:
-            from .. import executor
-            from ..packet import Packet
-            paused = await run_in_threadpool(executor.admin, Packet(t), "pause", None, None,
-                                             who(request))
-            if paused.code != 0:
-                url = "/p/%s/%s" % (urllib.parse.quote(e["name"]), wpid)
-                return back(url, paused, poke_runner=False)
+        # Opening it to work on it takes it from the runner until you hand it back
+        # (docs/collaboration.md §5.1): you, not the runner, work in it now.
+        from .. import actions
+        paused = await run_in_threadpool(actions.claim, e, who(request))
+        if paused.code != 0:
+            url = "/p/%s" % urllib.parse.quote(e["name"]) + ("/%s" % wpid if wpid else "")
+            return back(url, paused, poke_runner=False)
         try:
             cfg = ide.load_config(home)
             op = await run_in_threadpool(ide.resolve, t, repo, packet)
@@ -1156,6 +1318,12 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             except dide.IdeUnavailable as ex:
                 return not_found(request, "web VS Code here (%s)" % ex)
             return RedirectResponse(ide.web_path(op, "/ide/%s/" % key), status_code=303)
+        # Desktop VS Code: the board hears from it only through Claude's hooks, so the
+        # open itself counts as presence for a while (docs/collaboration.md §4.2).
+        from .. import presence
+        await run_in_threadpool(presence.beat, e["path"], "ide-desktop-%s" % (who(request) or "you"),
+                                None, kind="ide-desktop", via="ide-desktop", wpid=op.wpid,
+                                by=who(request))
         st = request.scope.get("state", {})
         name = None
         if st.get("listener") == "tailnet":     # the name the browser used: it resolves there
@@ -1248,7 +1416,16 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         vals = {k: v[0] for k, v in f.items() if k != "csrf"}
         action = vals.pop("action", "create")
         starter = _starter_of(vals)
-        go = vals.pop("go", "") == "1"
+        # How to start (docs/collaboration.md W1): ide, studio, handoff or none.
+        # ``go=1`` is the old form's "hand it to the runner at once".
+        start = vals.pop("start", "") or ("handoff" if vals.pop("go", "") == "1" else "none")
+        vals.pop("go", None)
+        how = vals.pop("ide", "") or "web"
+        if start == "ide":
+            start = "ide-desktop" if how == "desktop" else "ide-web"
+        if start not in STARTS:
+            start = "none"
+        go = start == "handoff"
         rtext = vals.pop("recipe", "")
         tool = vals.pop("clone_tool", "")
         bg = "application/json" in request.headers.get("accept", "")   # new.js: a job
@@ -1267,6 +1444,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                 r["clone"]["tool"] = tool
                 r = starters.check(r)
             r["hold"] = not go
+            if go and not (r.get("objective") or "").strip():
+                raise starters.StartError("write the objective first: it is what the runner "
+                                          "is told to do (or start it another way)")
             return r
         try:
             r = await run_in_threadpool(recipe_of)
@@ -1277,7 +1457,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                                 preview=lines, recipe=r)
             if bg:
                 await run_in_threadpool(starters.preview, r, home)   # refusals, at once
-                jid = jobs.start(r, starters.folder_of(r), lambda plan: made(plan, go), home)
+                jid = jobs.start(r, starters.folder_of(r), lambda plan: made(plan, start), home)
                 return JSONResponse({"job": jid, "ws": "/new/job/%s/ws" % jid,
                                      "log": "/new/job/%s/log" % jid})
             plan = await run_in_threadpool(starters.make, r, home)
@@ -1289,18 +1469,23 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             q = urllib.parse.urlencode({"msg": str(ex), "ok": "0", "name": vals.get("name", ""),
                                         "starter": starter})
             return RedirectResponse("/new?" + q, status_code=303)
-        return RedirectResponse(made(plan, go), status_code=303)
+        return RedirectResponse(made(plan, start), status_code=303)
 
-    def made(plan, go):
-        """The page to go to once ``plan`` is made, as ``back`` sends you."""
-        if go:
+    def made(plan, start):
+        """The page to go to once ``plan`` is made (``start``: one of ``STARTS``). For
+        VS Code or the studio, its packet page, which opens it (``open=``)."""
+        q = {"ok": "1"}
+        if start == "handoff":
             poke()
-            url, msg = "/p/%s" % urllib.parse.quote(plan.name), \
-                "created %s at %s; the runner has it" % (plan.name, plan.path)
+            url = "/p/%s" % urllib.parse.quote(plan.name)
+            q["msg"] = "created %s at %s; the runner has it" % (plan.name, plan.path)
+        elif start == "none":
+            url = "/p/%s/%s" % (urllib.parse.quote(plan.name), plan.root)
+            q["msg"] = "created %s at %s" % (plan.name, plan.path)
         else:
-            url, msg = compose_url({"name": plan.name}), \
-                "created %s at %s; held for setup" % (plan.name, plan.path)
-        return "%s?%s" % (url, urllib.parse.urlencode({"msg": msg, "ok": "1"}))
+            url = "/p/%s/%s" % (urllib.parse.quote(plan.name), plan.root)
+            q.update(open=start, msg="created %s at %s; opening it" % (plan.name, plan.path))
+        return "%s?%s" % (url, urllib.parse.urlencode(q))
 
     async def new_job_ws(ws):
         """A Create job's events (dash-create-progress-design.md): the CSRF token
@@ -1394,6 +1579,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         text, note = one("instruction"), one("note").strip()
         archive = one("archive") == "1" if c["mode"] == "next" else None
         carry, force = one("carry") == "1", one("force") == "1"
+        after = one("after") == "1"             # wait until nobody works on it (§5.2)
         if not c["owned"]:
             return back(compose_url(e), executor.Outcome(executor.NOT_RUNNABLE, (
                 "the runner has it (%s%s); pause it first" % (
@@ -1436,17 +1622,13 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                         raise setup.SetupError("%d check%s missing; fix them or hand off "
                                                "anyway" % (c["missing"], "" if c["missing"]
                                                            == 1 else "s"))
-                    out = await run_in_threadpool(executor.admin, tg.packet, "handoff",
-                                                  note or None, None, by)
+                    out = await run_in_threadpool(lambda: executor.admin(
+                        tg.packet, "handoff", note or None, None, by, defer=after))
                 else:
                     out = await run_in_threadpool(
                         actions.continue_, tg.packet, text, note or None, archive, carry,
-                        force, by)
-                if out.code == 0 and shells is not None:
-                    n = shells.close_project(e["name"])
-                    if n:
-                        out = executor.Outcome(out.code, "%s; closed %d shell%s" % (
-                            out.msg, n, "" if n == 1 else "s"))
+                        force, by, after)
+                # Your shells stay open: you may go on working beside the runner (§5.2).
                 url = "/p/%s/%s/live" % (urllib.parse.quote(e["name"]), tg.packet.wpid) \
                     if out.code == 0 else compose_url(e)
                 return back(url, out)
@@ -1887,6 +2069,13 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/p/{project}/{wpid}/act", act, methods=["POST"]),
         Route("/p/{project}/{wpid}/checkpoint/draft", checkpoint_draft, methods=["POST"]),
         Route("/sessions/scribe", scribe_switch, methods=["POST"]),
+        Route("/sessions/hooks", hooks_switch, methods=["POST"]),
+        Route("/attention/snooze", snooze, methods=["POST"]),
+        Route("/attention/visit", visited, methods=["POST"]),
+        Route("/p/{project}/plan", plan_post, methods=["POST"]),
+        Route("/backlog", backlog_page),
+        Route("/inbox", capture, methods=["POST"]),
+        Route("/inbox/{iid}/{op}", inbox_item, methods=["POST"]),
         Route("/p/{project}/{wpid}/live", live_view),
         Route("/p/{project}/{wpid}/file", deliverable),
         Route("/p/{project}/{wpid}/plan", plan_view),

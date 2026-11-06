@@ -153,7 +153,7 @@ def test_packet_page_leads_with_the_report(proj, tmp_path, monkeypatch):
     assert r.status_code == 200
     html = r.text
     i = html.index('id="report"')
-    assert i < html.index("Next batch") and i < html.index("<h2>Status</h2>")
+    assert i < html.index("Hand off…") and i < html.index("<h2>Status</h2>")
     assert "Chose a two-phase rollout." in html
     assert "Two phases, because the cutover is risky." in html
     assert "Last summary" not in html

@@ -27,7 +27,7 @@ details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
 {% endblock %}
 {% block main %}
 {% set q = e.name|urlencode %}
-<h1>{{ e.name }} <span class="muted" style="font-weight:400">· {{ "set up" if c.mode == "setup" else "next batch (batch " ~ (c.batch + 1) ~ ")" }}</span>
+<h1>{{ e.name }} <span class="muted" style="font-weight:400">· {{ "hand to runner" if c.mode == "setup" else "hand off (batch " ~ (c.batch + 1) ~ ")" }}</span>
   {% if c.running %}<span class="state running pulse">RUNNING</span>{% endif %}
   <span class="state {{ c.state }}">{{ c.state }}</span></h1>
 
@@ -60,7 +60,7 @@ details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
       {% if ck.fix and ck.level != "ok" %}
         {% for fx in ck.fix[:2] %}<code class="fix">{{ fx }}</code>{% endfor %}
         {% if c.owned %}<div class="row" style="margin-top:4px">
-          {% if ck.safe %}<form class="act" method="post" action="/p/{{ q }}/compose"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="check" value="{{ ck.id }}"><button class="go" name="action" value="fix">Do it</button></form>{% endif %}
+          {% if ck.safe %}<form class="act" method="post" action="/p/{{ q }}/compose"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="check" value="{{ ck.id }}"><button class="go" name="action" value="fix">{{ "Commit as WIP" if ck.id.startswith("next.dirty.") else "Do it" }}</button></form>{% endif %}
           {% if shell_ok %}<button class="go" type="button" data-typeit="{{ ck.fix[0] }}">Type it</button>{% endif %}
         </div>{% endif %}
       {% endif %}
@@ -87,14 +87,17 @@ details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
       <label><input type="checkbox" name="carry" value="1" {{ "checked" if c.draft and c.draft.carry_session }} {{ "disabled" if not c.carry }}> Resume the model's last session</label>
       {% if c.carry %}<span class="muted" style="font-size:12px"> — it rereads about {{ c.carry.tokens|tok if c.carry.tokens else "?" }} tokens of context at the cache-write price (the cache has usually expired), in exchange for the model's memory of the work.</span>{% endif %}
       {% endif %}
-      <label class="muted" for="note" style="display:block;margin-top:8px">Note for the next step (optional)</label>
-      <textarea id="note" name="note" {{ "readonly" if not c.owned }}>{{ c.draft.note if c.draft else "" }}</textarea>
+      <label class="muted" for="note" style="display:block;margin-top:8px">Note for the next step (optional){% if c.context and not (c.draft and c.draft.note) %}: drafted from where you left it, which the runner has not seen; edit it as you like{% endif %}</label>
+      <textarea id="note" name="note" {{ "readonly" if not c.owned }}>{{ c.draft.note if c.draft and c.draft.note else ("Context so far:\n" ~ c.context if c.context else "") }}</textarea>
+      {% if c.owned %}<div class="row" style="margin-top:6px;font-size:13px">
+        <label><input type="radio" name="after" value="0" checked> Start now</label>
+        <label title="It waits while you (or a Claude session) work on the project, and starts when you leave"><input type="radio" name="after" value="1"> After I leave</label>
+      </div>{% endif %}
       {% if c.owned %}
       <div class="row">
         <button class="go" name="action" value="save">Save</button>
         <button class="go primary" name="action" value="handoff" {{ "disabled" if c.missing }}>Hand off to the runner</button>
         {% if c.missing %}<label class="muted"><input type="checkbox" name="force" value="1" data-enable="handoff"> hand off anyway ({{ c.missing }} missing)</label>{% endif %}
-        {% if shells %}<span class="muted" style="font-size:12px">Closes {{ shells|length }} open shell{{ "s" if shells|length != 1 }}.</span>{% endif %}
         {% if not runner %}<span class="muted" style="font-size:12px">No runner here: run <code>wpk tick</code> after, or start the board with <code>--run</code>.</span>{% endif %}
       </div>
       {% endif %}
@@ -113,7 +116,7 @@ details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
         <span class="muted" style="font-size:12px">No shell is running. One starts when you open it or press Type it.</span>
       </div>
       <div class="term" id="term"{% if not shells %} hidden{% endif %}></div>
-      <p class="muted" style="font-size:12px">A shell on this machine as you. It keeps running if you leave the page (30 min), and closes when you hand off.</p>
+      <p class="muted" style="font-size:12px">A shell on this machine as you. It keeps running if you leave the page (30 min); while it is open, the runner waits unless you hand off.</p>
     </div>
     {% elif c.owned %}
     <p class="panel muted" style="font-size:13px">For a shell: <code>wpk shell {{ e.name }}</code>{% if c.mode == "next" %} (the packet is <code>{{ c.shell_dir }}</code>){% endif %}.</p>

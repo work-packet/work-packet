@@ -87,6 +87,13 @@ for setup (docs/setup.md), `path`, `shell`, `add-input`,
 - `docs/studio-guide.md`: the studio: work on a packet live with an agent,
   a canvas of what it makes, recorded as one step. `docs/interactive-tasks.md`
   is its design and `docs/studio-plan.md` the build plan with status.
+- `docs/collaboration.md`: people and agents working on one packet: whose
+  move it is, presence instead of locks, a typed inbox, the Desk, planning
+  fields and a daily focus brief. `docs/collaboration-plan.md` is the build
+  plan with status, `docs/collaboration-spike.md` the hooks spike, and
+  `docs/collaboration-guide.md` the user guide.
+- `docs/session-checkpoint.md`: checkpoints: where a packet stands after work
+  by hand, the scribe's drafts and the `/wpk-checkpoint` skill.
 - `docs/harness.md`: harness adapters (Claude Code now; Codex and OpenCode
   surveyed), model profiles, and `wpk stats` with advice.
 - `slides/work-packet.pptx`: overview deck (built from `slides/*.js`).

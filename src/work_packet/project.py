@@ -115,7 +115,7 @@ def settings(proj, config=None):
 TEMPLATE = "blank@1"
 SETUP_DIRS = ("state", "identity", "work")    # at the project root (docs/setup.md §10)
 PACKET_SETUP_DIRS = ("state", "identity")     # the packet folder is the work
-SETUP_REASON = "setup"        # PAUSED for setup until L1's HELD/setup (docs/setup.md §8)
+SETUP_REASON = schema.REASON_SETUP  # PAUSED for setup until L1's HELD/setup (docs/setup.md §8)
 
 
 def held_for_setup(meta):
@@ -184,7 +184,7 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     """
     import uuid
     from . import clock, faults, fsutil
-    from .packet import Packet, new_status
+    from .packet import Packet, new_status, user
 
     path = os.path.abspath(path or name)
     if packet:
@@ -242,6 +242,9 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     pkt = Packet(os.path.join(tmp, rel))
     os.makedirs(pkt.state_dir)
     st = new_status(root, name, model, now)
+    # The person's facts (docs/collaboration.md §4): open, theirs, and the
+    # runner works only what is handed to it.
+    st.update(lifecycle="open", autonomy="handoff" if prompt else "manual", owner=user())
     if not prompt:
         st.update(state="PAUSED", reason=SETUP_REASON)
     elif paused:
@@ -258,6 +261,11 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
         folder = layout.packet_folder(path)
         if workspace.is_git(folder):
             workspace.exclude(folder, [layout.DOT, name + ".wp.md"])
+        # Claude sessions in the folder report to the board (docs/collaboration.md §4.3)
+        from . import sessionhooks
+        ide_cfg = dict(schema.IDE_DEFAULTS)
+        ide_cfg.update(registry.load_config_file(h).get("ide") or {})
+        sessionhooks.ensure([folder], ide_cfg, home=h or registry.home())
     faults.point("new-before-register")
     entry = {"name": name, "path": path, "root": root, "created": now, "template": TEMPLATE}
     registry.register(entry, h)

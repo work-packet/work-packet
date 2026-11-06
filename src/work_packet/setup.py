@@ -650,8 +650,38 @@ def readiness(tg, tools=True):
         return [Check("project.toml", "project", "missing", str(e))]
     meta = tg.status()
     out = _tools(need_git=bool(tg.repos() or tg.legacy())) if tools else []
-    out += _project(tg, meta) + _work(tg) + _inputs(tg) + _instruction(tg) + _limits(tg)
+    out += _project(tg, meta) + _work(tg) + _hooks(tg) + _inputs(tg) + _instruction(tg) + \
+        _limits(tg)
     return out
+
+
+def _hooks(tg):
+    """The Claude Code hooks that report sessions to the board (docs/collaboration.md
+    §4.3), in a packet folder."""
+    from . import ide, sessionhooks
+    if not layout.is_packet_layout(tg.proj):
+        return []
+    folder = layout.packet_folder(tg.proj)
+    if not os.path.isdir(folder):
+        return []
+    try:
+        on = sessionhooks.enabled(ide.load_config(), registry.home())
+    except Exception:                   # noqa: BLE001: a bad config is its own check
+        on = True
+    st = sessionhooks.status(folder)
+    fix = ["wpk hooks install %s" % tg.name]
+    if not on:
+        return [Check("work.hooks", "work", "info", "Claude Code hooks: off for this board")]
+    if st == "installed":
+        return [Check("work.hooks", "work", "ok", "Claude Code hooks installed",
+                      "in %s" % os.path.join(tilde(folder), sessionhooks.REL))]
+    detail = {"missing": "Without them the board cannot tell when Claude in this folder "
+                         "waits for you or asks permission.",
+              "modified": "wpk's entries in %s are not as it writes them." % sessionhooks.REL,
+              "unreadable": "%s is not valid JSON; fix it by hand." % sessionhooks.REL}[st]
+    return [Check("work.hooks", "work", "warn", "Claude Code hooks %s" % (
+        "not installed" if st == "missing" else st), detail,
+        fix if st != "unreadable" else [], safe=st != "unreadable")]
 
 
 def missing(checks):

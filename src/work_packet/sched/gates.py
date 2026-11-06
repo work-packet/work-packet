@@ -1,6 +1,7 @@
 """What can hold a due packet back (docs/scheduler.md §6.2). Each gate returns a
 ``Reason`` or None; the first that fails is what the queue view shows."""
 
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -144,6 +145,21 @@ def too_big(it, ctx):
     return None
 
 
+def presence(it, ctx):
+    """A person is working on the project: the runner waits (docs/collaboration.md §5.1)."""
+    from .. import layout, presence as pres
+    p = ctx.projs.get(it.project)
+    proj = p.entry.get("path") if p is not None else None
+    if not proj:
+        return None
+    root = p.entry.get("root")
+    journals = [os.path.join(layout.run_dir(proj, w), "journal.jsonl")
+                for w in {it.wpid, root} if w]
+    ttl = (ctx.cfg or {}).get("presence_ttl") or pres.TTL_S
+    why = pres.holds(proj, journals, None, ttl)        # wall-clock time, as leases are
+    return Reason("present", why) if why else None
+
+
 def ide_first(it, ctx):
     if not ctx.ide_waiting:
         return None
@@ -189,8 +205,8 @@ def backfill(it, ctx):
                   % (b.project, b.wpid[:8], b.size.name))
 
 
-GATES = (mode, project_hold, project_broken, job_pending, project_cores, budget, too_big,
-         ide_first, fits, spare_room, backfill)
+GATES = (mode, project_hold, presence, project_broken, job_pending, project_cores, budget,
+         too_big, ide_first, fits, spare_room, backfill)
 
 
 def first(it, ctx):
