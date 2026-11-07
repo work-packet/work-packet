@@ -126,6 +126,7 @@ hold = true               # held for setup (default); false: the runner starts i
 from = "dv-solve-base"    # copy this project's setup (optional); model, harness too
 max_new = 5               # at most this many packets per poll (default 5)
 pr = "draft"              # off (default), draft or ready: open a pull request when one completes
+propose = false           # true: put each new issue in the Inbox for you to accept (docs/collaboration.md W8)
 enabled = true
 ```
 

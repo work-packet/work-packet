@@ -77,6 +77,13 @@ def briefing(proj, wpid, name=None):
     if waiting:
         lines.append("%d note%s from the board will come with your next prompt." % (
             waiting, "" if waiting == 1 else "s"))
+    try:                                    # the morning brief's one line (§9.4)
+        from . import brief, registry
+        focus = brief.focus_line(registry.home())
+        if focus:
+            lines.append(focus + ".")
+    except Exception:                       # noqa: BLE001: a briefing never fails for it
+        pass
     lines.append("When you have changed things, record where it stands with /wpk-checkpoint; "
                  "/wpk-handoff hands the next part to the runner.")
     out = "\n".join(lines)

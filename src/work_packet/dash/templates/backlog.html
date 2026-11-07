@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_inbox.html" as ibx with context %}
 {% import "_side.html" as sidem with context %}
 {% import "_plan.html" as plm with context %}
 {#- The Backlog (docs/collaboration.md §9): what you are on the hook for, by your own
@@ -19,24 +20,23 @@ table.bl td.rank input { width: 3.5em; font: inherit; }
 <h1>Backlog</h1>
 <p class="muted" style="max-width:720px">Your projects by <em>your</em> priority. <strong>now</strong> is what you are on (at most a few); the runner follows it too, unless a project sets its own scheduler class. Ranks order a priority; a near due date moves it up.</p>
 
-<h2 id="inbox">Inbox <span class="muted" style="font-size:13px;font-weight:400">({{ inbox|length }})</span></h2>
+<h2 id="inbox">Inbox <span class="muted" style="font-size:13px;font-weight:400">({{ inbox.entries|length + inbox.requests|length }})</span></h2>
 <form class="act row" method="post" action="/inbox" style="max-width:720px">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="/backlog#inbox">
   <input type="text" name="text" placeholder="capture a to-do: one line" aria-label="capture a to-do" required style="flex:1;font:inherit">
   <button class="go">Capture</button>
 </form>
-{% if inbox %}<ul class="list">
-{% for d in inbox %}<li><span class="what">{{ d.text }}{% if d.project %} <span class="muted">· from {{ d.project }}</span>{% endif %} <span class="muted">· {{ d.t|epoch }}</span></span>
-  <form class="act" method="post" action="/inbox/{{ d.id }}/accept"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini" title="New, with this as its objective">Make packet</button></form>
-  <form class="act" method="post" action="/inbox/{{ d.id }}/drop"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini">Drop</button></form></li>
-{% endfor %}</ul>{% else %}<p class="muted">Nothing captured.</p>{% endif %}
+{% if inbox.entries or inbox.requests %}<div style="max-width:720px">
+{% for d in inbox.entries %}{{ ibx.row(d, inbox.projects, "/backlog#inbox") }}{% endfor %}
+{% for r in inbox.requests %}{{ ibx.request(r) }}{% endfor %}
+</div>{% else %}<p class="muted">Nothing in the Inbox: what you capture, issues a watcher proposes, and follow-ups the runner suggests land here.</p>{% endif %}
 
 {% for p in ("now", "next", "later", "someday") %}
 <h2 id="{{ p }}">{{ p|capitalize }} <span class="muted" style="font-size:13px;font-weight:400">({{ bl[p]|length }})</span></h2>
 {% if bl[p] %}<table class="bl">
 {% for c in bl[p] %}<tr>
   <td class="rank"><form class="act row" method="post" action="/p/{{ c.name|urlencode }}/plan" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="/backlog#{{ p }}"><input type="number" name="rank" value="{{ c.plan.rank if c.plan.rank is not none else '' }}" min="0" aria-label="rank of {{ c.name }}" title="order within {{ p }}"></form></td>
-  <td><a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a> {{ plm.chips(c.plan, c.due) }}
+  <td><a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a> {{ plm.chips(c.plan, c.due, c.at_risk, c.forecast) }}
     {% if c.plan.blocked_by %}<span class="muted" style="font-size:12px">· blocked by {{ c.plan.blocked_by|join(", ") }}</span>{% endif %}
     <div class="muted" style="font-size:12.5px">{{ c.ball.text }}{% if c.intent %} · Next: {{ c.intent }}{% endif %}</div></td>
   <td class="bl-col">{{ c.column }}</td>

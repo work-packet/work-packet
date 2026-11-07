@@ -4,8 +4,10 @@ The board writes them into the folder's ``.claude/settings.local.json``, so ever
 Claude session there, in web or desktop VS Code, a terminal or a job, reports
 its turns to the board (``hookcmd``). The file is merged, never replaced: wpk's
 entries are the ones whose command runs ``work_packet.hookcmd``, and only those
-are added, replaced or removed. In a git clone the file is also listed in
-``info/exclude``, as the card is. ``[ide] hooks = false`` turns it off.
+are added, replaced or removed. With them goes wpk's ``statusLine``
+(``statusline``), unless you have a status line of your own. In a git clone the
+file is also listed in ``info/exclude``, as the card is. ``[ide] hooks = false``
+turns it off.
 """
 
 import json
@@ -22,6 +24,29 @@ EVENTS = {"SessionStart": "", "UserPromptSubmit": "", "PermissionRequest": "*",
           "PostToolUse": "*", "Notification": "*", "Stop": "", "PreCompact": "",
           "SessionEnd": ""}
 TIMEOUT_S = 10
+LINE_MARK = "work_packet.statusline"
+
+
+def statusline_command(python=None):
+    return "%s -m %s" % (shlex.quote(python or sys.executable), LINE_MARK)
+
+
+def _own_line(d):
+    sl = d.get("statusLine")
+    return isinstance(sl, dict) and LINE_MARK in str(sl.get("command", ""))
+
+
+def _theirs(folder):
+    """A status line you set yourself, which ours must not hide: in the folder's
+    shared ``.claude/settings.json`` or your ``~/.claude/settings.json``."""
+    for p in (os.path.join(folder, ".claude", "settings.json"),
+              os.path.join(os.path.expanduser("~"), ".claude", "settings.json")):
+        try:
+            if _load(p).get("statusLine"):
+                return True
+        except HooksError:
+            return True                 # can't tell: leave yours alone
+    return False
 
 
 class HooksError(Exception):
@@ -53,9 +78,15 @@ def _load(p):
     return d
 
 
-def merged(d, python=None, on=True):
-    """``d`` (settings) with wpk's hook entries replaced (``on``) or removed."""
+def merged(d, python=None, on=True, line=False):
+    """``d`` (settings) with wpk's hook entries replaced (``on``) or removed.
+    ``line``: also set wpk's ``statusLine`` (``wpk statusline``) if the file has
+    none of its own; off, ours is removed (docs/collaboration.md §7.10)."""
     d = dict(d)
+    if on and line and (not d.get("statusLine") or _own_line(d)):
+        d["statusLine"] = {"type": "command", "command": statusline_command(python)}
+    elif _own_line(d) and not (on and line):
+        d.pop("statusLine")
     hooks = dict(d.get("hooks") or {})
     for ev in sorted(set(hooks) | set(EVENTS)):
         groups = [g for g in hooks.get(ev) or () if not (isinstance(g, dict) and _ours(g))]
@@ -92,7 +123,7 @@ def uninstall(folder):
 def _write(folder, python, on):
     p = os.path.join(folder, REL)
     old = _load(p)
-    new = merged(old, python, on)
+    new = merged(old, python, on, line=on and not _theirs(folder))
     if new == old:
         return "unchanged"
     if not on and not new and os.path.exists(p):

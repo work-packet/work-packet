@@ -22,13 +22,17 @@ checkpoint, scribe and skills work this plan builds on: `checkpoint.py`,
 | C4 | Desk: typed inbox, In progress, Since you were last here, Timeline, split cost | done 2026-11-06, with gaps (see C4 notes) |
 | F1 | Planning fields (`plan:`), now-WIP, priority → class, Backlog, quick capture, rot | done 2026-11-06, with gaps (see F1 notes) |
 | C5 | SessionStart briefing, notes into interactive sessions, continue a runner step in VS Code, `/wpk-handoff` and friends | done 2026-11-06, with gaps (see C5 notes) |
-| F2 | Daily focus brief (deterministic), end-of-day shutdown | todo |
-| C6 | Push, digest, attention budget, snooze, Inbox triage | todo |
-| C7 | Split / pairing, jobs as workers, learn from corrections, VS Code status bar | todo (outline only) |
-| F3 | Forecast, at-risk, dates from forges, milestones, weekly review, standup drafts | todo (outline only) |
-| DOC | User guide, README index, pointers in superseded designs | todo (done per phase; see §6) |
+| F2 | Daily focus brief (deterministic), end-of-day shutdown | done 2026-11-06, with gaps (see F2 notes) |
+| C6 | Push, digest, attention budget, snooze, Inbox triage | done 2026-11-07, with gaps (see C6 notes) |
+| C7 | Split / pairing, jobs as workers, learn from corrections, VS Code status bar | done 2026-11-07, with gaps (see C7 notes) |
+| F3 | Forecast, at-risk, dates from forges, milestones, weekly review, standup drafts | done 2026-11-07, with gaps (see F3 notes) |
+| DOC | User guide, README index, pointers in superseded designs | done 2026-11-07 (see §6 notes) |
+| G | Closing the gaps left by C2-F3 (Codex excluded: not available locally) | done 2026-11-07 (G1-G8; see G) |
 
 Notes:
+- 2026-11-07: **every step is done.** Where things stand and what comes next
+  (use and checks, phone view, M3 GitHub connector, M4 agenda):
+  `docs/where-we-stand.md`.
 - 2026-11-06: the user confirmed every decision in §2 as proposed, and set a
   rule: **work happens through the dashboard.** Any feature that still needs a
   shell command is recorded in §2a, and every step's checklist includes its dash
@@ -190,19 +194,26 @@ isn't done while a row it touches says "gap".
 | `wpk autonomy …` | Autonomy select on the packet page's Now line (the card shows a chip when not the default) | C1 | built |
 | `wpk ps` (BALL, DRIVER) | The board and Desk themselves; CLI-only by nature | C1 | n/a |
 | `wpk doctor` hooks report, `wpk hooks install` | Packet page: hooks line with Install/Repair when not installed; board switch under the Overview's Recent VS Code sessions (and on the packet page when hooks are missing) | C2 | built |
-| `[ide] hooks`, `presence_ttl`, `idle_escalate` | `hooks`: board switch (built). `presence_ttl`, `idle_escalate`: **still config-only.** A board Settings page for the remaining keys (TTL, idle escalation, focus time, WIP limits, ntfy) is to be built in C4, when there are enough of them to justify it. | C2/C4 | hooks built; rest open |
+| `[ide] hooks`, `presence_ttl`, `idle_escalate` | Board Settings page (C6), and the hooks switch there too | C2/C6 | built |
 | `python -m work_packet.hookcmd <event>` | None needed: run by Claude Code, never by a person | C2 | n/a |
 | Codex `notify` set-up | **Gap: Codex reads `notify` from its own global config.** Either the board writes it (announced, like the Claude hooks) or Codex sessions stay "probably waiting". Decide after C0. | C2 | open |
 | `wpk new --start …` | The New page's start buttons (no CLI flag: the start modes belong to the board) | C3 | built |
 | `wpk handoff --after-me` | "After I leave" in Compose and on the packet page's Hand off form | C3 | built |
 | `wpk checkpoint` | Already on the packet page (Update status, becoming Checkpoint), plus Draft from session | C1/C5 | exists |
-| Continue a runner step (`claude --resume … --fork-session`) | Step page: **Continue this conversation yourself**, with the commands to paste. **Still a copy-and-paste**: one click would need a VS Code extension or terminal API (C7's status-bar extension could do it). | C5 | gap |
+| Continue a runner step (`claude --resume … --fork-session`) | Step page: **Continue this conversation yourself**, with the commands to paste. **Still a copy-and-paste**: one click needs a VS Code extension or terminal API. C7 built the status line and `status.json`, not the extension. | C5 | gap |
 | `/wpk-handoff`, `/wpk-note`, `/wpk-done`, `/wpk-todo` skills | Typed inside a Claude session you are already in. Each has a dash equivalent (Compose, note box, Done, capture in F1). | C5 | built (todo waits for F1) |
 | `wpk plan --priority … --due …` | Plan ▾ on cards, the packet page and the Backlog (every field); rank typed on the Backlog | F1 | built |
 | `wpk todo "…"` | Capture boxes on the Desk, the Backlog and each board's Inbox column | F1 | built |
-| `wpk brief` | The board runs it at `[focus] time` and shows it on Desk. Add a **Rebuild now** button and the list of past briefs. The time is set on the board Settings page. | F2 | planned |
-| `wpk shutdown` | A Desk button, offered after 17:00 when the last presence lapses | F2 | planned |
-| `[focus] time`, `focus_wip`, `review_wip`, `[notify] ntfy_url` | Board Settings page (above), with a "send a test push" button for ntfy | F1/F2/C6 | planned |
+| `wpk brief` | Built by the board each morning; Desk Today panel; Brief page with Rebuild and earlier days. `[focus] time` is still `config.toml` (Settings page open, §2a) | F2 | built |
+| `wpk shutdown` | End of the day page, linked from the Desk after 17:00 | F2 | built |
+| `[focus] time`, `focus_wip`, `review_wip`, `[notify] …` | Board Settings page, with **Send a test push** and the browser-notification switch | F1/F2/C6 | built |
+| `[[watch]] propose` and the rest of a watcher | **Watchers** on the board's page: Add, Edit (name, repos, labels, dir, every, pr, to the Inbox, held, on), Remove, Poll now (G4) | C6/G4 | built |
+| `follow_ups:` (memento) | Written by the runner, never by a person | C6 | n/a |
+| `wpk run -- cmd` (jobs) | **Run a command** under Jobs on the project page; the job page. `wpk run` stays for jobs started in your own terminal. | C7a | built |
+| `wpk statusline` | Never typed: Claude Code runs it, set by the hooks switch | C7b | n/a |
+| `wpk plan --milestone` | Plan ▾ (board cards and the packet page); milestones are added and removed on the board's page | F3d | built |
+| Weekly review, standup, status | `/review` (Rebuild, Tidy the backlog), `/standup`, `/status/<board>[/<milestone>]`, Keep a copy; no CLI verb | F3e | built |
+| `[focus] review_*`, `[calendar] ics` | Settings page | F3e/F3f | built |
 | Live tests and C0 spike scripts | Developer-only; not a user workflow | — | n/a |
 
 ---
@@ -1004,25 +1015,25 @@ C5 notes (2026-11-06), what was built and where it differs from the plan above:
 
 ### F2. Focus brief and shutdown (needs C4 and F1)
 
-- [ ] `brief.py`: `build(user, now) -> Brief(overnight, needs_you, focus,
+- [x] `brief.py`: `build(user, now) -> Brief(overnight, needs_you, focus,
   handoff_candidates, housekeeping)`, built from the journal since the last
   brief, attention items, plan fields and rot. The focus score is documented in
   code and in the guide: priority, deadline pressure (due-based only until F3
   adds the forecast), unblocks others (questions gating runner work, weighted by
   queued tasks), then age. Each line carries a `why`.
-- [ ] Hand-off candidates: packets with a brief, a next action and
+- [x] (no budget figure yet) Hand-off candidates: packets with a brief, a next action and
   `autonomy != manual`, or ones marked runner-safe. Budget left from
   `sched/budget`.
-- [ ] `wpk brief [--date] [--md]`. The board runs it at `[focus] time` (default
+- [x] (`--day`, `--rebuild`; Markdown always) `wpk brief [--date] [--md]`. The board runs it at `[focus] time` (default
   08:30 weekdays) and writes `$WPK_HOME/briefs/YYYY-MM-DD.md` (D9). Past briefs
   are listed on Desk (history, memory `dashboard-is-central`).
-- [ ] Desk "Today" strip; the first SessionStart briefing of the day gets one line.
-- [ ] Feedback: "not today" and "done already" are stored in
+- [x] Desk "Today" strip; the first SessionStart briefing of the day gets one line.
+- [x] Feedback: "not today" and "done already" are stored in
   `$WPK_HOME/briefs/feedback.json`. Three ignores raise a stale item, then
   silence.
-- [ ] Optional narration through the scribe model (opt-in): it rephrases only,
+- [ ] **not done** Optional narration through the scribe model (opt-in): it rephrases only,
   and the order is fixed by the score.
-- [ ] Shutdown: `wpk shutdown`, and a Desk button that appears after 17:00 when
+- [x] (offered after 17:00 by clock, not by presence lapsing) Shutdown: `wpk shutdown`, and a Desk button that appears after 17:00 when
   the last presence lapses. It lists open sessions to checkpoint, the night-shift
   candidates (sized to budget and quota) with "hand off all" (`defer: true`), and
   "pick tomorrow's first item" (sets rank 1 in *now*).
@@ -1033,53 +1044,609 @@ C5 notes (2026-11-06), what was built and where it differs from the plan above:
   call when narration is off (assert the fake model isn't invoked).
 - `tests/test_dash.py`: the Today strip and the brief history list.
 
+F2 notes (2026-11-06):
+- **`brief.py`**: `build` (overnight since the previous brief, else 16 h; needs-you
+  counts; focus top 3 by `score` with reasons; hand-off candidates are parked
+  projects with a Next; housekeeping is rotting projects plus anything suggested
+  3 briefs running and untouched), `render` (Markdown), `due`/`maybe_build`
+  (weekday, after `[focus] time`, not built today), `say` (not today / done
+  already, per day, kept a month), `focus_line`, `shutdown`, `shutdown_hint`.
+  Briefs are kept as `$WPK_HOME/briefs/YYYY-MM-DD.json` and `.md`.
+- **The board builds it** in the watch loop (`dash/runner.py`), which runs with
+  the board's runner. `[focus] time|weekends|off` are validated in config.
+- **Desk**: a **Today** panel (focus with reasons, not today / done already, hand
+  off before you start) and an End of the day link after 17:00. Pages: `/brief`
+  (today's, earlier days, Rebuild), `/brief/<day>`, `/shutdown` (checkpoint
+  links, night shift: one form handing ticked projects off with `defer: true`,
+  "First tomorrow" = now + rank 1).
+- **Sessions**: the SessionStart briefing adds "Today's focus on the board: …".
+- **CLI**: `wpk brief [--rebuild] [--day D]`, `wpk shutdown`.
+- **Not done**: narration by a model; push/email of the brief (C6); runner budget
+  left in the hand-off line; estimates against actuals (F3); feedback shaping the
+  score beyond the day.
+- **Tests**: new `tests/test_brief.py` (score order and reasons, needs counts, the
+  file, not today, the repeat rule, when it is due, CLI, Desk panel, feedback,
+  shutdown page and night-shift hand-off with defer, the session's focus line,
+  config validation).
+- **Docs**: guide sections (the daily focus brief, the end of the day, `[focus]`
+  keys).
+
 ### C6. Attention delivery (needs C4)
 
-- [ ] Push (D12): `notify.py` with ntfy (`[notify] ntfy_url`, topic) and
-  browser `Notification` from an open board tab via the existing live
-  WebSocket. Only *blocked* and *question* push, past their threshold and when
-  not visible. A daily brief push is opt-in.
-- [ ] Rate limit: one push per item, then a digest.
-- [ ] Digest: the notify-type items batched hourly or daily.
-- [ ] Attention budget (§7.6): the review WIP tile; a hand-off dialog warning
-  above `review_wip`.
-- [ ] Inbox triage: the Inbox column and Desk strip read watcher packets that
-  aren't accepted yet (`watch.py` gains a "propose" mode that writes Inbox items
-  instead of packets), requests (`requests.py`), captures (F1) and
-  agent-proposed follow-ups (a memento field `follow_ups:` that the runner may
-  write and that the board turns into Inbox items). Actions: accept (→ W1/W4),
-  decline, merge into a packet, snooze.
-- [ ] Duplicate hint on accept: title and brief token overlap with open packets.
+- [x] Push (D12): `notify.py` with ntfy (`[notify] ntfy_url`, `ntfy_token`,
+  `link`). Only *blocked* and *question* push, past their threshold
+  (`question_after_s`, 300 s; blocked after `attention.BLOCKED_AFTER_S`), not
+  snoozed, and not while a web VS Code tab on the project is visible. A daily
+  brief push is opt-in (`brief`). The board's watch loop runs `notify.run` each
+  minute; it reads nothing without `ntfy_url`. **Changed**: browser
+  notifications don't use a WebSocket (the board has none; `live.js` polls the
+  page). `dash/notify.js` polls `GET /attention.json` every 30 s, only when you
+  turned it on in Settings (per browser), and shows a notification only while
+  the tab is hidden, tagged by the item's key so several tabs show it once.
+- [x] Rate limit: one push per item (`$WPK_HOME/notify/state.json`), at most
+  `max_per_hour` (6); the rest go to the digest.
+- [x] Digest: `digest = off | hourly | daily` (`digest_at`). It holds the
+  non-push types (review, failure, your turn, decision) and pushes held back by
+  the rate limit. Lines whose item closed are dropped.
+- [x] Attention budget (§7.6): the Desk's Reviews tile says when it is at or
+  over `[plan] review_wip` (default 5); Compose and the packet page's Hand off
+  form warn at that point (`data.review_load`, one status read per project).
+- [x] Inbox triage:
+  - watchers gain `propose = true` (an Inbox item per new issue; accept makes it
+    with the watcher's recipe and records it as seen);
+  - `follow_ups:` is a memento key (≤ 5 strings, spec §4.2, protocol prompt).
+    **Changed**: the executor writes the items as the step commits
+    (`executor._follow_ups`), not the board. Ids come from the packet and step,
+    so a redone commit is idempotent;
+  - requests whose delegate is PAUSED (not started) show with an Open link,
+    derived and never stored;
+  - captures (F1).
+  Actions: accept, drop (decline), **merge** into an open project (a note to its
+  root), snooze (Tomorrow).
+- [x] Duplicate hint: word overlap (≥ 2 words, ≥ 34% of the smaller set) between
+  an item and each open project's name, intent and root instruction. Shown as
+  "looks like X: merge instead?", and Merge ▾ preselects X.
+- [x] **Added**: the board Settings page (§2a). `settings.py` edits
+  `config.toml` line by line (comments kept; a default removes the key; the
+  result must parse to what was asked and pass the config checks). It covers
+  `[ide] presence_ttl/idle_escalate`, `[focus]`, `[plan] focus_wip/review_wip`
+  and `[notify]`, plus a test push, the browser switch and the hooks switch.
 
-**C6 tests**: `tests/test_notify.py` (thresholds, visibility suppression, rate
-limit; ntfy with a fake HTTP server); `tests/test_inbox.py` (sources → items,
-the triage actions); dash tests for the tile and warning.
+**C6 tests**: `tests/test_collab_c6.py` (14): a question pushes once, with its
+link; no topic, snoozed, threshold and visible tab hold it; rate limit, then the
+hourly digest; a review goes to the daily digest only; `post` against a fake ntfy
+HTTP server (headers, token, error); Settings line edit keeps comments, save
+validates and removes defaults, the page saves and refuses; `/attention.json`;
+the review budget on Compose and the Desk; follow-ups from a memento (fake
+`proposer` behaviour) and idempotent ids; bad `follow_ups` refused; snooze,
+merge (the note is queued) and the duplicate hint; a proposing watcher (fake
+forge) and the board's Inbox column.
 
-### C7. Concurrency and jobs (outline; detail later)
+**C6 notes** (2026-11-07):
 
-- Split (`packet-ux.md` U3): runner in a worktree, result as a branch, a review
-  item with a diff and merge or cherry-pick. Plain folders get copy-in and
-  copy-out with a diff. Needs its own design pass on merge UX.
-- Jobs as workers: `work-sessions.md` stages 1-4 (`wpk run -- cmd`, OSC marks),
-  journal `job-start`/`job-end`, ball *external*.
-- Learn from corrections: recurring notes and answers → a proposal to promote
-  them into `skills.py` or the starter. Needs the scribe.
-- VS Code status bar: a thin extension or status-line reading presence and
-  attention (`vscode-extension.md`).
-- §12 distributed: presence over the S4b push channel. **Action now**: add
-  "presence records" to the S4b design in `vscode-monitor-plan.md` so it isn't
-  retrofitted.
+- Not done: "snooze until new activity" for Inbox items (only Tomorrow);
+  declining a *request* from the Inbox (Open the project and Drop it there);
+  an attention budget for the runner's own work (only reviews are counted);
+  ntfy action buttons (answer from the phone) — §7.8 one-line replies stay
+  for C7.
+- The ntfy token is stored in `config.toml` in plain text, like the forge
+  tokens. The Settings page never shows it back.
+- A push's link needs `[notify] link`: the board doesn't know its own public
+  address.
+- Manual check still to do: a real ntfy topic on a phone (§4.6).
 
-### F3. Deadlines and reporting (outline; detail later)
+### C7. Concurrency and jobs (detailed 2026-11-07)
 
-- Forecast from step durations, queue waits and presence pace; a range; at-risk
-  decision items.
-- Dates from forges (milestones, review requests) as proposals; board milestones
-  with a burn-down.
-- Weekly review, standup and status drafts as kept outputs (routines if built
-  by then); estimates against actuals; an ICS calendar fit.
+Designs: `collaboration.md` W4, W6, W7, §5.2, §5.4, §7.7, §7.10, §12;
+`work-sessions.md` stages 1-4; `packet-ux.md` U3; `vscode-extension.md`. Found
+in code (2026-11-07): none of it exists. There is no `job-*` record, no
+`wpk run`, no *external* ball, no split and no diff of `work/` repos.
+`skills.py` only installs the fixed `wpk-*` skills, and the extension has no
+code. What there is: `workspace.add_worktree`, `dirty`, `git_trees`,
+`/attention.json`, presence records, and `agent.md` (project notes that go
+into every step's prompt).
+
+C7 is built in five slices, each usable on its own:
+
+**C7a. Jobs as workers** (W7; `work-sessions.md` stage 2's record, minus the
+OSC marks).
+- [x] `jobs.py`: `start(proj, cmd, cwd)` and `end(...)`. A job is
+  `<project>/jobs/<id>/job.json` (`id, cmd, cwd, host, pid, by, start, end,
+  exit`) plus `log` (the output, teed). The root packet's journal gets
+  `job-start` and `job-end`. `live(proj)` returns running jobs; a job whose pid
+  is gone on this host with no end counts as **lost**. `recent(proj)` returns
+  finished ones.
+- [x] `wpk run [--name N] -- cmd…`: finds the project from the cwd (as the
+  hooks do), runs the command with its output teed to the log, records the job
+  and exits with the command's status. Outside a packet it just runs the
+  command.
+- [x] `views.ball(..., jobs=)`: a running job and nobody on it gives
+  `who: external`, kind `external`, text "waiting on make sim, 1h12m". The card
+  sits in **Waiting**. A job never hides a question or a failure.
+- [x] Attention: a failed or lost job that you haven't seen is a `failed`
+  item ("make sim failed (exit 2)"). A finished job you haven't seen is a
+  `done` item, which goes to the digest and never pushes. Opening the job page
+  marks it seen.
+- [x] Dash: a **Jobs** panel on the project page (running and recent) and
+  `GET /p/<name>/jobs/<id>` (the command, times, exit, the log tail, polled
+  while it runs). **Run a command** (`POST /p/<name>/jobs`, owner only)
+  starts `wpk run` detached in the packet folder. A job started in a terminal
+  shows up the same way.
+- [x] Tests: start and end records, exit status passthrough, the lost
+  detector, ball and column, attention items, the run form, seen.
+- Out of scope (gap): OSC marks from the rc hook (stage 2 proper), never reap a
+  session with a foreground job (stage 1), `WPK_PROGRESS` (stage 3).
+
+**C7b. Status at a glance** (§7.10).
+- [x] `GET /p/<name>/status.json`: `{name, ball, driver, column, needs: n,
+  jobs: n, url}`. A read only; an extension or a status line polls it.
+- [x] `wpk statusline`: Claude Code's `statusLine` command. It reads the event
+  JSON (`cwd`), finds the packet from local files and prints one line, e.g.
+  `wpk uart-fix · yours · 2 need you`. It must be fast and never fail.
+- [x] The hooks switch also sets `statusLine` in the folder's
+  `.claude/settings.local.json`, and only if the folder has none of its own.
+  Turning hooks off removes ours.
+- [x] Tests: the JSON, the line for each ball, never replacing your own
+  status line.
+- Out of scope (gap): the VS Code extension itself (`vscode-extension.md` E1).
+- Notes (2026-11-07, C7a and C7b done):
+  - Files: `jobs.py`, `statusline.py`, `views.ball(jobs=)` and the *external*
+    kind, `views.span`, `data.job_state` and `glance`, the Desk's JOB rows,
+    `notify.items` (a job is a failure or a review: never pushed),
+    `templates/job.html`, the Jobs panel on the project page,
+    `cli.py run`/`statusline`, and `sessionhooks` `statusLine`.
+  - Tests: `tests/test_collab_c7.py`.
+  - A job is timed by the wall clock, like presence. `WPK_NOW` doesn't move it.
+  - `wpk run` pipes the command's output, so the command doesn't see a
+    terminal: programs that colour only on a tty lose their colour (gap).
+  - Opening an ended job's page marks it seen (owner only), as opening a
+    finished project reviews it.
+  - The status line's command is `python -m work_packet.statusline`, not `wpk
+    statusline`, so it doesn't load the whole CLI after every turn.
+  - "Yours" means a status line in `~/.claude/settings.json` or the folder's
+    `.claude/settings.json`. Ours goes in `settings.local.json`, which would
+    hide either of those.
+
+**C7c. Learn from corrections** (§7.7).
+- [x] `learn.py`: collects your notes (`mailbox/`, consumed and queued) and
+  your answers (journal `admin` answers) across the board's projects.
+  - It groups near-duplicates (the word overlap of `inbox.similar`, stricter).
+  - A group seen 3+ times, or in 2+ projects, and not yet promoted or
+    dismissed, is a **proposal**: "You have said this 3 times: …".
+- [x] Proposals reach the Inbox with source `learn`, via the board loop once
+  an hour.
+  - **Keep it** shows a form with the rule's text, which you can edit, and
+    writes it under `## Learned` in each project's `agent.md`, so every later
+    step gets it.
+  - **Drop** remembers the group's key, so it won't propose it again.
+- [x] Tests: the grouping, the thresholds, the agent.md append (comments and
+  text above it kept), the step prompt carries it, and a dropped group stays
+  dropped.
+- Change from the outline: it goes to `agent.md`, not `skills.py`. A step
+  always reads `agent.md`, whereas a skill is only loaded when the model picks
+  it. Skills for interactive sessions are a gap.
+- Notes (2026-11-07, C7c done):
+  - Files: `learn.py`, the board loop's learn pass (`dash/runner.py`), the
+    Inbox row's **Keep it…** (`_inbox.html`), `templates/learn.html`, and
+    `GET`/`POST /learn/<id>`.
+  - What counts: queued and committed notes, plus the `note` and `answers` on
+    `admin` and `handoff` records. Anything with fewer than 3 content words
+    is left out, so "yes" and "B" never count.
+  - Grouping: at least 3 shared words, covering 60% of the shorter text. A
+    group's key is the hash of its oldest member's id, and the Inbox item's id
+    is that key, so a proposal is made once.
+  - Drop is the Inbox's own: proposed means it's never proposed again.
+  - A cross-project rule is checked for every project it came up in, and you
+    can tick others.
+
+**C7d. Split** (W4, W6, §5.4; `packet-ux.md` U3). Only for a packet-layout
+project whose folder is a git checkout.
+- [x] `split.py`:
+  - `make(entry, text)` creates a worktree of your folder at
+    `$WPK_HOME/splits/<name>-split`, on branch `wpk/<name>-split` from your
+    `HEAD`. Uncommitted edits stay with you.
+  - It makes a packet-layout project there (`project.new(packet=True)`) with
+    the hand-off text as its prompt, `autonomy: handoff`, and `split.json`
+    (`of, base, branch`).
+  - So the runner works beside you, never in your folder (D15).
+- [x] `diff(split)`: the split's commits since `base`, plus what it changed
+  and hasn't committed (untracked files listed). It's a read only.
+- [x] `land(split)`:
+  - it commits what the split left uncommitted (in the split's worktree);
+  - then merges the branch into your folder (`--ff-only` when your `HEAD` is
+    still `base`, else a merge commit);
+  - git refuses when your own edits would be overwritten, and the board says
+    so;
+  - then the split is marked done.
+- [x] Dash:
+  - the hand-off page has **Split: the runner works in a copy** next to Hand
+    off, when allowed (git, packet layout);
+  - a Split panel on both projects (base, branch, state, files changed, the
+    diff) with **Bring it in** and **Drop the split**;
+  - the dirty-tree check offers split as its third choice (W4).
+- [x] Tests: make (your edits stay put), diff, land with fast-forward and with
+  a merge, land refused over your edits, drop, the page.
+- Out of scope (gap): plain folders (copy in, copy out); legacy `work/`
+  clones; "land after I commit" waiting; removing the split's folder.
+- Notes (2026-11-07, C7d done):
+  - Files: `split.py`, Compose's **Split** button (also offered beside the
+    dirty-tree check), the Split panel on the project page, and `POST
+    /p/<name>/split` (`op=land|drop`).
+  - The split is a project of its own (`<name>-split`, packet layout in the
+    worktree), so the board, review, attention, jobs and VS Code all work
+    on it unchanged. The original's journal gets a `split` record.
+  - Change from the plan: to bring a split in, it has to be stopped (not
+    RUNNABLE or SLEEPING) and still open. A second landing is refused.
+  - The worktree starts from `HEAD`: untracked tools (`packages/`, a venv)
+    are not in it (gap; `workspace.link_shares` could link them, as it does
+    for `work/` clones).
+  - A split's card doesn't point back to the original on the board, only on
+    the project pages (gap).
+
+**C7e. Distributed presence (doc only, the "action now").**
+- [x] `vscode-monitor-plan.md` S4b: presence records travel over the push
+  channel too (`POST /ide/sessions/push` with `kind: presence`, the same token
+  and size cap). This is so S4b isn't retrofitted.
+
+Order: C7e, C7a, C7b, C7c, C7d.
+
+### F3. Deadlines and reporting (detailed 2026-11-07)
+
+Designs: `collaboration.md` §9.1 (Time, Deadlines), §9.3, §9.4 (the forecast in
+the brief), §9.5 (weekly review, standup, calendar), §9.6 (estimates against
+actuals). Found in code (2026-11-07):
+- Step durations exist per step (`stats.packet_steps`, `meta.json`
+  `duration_s`). Tasks with start and end come from the journal
+  (`history._tasks_and_questions`), and so do questions with asked and
+  answered times.
+- The remaining plan is `state/outline.md` (`dash/plan.count`).
+- **Not there:**
+  - Presence keeps only live heartbeats, so there is no record of your time.
+  - Nothing reads the `estimate` field ("2d"), and nothing produces a forecast
+    or an at-risk item.
+  - Forges read no milestones, due dates or review requests.
+  - Boards have no milestones. `boards/<name>.toml` allows only name, created,
+    title and watch, and `main` has no file.
+  - There are no reports and no calendar.
+
+F3 is built in six slices, each usable on its own. **Everything is
+deterministic: no model call** (narration stays a gap, as in F2).
+
+**F3a. Your time, and estimates against actuals** (§9.1 Time, §9.6)
+- [x] `timelog.py`: a per-project ledger, `<project>/time/<YYYY-MM-DD>.json`
+  `{"by": {user: seconds}, "last": {user: t}}`.
+  - `presence.beat` adds the time since that user's last beat on the project,
+    when that beat is within `GAP_S` (300). This is counted per user, not per
+    source, so two sessions open at once count once.
+  - Beats that only say a tab is attached (`idle_since` set, or
+    `active: false`) and `ended` beats don't count.
+  - It is stdlib only, because it runs in the hook.
+  - Readers: `spent(proj, since, until)` gives `{user: s}`, and `days(proj)`
+    gives the days with time.
+- [x] `planning.estimate_hours("2d")` gives 16. The scale is 1d = 8h and
+  1w = 5d; it is documented in the guide.
+- [x] `actuals(entry)`:
+  - your time (ledger) and the runner's time (step `duration_s`);
+  - the working days since the first activity, for "3.5d so far";
+  - `over`, true when the elapsed working days pass the estimate.
+- [x] Dash:
+  - the project page's plan line: "estimate 2d · so far 3.5 working days: you
+    5h, the runner 2h";
+  - the brief's Housekeeping: "You estimated spi-boot at 2d; 3.5d so far",
+    for open projects whose actuals pass the estimate.
+
+**F3b. Forecast and at risk** (§9.3)
+- [x] `forecast.py`, `forecast(entry, card, now)`. It returns `{"low", "high"}`
+  as epoch times, plus `runner` and `yours` (seconds), and `why` (the parts in
+  words), or None when nothing is known.
+  - **The runner's share**: the fraction of the current outline still to do,
+    times this project's task wall time (the 25th to 75th percentile of its
+    `_tasks_and_questions` tasks). With no history, the board's tasks are used.
+  - **Your share**: each item that needs you (question, review, failure, or
+    "yours" when you are working on it) times your answer time (the 25th to
+    75th percentile of questions, asked to answered, across the board). When
+    you have set an estimate and history shows your pace (ledger hours per
+    working day on the project, last 14 days), the hours left on the estimate
+    divided by that pace are used instead.
+  - With neither, there is no forecast. A range, never one date.
+  - Computed only for cards with a due date (their own, or a milestone's), so
+    the board doesn't read every journal. The board-wide distributions are
+    cached for 10 minutes.
+- [x] `at_risk(plan, fc, card, today)` gives a reason or None:
+  - the forecast's high passes `due`;
+  - `due` is within 2 days and the ball has been yours for more than a day;
+  - `due` is within 7 days and `blocked_by` names something that isn't done.
+- [x] The card:
+  - `forecast`, `at_risk` and `due_eff` (its own due, else the milestone's,
+    soft);
+  - an **at risk** chip on the card and the project page, giving the reason
+    and the range.
+- [x] Attention:
+  - an `atrisk` item on the Desk (a decision: never pushed, in the digest),
+    keyed by due and reason;
+  - its text, e.g. "fifo-cov due Fri: 2 runner tasks and your review remain;
+    forecast Thu-Mon";
+  - the buttons **Hand it off now** (Compose), **Move the due date** (Plan ▾)
+    and **Open**.
+- [x] `brief.score`: an at-risk project gets +100 and the reason "at risk:
+  forecast Fri-Mon".
+
+**F3c. Dates from forges** (§9.3)
+- [x] `forges._brief` gains `milestone` `{"title", "due"}` for GitHub
+  (`milestone.due_on`) and Forgejo (`milestone.due_on`), or None.
+- [x] `watch.poll`: for an issue already made into a project (`known` or
+  `seen`) whose milestone has a due date, an Inbox item (source `date`):
+  - the project has no due date, or a different one;
+  - the item is "x: issue milestone *v1.2* is due 2026-12-01", with ref
+    `{"date", "project", "due", "from"}`;
+  - it is proposed once per project and date (watch state `dates`).
+- [x] Inbox: **Use this date** sets `due` (soft) with `planning.set_`, and drops
+  the item. Drop is the Inbox's own.
+- [ ] **Gap**: PR review requests ("reviews asked of you") need a per-user
+  search API. Not built.
+
+**F3d. Board milestones and a burn-down** (§9.3)
+- [x] `milestones.py`:
+  - `$WPK_HOME/milestones/<board>.json`, a list of `{"name", "title", "date",
+    "made"}`. It is kept apart from `boards/<name>.toml` so that `main` can have
+    milestones too;
+  - `add`, `remove`, `of_board`, `get`.
+- [x] A plan field `milestone: <name>`. A project on a milestone inherits its
+  date as a soft due, unless it has its own (`planning.effective_due`).
+- [x] Snapshots, `$WPK_HOME/milestones/<board>/<name>.jsonl`, one a day, taken
+  by the board's loop:
+  - `{"day", "runner", "yours", "done", "projects"}`;
+  - runner: outline items still to do;
+  - yours: items that need you plus projects that are yours;
+  - done: projects done.
+  - History starts when the milestone is made: there is no backfill.
+- [x] The board page, a Milestones panel:
+  - each milestone shows its date, its projects (with at-risk chips), the
+    latest forecast (the latest high among its projects) against the date, and
+    an inline-SVG burn-down of runner and your work, with the ideal line to the
+    date;
+  - forms: Add (name, date, title) and Remove.
+- [x] Plan ▾ gets a milestone choice from the project's board.
+
+**F3e. Weekly review, standup and status drafts** (§9.5)
+- [x] `report.py`, `weekly(h, now)`, Monday to now:
+  - done by you and by the runner: projects marked done, tasks finished, your
+    hours (ledger) and the runner's hours;
+  - cost (`stats`);
+  - waiting for you for more than a week (Inbox items, items that need you);
+  - backlog older than 4 weeks (later and someday, rotting);
+  - estimates against actuals;
+  - next week's deadlines and milestones, with at-risk flags.
+  - It is stored as `$WPK_HOME/reviews/<YYYY-Www>.json` and `.md`, and the
+    board's loop builds it on `[focus] review_day` (default fri) after
+    `review_time` (default 16:00).
+- [x] `standup(h, now)`, for one person:
+  - **Yesterday**, your last working day: hand-offs, notes, marked done, your
+    time per project, the runner's finished tasks on your projects;
+  - **Today**: the brief's focus;
+  - **Blocked**: `blocked_by`, and projects waiting on someone else.
+- [x] `status(h, board or milestone)`: a row per project (column, whose move,
+  done this week, due, forecast, at risk).
+- [x] Every report renders as Markdown, kept in `$WPK_HOME/reports/` by day.
+  Pages: `/review` (latest; earlier weeks; Rebuild; **Tidy the backlog**, a
+  form of checkboxes with keep / someday / drop), `/standup`, `/status/<board>`
+  and `/status/<board>/<milestone>`.
+  - Each page has a copy box (the Markdown) to paste into chat or mail.
+  - Linked from the Desk (Brief panel) and the board page.
+
+**F3f. Calendar fit** (§9.5, later in the design)
+- [x] `icsfeed.py`, under `[calendar] ics = "<url or path>"`:
+  - the board's loop fetches the feed at most hourly into
+    `$WPK_HOME/calendar/feed.ics`;
+  - a small parser (VEVENT: DTSTART, DTEND, SUMMARY; UTC `Z`, `TZID` with
+    zoneinfo, floating as local; all-day events ignored; no RRULE expansion,
+    which is a gap);
+  - `today(now)`, `busy(now)`, `next_free(now)`.
+- [x] The brief: "Meetings today: 11:00-12:00 Sync" and, before the next one,
+  "45 min before 11:00: 2 reviews fit", at 15 min per review or answer.
+- [x] Pushes wait while you are in a meeting: `notify` holds the push and
+  sends it after the meeting ends. Settings page: the ICS field.
+
+**F3 tests** (`tests/test_collab_f3.py`)
+- The ledger: one user, two sources, counted once; gaps; idle beats don't
+  count. Estimates; actuals.
+- The forecast from a synthetic journal (tasks, questions); a range; none with
+  no history; at risk (each of the three reasons); the Desk item; the brief
+  score.
+- Forge milestone parsing (a fake GitHub JSON); a watch poll proposes a date
+  once; Use this date sets the due date.
+- Milestones: add and remove; the inherited due date; a snapshot a day; the
+  board panel and the SVG; the Plan ▾ milestone.
+- Weekly review content, file and page; Tidy the backlog; standup; status per
+  board and milestone; the loop builds on the day.
+- ICS: parsing (UTC, TZID, all day); busy; the brief lines; a push held during
+  a meeting; config validation.
+
+F3 notes (2026-11-07), what was built and where it differs from the plan above:
+- **F3a**: `timelog.py`, called from `presence.beat`.
+  - A beat that doesn't count (idle, hidden tab, ended) breaks the chain, so the
+    next beat starts afresh instead of counting the gap.
+  - `planning.estimate_hours`, `working_days`, `actuals` and `actuals_text`.
+  - The line is on the packet page's Now line (`id="actuals"`); the project page
+    has no plan line. The brief's Housekeeping gets the estimate lines.
+- **F3b**: `forecast.py` (`forecast`, `at_risk`, `range_text`,
+  `decision_text`), and `data.deadlines` after `data.board`:
+  - cards get `due_eff`, `due_kind`, `milestone`, `forecast` and `at_risk`;
+  - the Desk gets an `atrisk` row (`data.risk_item`, type decision in
+    `notify`), plus a chip on the board and the Backlog, and brief score +100.
+  - Parked projects count no item of yours; only questions, reviews,
+    failures, blocked sessions and "working: you" do.
+  - The card's "due Fri" text still uses the real date (as before F3), while the
+    forecast uses the board clock (`WPK_NOW` in tests).
+- **F3c**:
+  - `forges._milestone`, and `watch.propose_date` called from `poll` for
+    issues already made into projects (state `dates`);
+  - **Use this date** on the Inbox item. Review requests are not built (gap).
+- **F3d**: `milestones.py`, with the plan field `milestone` (`wpk plan
+  --milestone`).
+  - The board page has a Milestones panel (Add, Remove, Status link, inline-SVG
+    burn-down), and Plan ▾ offers the board's milestones on the board and the
+    packet page.
+  - The daily snapshot is taken by `reviews.tick` in the board's loop.
+- **F3e**: `reviews.py` (`weekly`, `standup`, `status`, `tidy`, `keep`,
+  `tick`), which uses the board clock.
+  - Pages `/review[/<week>]`, `/standup`, `/status/<board>[/<milestone>]`,
+    POST `/review/build`, `/review/tidy` (owner only) and `/reports/keep`,
+    on the template `rhythm.html`.
+  - Linked from the Desk's Today panel, the Brief page and the board's
+    Milestones.
+  - `[focus] review`, `review_day` and `review_time` are validated, and on the
+    Settings page.
+- **F3f**: `icsfeed.py` (`[calendar] ics`, validated, on the Settings page).
+  - Fetched hourly by `reviews.tick`.
+  - Brief section "Today's calendar".
+  - `notify.tick(busy=)` holds pushes, the digest and the brief push during a
+    meeting.
+- **Not done**:
+  - PR review requests as dates;
+  - RRULE expansion (only the first instance of a repeating event counts);
+  - narration by a model;
+  - backfilling a milestone's burn-down from before it was made;
+  - per-person calibration of the forecast (it pools the board's questions):
+    **done in G8**;
+  - your share counted in working days (it is wall-clock): **done in G8**.
+- **Tests**: new `tests/test_collab_f3.py`, 13 tests:
+  - the ledger, estimates against actuals;
+  - the forecast and at-risk reasons, at risk on the board, Desk and brief;
+  - a forge date to the Inbox and Use this date;
+  - milestones and the burn-down;
+  - the weekly review and when it's due, standup and status;
+  - ICS parsing, the brief and held pushes, config keys.
+- **Docs**: guide sections "Deadlines: forecast, at risk and milestones", "The
+  weekly review, standup and status" and "Your calendar", plus config rows and
+  the time ledger under "What the board writes".
 
 ---
+
+### G. Closing the gaps (added 2026-11-07)
+
+The user asked to close the gaps each step left, except Codex (not available
+on this host; its §2a row stays open). Ordered by what matters day to day.
+Each slice keeps the dash-first rule and adds tests. Out of scope here: the
+VS Code extension (`vscode-extension.md` E1), so one-click continue stays a
+copy-and-paste; model narration; triggers and routines; split for plain folders.
+
+- [x] **G1. Edits by hand hold the runner** (C2 gap, §5 risk). `presence.edited`
+  scans the packet folder's file times. It skips VCS, tool and cache folders,
+  `.work-packet`, `.vscode`, `.claude` and the cards, caps at 20,000 entries and
+  caches for 60 s. `presence.edits_hold` counts a change only if it is newer
+  than the packet's journals, so the runner's own writes and edits made before a
+  hand-off don't count, and only within `presence_ttl`. `holds` uses it when no
+  presence record is live: "files in it were edited by hand 2 min ago; it starts
+  once they are quiet for 10 min, or when you hand it off". It applies only to the
+  packet layout (a legacy project opens read-only) and runs only in the
+  scheduler's gate, so cards don't scan. Tests: `test_presence.py` (hold,
+  quiet, a hand-off since, skipped files, cache, legacy).
+- [x] **G2. Tokens for desktop and terminal sessions** (C4 gap). The hook keeps
+  the transcript path in the presence record (`transcript`; absolute `.jsonl`
+  only, no text). `ide_sessions.hook_pass` runs in the board's sessions loop
+  whenever `[ide] sessions` is on, even with web VS Code off. For each Claude
+  presence record that isn't `ide-web`, it reads what is new in the transcript
+  with the same `scan`, and keeps a session record with attribution `hook`
+  (project, wpid, host, client from `via`). A session a launch collector already
+  has (confirmed or workspace) is left to it. An ended session gets one last
+  read. The record is shown in the sessions tables, with process running/ended
+  like a confirmed one, and is counted in Spend today. Tests: `test_collab_g.py`
+  (path kept, read and counted once, last read after the end, web sessions
+  left alone).
+- [x] **G3. Checkpoints from sessions** (C5 gaps).
+  - **Nudge**: Claude Code's PreCompact hook can't give the model context, but
+    the SessionStart (`source: compact`) that follows can. So
+    `hookcmd.compact_nudge` asks the session to suggest `/wpk-checkpoint` when
+    the packet has no step since the session's presence `since`. The briefing
+    is still not repeated.
+  - **SessionEnd**: no new queue. The scribe's `due` now treats an ended `hook`
+    session (G2) like an ended confirmed one, so desktop and terminal sessions
+    get a draft when they end, with the scribe on.
+  - **Proposals**: `checkpoint.draft_of` returns the scribe's draft while it is
+    the last checkpoint. `accept_draft` records it again as a `session`
+    checkpoint (status, body, next), so the memento moves.
+  - **Dash**: action `accept-draft`. The card shows `draft checkpoint · Accept ·
+    Edit` (`_pause.html` `draft`). The packet page has a Draft checkpoint panel
+    and the Checkpoint form open, with the draft's body filled in.
+  - Tests: `test_collab_g.py` (offered on the board and the page, accepted,
+    nothing left to accept; the nudge and none after a checkpoint; an ended hook
+    session). `test_collab_c5.py`: compaction now gives only the nudge.
+- [x] **G4. Watchers on the board** (C6 §2a gap). `watch.save` (add, or
+  replace by its old name, keeping keys the form doesn't show) and
+  `watch.remove`. Both are checked with `schema.validate_watches` before
+  writing, and nothing is written on an error. `boards/main.toml` is made for
+  main's first watcher. The board file is rewritten with `save_toml`, so comments
+  are lost; it is machine-written already (`new_board`). A file that doesn't
+  validate is never rewritten; the page says to fix it by hand. Dash: POST
+  `/b/<board>/watch` (`op` save/remove, `was`), and the Watchers section is always
+  shown, with Edit per watcher and Add a watcher. Tests: `test_collab_g.py` (add,
+  edit with a hidden key kept, rename, bad repos refused, duplicate, remove,
+  main's first watcher, unknown board).
+- [x] **G5. Desk and board odds and ends** (C2-C4, F1).
+  - **Tasks cut at checkpoints**: `data.tasks` starts a task after a by-hand
+    checkpoint whose summary has a `Next:` line. A hand-off with an instruction
+    straight after it (no step between) renames that task instead of adding an
+    empty one.
+  - **Open ▾ on the Desk**: on In progress rows (you and running) and on REVIEW
+    rows. The `.openmenu` CSS moved from `board.html` to `base.html`.
+  - **Review rows**: Done was already there (accept). Added **Next…** (Compose)
+    and Open ▾ (take & open), so all of the design §4.3 review buttons are there.
+  - **Rot on the Desk**: kind `rot` ("STALE"), only for parked open projects,
+    ordered last, keyed by priority and limit. Plan ▾, Hand off…, Open. Not in
+    `notify.items`, so never pushed or in the digest.
+  - **Compose while queued**: `executor.requeue` changes the memento of a
+    RUNNABLE or SLEEPING packet under the lease (refused while a step holds it),
+    and writes an `admin` `requeue` record. Compose shows **Save the
+    instruction** when the runner has it but nothing is running. State files are
+    never edited this way.
+  - **`turn-waiting`**: `attention.log_waits`, run by the board's sessions loop.
+    One record per wait (presence `waited` = that `turn_since`), stamped
+    `turn_since + idle_escalate`. The timeline shows "Claude (VS Code) waited for
+    you since 10:02". New fields: presence `waited`, `presence.mark` (no beat).
+  - Tests: `test_collab_g.py` (tasks, Desk rows and rot, requeue, waits).
+- [x] **G6. Inbox** (C6).
+  - **Until it changes**: for an item with a `project`, `inbox.snooze(...,
+    change=True)` keeps `change_at`, and `items` shows it again once that
+    project's root journal is newer, capped at `CHANGE_MAX_S` (a week). An item
+    with no project has nothing to watch, so it gets the time only and no
+    button.
+  - **Decline a request**: `inbox.decline_request` delivers "Request `x` (…) was
+    declined by …: <reason>" to the requester through `requests.deliver`
+    (outcome `declined`, so it wakes a waiter), then drops the delegate project
+    if it never ran a step. POST `/inbox/request/decline`; Decline ▾ with a
+    reason on request rows (board Inbox column and Backlog).
+  - Tests: `test_collab_g.py` (change snooze, no-project snooze, decline end to
+    end and twice).
+- [x] **G7. Split** (C7d).
+  - **Back-pointer**: the card has `split_of` (from `split.json`), shown as
+    "split of <name>".
+  - **Remove its folder**: `split.remove`, only once the split is done or
+    dropped. It keeps the journal at `splits/removed/<name>.journal.jsonl`, runs
+    `git worktree remove --force` and prune, then `git branch -d` only when
+    done (merged). A dropped split keeps its branch. It unregisters the split
+    and writes a `split` `op: removed` record on the original, which the
+    timeline shows. Dash: `op=remove` on `/p/<split>/split` (owner only), with a
+    confirm.
+  - **Shares**: `make` links untracked `SHARES` (`packages`, `.venv`, `venv`,
+    `node_modules`) and untracked top-level links into the worktree, through
+    `workspace.link_shares`, which also excludes them.
+  - Still out of scope: plain folders, legacy `work/` clones, "land after I
+    commit".
+  - Tests: `test_collab_g.py` (links, back-pointer, remove refused while open,
+    removed after landing with the branch deleted, dropped keeps its branch).
+- [x] **G8. Forecast** (F3).
+  - `history._tasks_and_questions` now keeps who answered (`by` of the
+    hand-off).
+  - `forecast._history` returns `(seconds, who)`. The forecast uses the
+    owner's own answer times (the card's root `owner`, without `@host`) when
+    there are `OWN_MIN` (5) of them, on the project and then on the board;
+    otherwise everyone's, as before. `history()` keeps its old shape.
+  - The estimate path lays the days left on working days (`add_working`:
+    weekends skipped) instead of scaling by 7/5. Answer times stay wall-clock,
+    since they are measured that way.
+  - Tests: `test_collab_g.py` (working days across a weekend, own answers
+    used at 5 and not for someone with none, the board pool).
 
 ## 4. Test plan (shared)
 
@@ -1141,6 +1708,10 @@ the triage actions); dash tests for the tile and warning.
 - [ ] (C5) A new Claude session in the packet knows the brief and next action
   without being told; a note sent from the phone shows up on the next prompt.
 - [ ] (C4) Desk at phone width: Needs you, inline answer and capture are usable.
+- [ ] (F3) A real calendar feed (Google or Outlook ICS URL) in Settings: today's
+  meetings in the brief at the right local times; a push held during a meeting.
+- [ ] (F3) A watched GitHub issue with a dated milestone: the date is proposed in
+  the Inbox.
 
 ---
 
@@ -1150,7 +1721,7 @@ the triage actions); dash tests for the tile and warning.
 |---|---|
 | The VS Code extension ignores project hooks, or `Notification` doesn't fire there | C0 first; fall back to `sessions/<pid>.json` `status` and the transcript tail; label the card "probably waiting" |
 | Hook start-up is slow on the shared FS and adds latency to every prompt | D10 stdlib-only module; measure in C0; plan B is an event-file drop |
-| Editing by hand in desktop VS Code with no Claude session isn't seen after the open's 10 minutes, so the runner may start under you (found in C2) | Hand off with `--after-me` (or don't hand off) while you edit; build the file-mtime activity scan (design §4.2 fallback) if it bites; the legacy layout still opens read-only |
+| Editing by hand in desktop VS Code with no Claude session isn't seen after the open's 10 minutes, so the runner may start under you (found in C2; **fixed in G1** by the file-time scan) | Hand off with `--after-me` (or don't hand off) while you edit; build the file-mtime activity scan (design §4.2 fallback) if it bites; the legacy layout still opens read-only |
 | Writing `settings.local.json` clobbers user config | Merge with tagged entries, never rewrite foreign ones, test with real-world files, `doctor` shows the diff, off switch |
 | Concurrent journal appends from hooks and the runner | Small `O_APPEND` writes; a test; if not safe, hooks write presence only and the board pass journals |
 | Presence false positives (a tab left open overnight) keep the runner idle | The 2 h attachment-only cap (D4) and a stale item; "start anyway" on the card |
@@ -1174,6 +1745,20 @@ the triage actions); dash tests for the tile and warning.
 | `docs/server.md` / `docs/setup.md` | user-ish | C2: hooks in `wpk doctor`; C3: setup is a hand-off pre-flight, not a state |
 | CLI help strings | reference | with each verb (`done`, `reopen`, `drop`, `autonomy`, `plan`, `todo`, `brief`, `shutdown`, `new --start`, `handoff --after-me`) |
 
+DOC notes (2026-11-07): every row is done. The guide, README, `product.md`,
+spike doc and superseded-design pointers were written phase by phase. The
+final pass:
+- `collaboration.md` status line says it is built, with the two parts not built:
+  §5.3, marked "awaits triggers"; and §9.4 and the F2 row in §13, marked "built
+  without routines (D9)". §4.3's Codex line is marked "not measured yet". §4.3's
+  PermissionRequest fix was made after C0.
+- `server.md` (wpkd) has no `doctor` section, so the doctor and hooks note and
+  "setup is a hand-off pre-flight, not a state" went into `setup.md`, which
+  documents `wpk doctor`.
+- CLI help: `done`/`drop`/`reopen`, `autonomy`, `plan` (incl. `--milestone`),
+  `todo`, `brief`, `shutdown` and `handoff --after-me` all have help. `new
+  --start` was not added (C3 notes).
+
 ## 7. Status log
 
 - 2026-11-06: plan written. Decisions confirmed; §2a dash-first table added. Prerequisite commit done.
@@ -1185,3 +1770,21 @@ the triage actions); dash tests for the tile and warning.
 - 2026-11-06: C5 done with gaps; full suite 1333 passed, 15 skipped (after fixing the layout-parity test for the step page's resume panel); live hooks checks (2) passed. Not committed.
 - 2026-11-06: C2b (opening VS Code claims the project, D15) done; full suite 1338 passed, 15 skipped. Not committed.
 - 2026-11-06: F1 done with gaps; full suite 1346 passed, 15 skipped (plus a rerun of the touched files after the last template and config changes). Not committed. Next: F2 (focus brief, shutdown), then C6.
+- 2026-11-06: F2 done with gaps; full suite 1353 passed, 15 skipped. Not committed. Next: C6.
+- 2026-11-07: C6 done with gaps; full suite 1367 passed, 15 skipped. Not committed. Next: C7 and F3 need detailed plans (outline only so far); the manual checks in §4.6 (a real ntfy topic on a phone) are open.
+- 2026-11-07: C7 detailed (slices C7a-e) and done with gaps: jobs, status line and `status.json`, rules from corrections, split, and presence in the S4b design. Full suite 1386 passed, 15 skipped (`test-collab-c7.log`). Not committed. Next: F3 needs a detailed plan (outline only); the manual checks in §4.6 are open, plus one for C7: a real `wpk run` and a split from VS Code.
+- 2026-11-07: F3 detailed (slices F3a-f) and done with gaps: your time and estimates against actuals, forecast and at risk, dates from forge milestones, board milestones with a burn-down, weekly review / standup / status, calendar fit. Full suite 1399 passed, 15 skipped (`test-collab-f3.log`). Not committed. Every phase of the plan is now built; open: the gaps in each step's notes, the Codex `notify` row in §2a, and the manual checks in §4.6 (including two new F3 ones).
+- 2026-11-07: DOC done: the final pass on `collaboration.md` (status line, §4.3
+  Codex, §5.3, §9.4, §13) and a doctor and pre-flight note in `setup.md`. Docs
+  only, no code changed. Every step in the Status table is done. Open: the gaps
+  in each step's notes, the Codex `notify` row in §2a, and the §4.6 manual
+  checks. Not committed.
+- 2026-11-07: G done (G1-G8): edits by hand hold the runner, tokens for desktop
+  and terminal sessions, the compaction nudge and scribe drafts as proposals,
+  watchers edited on the board, Desk and task odds and ends, Inbox snooze until
+  the project moves and declining requests, split back-pointer, removal and
+  shares, and the forecast's own answer times and working days. 18 new tests in
+  `tests/test_collab_g.py`; `test_collab_c5.py` updated for the nudge. Full suite
+  1420 passed, 15 skipped (`test-collab-g.log`). Not committed. Still open: the
+  Codex `notify` row (§2a, no Codex here), the §4.6 manual checks, and the
+  out-of-scope items in G's preamble.

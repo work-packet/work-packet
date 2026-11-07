@@ -155,6 +155,37 @@ def record(pkt, status, body=None, next_action=None, ticks=(), worker="session",
     return out, n
 
 
+def draft_of(pkt):
+    """The scribe's draft, when it is the packet's last checkpoint and nobody has
+    taken it up since: ``{"step", "t", "status", "body", "next"}``, else None."""
+    got = last(pkt)
+    if not got or got["worker"] != "scribe":
+        return None
+    try:
+        _, text = pkt.load_status()
+    except Exception:                   # noqa: BLE001: an unreadable status: no draft
+        return None
+    lines = (text or "").strip().split("\n", 1)
+    if not lines[0].strip():
+        return None
+    nxt = next_of(text)
+    rest = NEXT.sub("", lines[1] if len(lines) > 1 else "").strip()
+    return {"step": got["step"], "t": got["t"], "status": lines[0].strip(),
+            "body": rest or None, "next": nxt}
+
+
+def accept_draft(pkt, by=None):
+    """Take the scribe's draft as yours (docs/collaboration-plan.md G3): the same
+    status, body and next action, recorded as your checkpoint, so its next action
+    also becomes what the runner starts from. Returns ``(Outcome, step)``."""
+    d = draft_of(pkt)
+    if d is None:
+        return executor.Outcome(executor.USAGE, "%s: no scribe draft to accept; a "
+                                "checkpoint has been recorded since" % pkt.wpid[:8]), None
+    return record(pkt, d["status"], d["body"], d["next"], (), "session", by,
+                  meta={"accepted": {"scribe_step": d["step"]}})
+
+
 def during_step(pkt, text, by=None):
     """A person's checkpoint while a runner step runs (docs/collaboration.md §5.5):
     it takes no lease and changes no status. It becomes a note, which the running

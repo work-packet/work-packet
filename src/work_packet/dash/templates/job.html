@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{#- One job (docs/collaboration.md W7, plan C7a): a command run for the project. -#}
+{% block title %}{{ e.name }}: job{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <a href="/p/{{ e.name|urlencode }}#jobs">jobs</a>{% endblock %}
+{% block main %}
+<h1><code>{{ cmd }}</code></h1>
+<table class="kv">
+<tr><td>State</td><td><span class="state {{ {'running': 'RUNNING', 'ok': 'COMPLETED', 'failed': 'FAILED', 'lost': 'FAILED'}[j.state] }}">{{ j.state|upper }}</span>
+{% if j.state == "failed" %} exit {{ j.exit }}{% elif j.state == "lost" %} <span class="muted">its process is gone without an end: it was killed, or the host restarted</span>{% endif %}</td></tr>
+<tr><td>Started</td><td>{{ j.start|epoch }} by {{ j.by }} on {{ j.host }}</td></tr>
+<tr><td>{{ "Running for" if j.state == "running" else "Took" }}</td><td>{{ took }}</td></tr>
+<tr><td>In</td><td><code>{{ j.cwd }}</code></td></tr>
+</table>
+<h2>Output{% if log.startswith("…") %} <span class="muted" style="font-size:12.5px">(the end of it)</span>{% endif %}</h2>
+{% if log %}<pre class="log">{{ log }}</pre>{% else %}<p class="muted">No output{{ " yet" if j.state == "running" }}.</p>{% endif %}
+<p class="muted" style="font-size:12.5px">The whole log is <code>jobs/{{ j.id }}/log</code> in the project.</p>
+{% endblock %}

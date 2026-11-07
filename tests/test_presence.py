@@ -3,6 +3,7 @@ heartbeat records, and the runner holding off while they are there."""
 
 import json
 import os
+import time
 
 import pytest
 
@@ -131,3 +132,61 @@ def test_a_resume_while_present_counts_as_a_go_ahead(tmp_path):
     presence.beat(proj, "shell-1", T, kind="shell")
     j = _journal(tmp_path, {"type": "admin", "op": "resume", "t": _ts(T + 10), "defer": False})
     assert presence.holds(proj, [j], T + 20) is None
+
+
+def _packet_folder(tmp_path):
+    folder = tmp_path / "pkt"
+    proj = folder / ".work-packet"
+    os.makedirs(proj / "presence")
+    (folder / "src").mkdir()
+    return str(folder), str(proj)
+
+
+def test_edits_by_hand_hold_the_runner(tmp_path):
+    """Desktop VS Code opened by hand, with no Claude in it: the file times say so
+    (design §4.2 fallback)."""
+    presence._edits.clear()
+    folder, proj = _packet_folder(tmp_path)
+    j = _journal(tmp_path, {"type": "admin", "op": "pause", "t": _ts(T - 900)})
+    os.utime(j, (T - 900, T - 900))
+    f = os.path.join(folder, "src", "a.py")
+    open(f, "w").close()
+    os.utime(f, (T - 120, T - 120))
+    why = presence.holds(proj, [j], T)
+    assert why and "edited by hand 2 min ago" in why
+    presence._edits.clear()
+    assert presence.holds(proj, [j], T + presence.TTL_S) is None        # quiet for the TTL
+    presence._edits.clear()
+    os.utime(j, (T - 60, T - 60))                                       # a hand-off since
+    assert presence.holds(proj, [j], T) is None
+
+
+def test_edits_skip_the_boards_own_files(tmp_path):
+    presence._edits.clear()
+    folder, proj = _packet_folder(tmp_path)
+    j = _journal(tmp_path)
+    os.utime(j, (T - 900, T - 900))
+    for rel in ("p.wp.md", ".git/index", ".vscode/packet.code-workspace",
+                ".claude/settings.local.json", ".work-packet/presence/x.json",
+                "node_modules/m/i.js"):
+        p = os.path.join(folder, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "w").close()
+        os.utime(p, (T - 60, T - 60))
+    assert presence.edited(folder, T) is None
+    assert presence.holds(proj, [j], T) is None
+
+
+def test_edits_are_cached_and_legacy_projects_are_not_scanned(tmp_path):
+    presence._edits.clear()
+    folder, proj = _packet_folder(tmp_path)
+    assert presence.edited(folder, T) is None
+    f = os.path.join(folder, "src", "b.py")
+    open(f, "w").close()
+    os.utime(f, (T, T))
+    assert presence.edited(folder, T + 10) is None                      # cached
+    assert presence.edited(folder, T + presence.EDIT_EVERY_S) == T
+    legacy = str(tmp_path / "legacy")
+    os.makedirs(legacy)
+    open(os.path.join(legacy, "x"), "w").close()
+    assert presence.edits_hold(legacy, [], time.time()) is None

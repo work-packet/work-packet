@@ -315,6 +315,7 @@ instruction for the next step.
 | `ask` | non-empty string, or a list of questions (docs/interaction.md §2: `id`, `q`, optional `recommend`, `choices`, `grants`, `request`, `sets`) | no | questions for the owner: the step commits as `NEEDS_INPUT` with this as `reason`, whatever `resume` says; `resume` is kept in `resume_expr` as a record |
 | `spawn` | list of spawn entries | no | children to create (§6) |
 | `item` | string, number or a list of them | no | the plan item this step worked on (such as `2a`); it only labels the step for `wpk stats --by item` and the board. Missing or malformed is never an error: the step is just not charged to an item. A failed attempt is charged to its own pending memento's item, else to the item its step committed |
+| `follow_ups` | list of strings (at most 5) | no | work the step found that is not this task's; when the step commits, each becomes an Inbox item for the owner (docs/collaboration.md W8), source `agent`, naming the packet and step |
 | `size` | name | no | the job size for the next step only (docs/scheduler.md §5.2): one of the project's `sizes` (§3.1), else the memento is refused like any bad one. Committed as `next_size` in `status.md` |
 
 A spawn entry:
@@ -372,6 +373,8 @@ a warning, not an error; the executor ignores it.
 | `request` | a request to another project (docs/delegation.md): `sent` (requester: `to`, `title`), `received` (the delegate's root: `from`, `title`), `done` (requester: `outcome`, `note`, the id of the note that carried the result) | `op`, `id`, `by` |
 | `seen` | someone looked at the packet after its run stopped (`wpk seen`, the board) | `by` |
 | `session-start`, `session-end` | an interactive Claude session in the packet's folder began or ended (its hooks, docs/collaboration.md §4.3) | `by`, `session`, `actor` (`{kind, via, session}`); optional `source` (start) and `reason` (end). Never what was said |
+| `job-start`, `job-end` | a job of the project started or ended (`wpk run`, or the board's Run a command; docs/collaboration.md W7) | `job` (its id under `<project>/jobs/`), `cmd` (shortened), `by` (start); `exit`, `secs` (end) |
+| `split` | the project was split: a copy it hands to the runner (docs/collaboration.md §5.4) | `to` (the split project's name), `by` |
 | `note` | anything else worth recording (stale lease removed, ...) | `msg` |
 
 `decision` holds everything needed to finish the commit without the model:

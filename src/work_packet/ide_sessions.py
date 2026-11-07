@@ -379,7 +379,7 @@ def scan(path, harness, st=None, cur=None, max_bytes=MAX_READ):
 # the launch ran. Anything else is not shown. A scheduled step's session is
 # never shown.
 
-CONFIRMED, WORKSPACE = "confirmed", "workspace"
+CONFIRMED, WORKSPACE, HOOK = "confirmed", "workspace", "hook"
 ENV_KEEP = ("WPK_IDE_LAUNCH", "WPK_IDE_KEY", "WPK_PROJECT", "WPK_WPID", "CLAUDE_CONFIG_DIR",
             "CODEX_HOME", "HOME")
 VSCODE_MARKERS = {"claude": "claude-vscode", "codex": "vscode"}
@@ -531,7 +531,7 @@ def live_sessions(root, launch_id):
 # reader got to in each file, so a restart neither re-counts nor loses counts.
 # Both 0600 in a 0700 directory.
 
-ATTRIBUTIONS = (CONFIRMED, WORKSPACE)
+ATTRIBUTIONS = (CONFIRMED, WORKSPACE, HOOK)
 NAME = re.compile(r"[^\x00-\x1f\x7f]{1,200}\Z")
 WPID = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 LAUNCH = re.compile(r"L-[0-9a-f]{12}\Z")
@@ -996,6 +996,56 @@ def local_pass(home, collectors):
     return len(live)
 
 
+HOOK_VIA = {"ide-desktop": "vscode-ext", "vscode": "vscode-ext", "terminal": "terminal"}
+
+
+def hook_pass(home, now=None):
+    """Sessions the board's web VS Code doesn't watch: desktop VS Code and
+    terminals (docs/collaboration-plan.md G2). Their hooks name the transcript
+    (presence ``transcript``); read what is new in it, as the launch collector
+    does, and keep the record with attribution ``hook``. A session a launch
+    collector already has is left to it. Ended sessions get one last read while
+    their presence record lasts (a day). Returns how many it stored."""
+    import time
+    from . import presence, registry
+    now = time.time() if now is None else now
+    n = 0
+    for e in registry.entries(home):
+        for rec in presence.every(e["path"]):
+            tp, sid = rec.get("transcript"), rec.get("session")
+            if rec.get("kind") != "claude" or rec.get("via") == "ide-web" or not tp \
+                    or not _ok(SESSION, sid):
+                continue                # a web VS Code session: its launch collector has it
+            prev = read(home, "claude", sid) or {}
+            if prev.get("attribution") in (CONFIRMED, WORKSPACE):
+                continue
+            ended = rec.get("turn") == "ended"
+            if ended and prev and not prev.get("live"):
+                continue                # its last read is done
+            cur = _load_cur(home, "claude", sid).get("files") or {}
+            f = cur.get(tp) or {}
+            if not os.path.isfile(tp):
+                continue
+            st, c = scan(tp, "claude", f.get("st"), f.get("cur"))
+            cur[tp] = {"st": st, "cur": c}
+            write(home, {
+                "harness": "claude", "session_id": sid, "attribution": HOOK,
+                "project": e["name"], "wpid": rec.get("wpid") or prev.get("wpid"),
+                "host": rec.get("host"),
+                "client": HOOK_VIA.get(rec.get("via"), "unknown"),
+                "model": st.get("model"), "last_event": st.get("last_event"),
+                "last_event_t": st.get("last_event_t") or rec.get("beat"),
+                "last_activity_t": st.get("last_activity_t"),
+                "first_seen_t": prev.get("first_seen_t") or rec.get("since") or now,
+                "turn_state": st.get("turn_state"), "live": not ended,
+                "usage": st.get("usage") or {}, "counts": st.get("counts") or {},
+                "last_work_t": st.get("last_work_t"), "edit_ts": st.get("edit_ts") or [],
+                "usage_reported": bool(st.get("usage_reported"))})
+            _save_cur(home, "claude", sid, {"files": cur})
+            n += 1
+    return n
+
+
 # -- S5: what the board shows ----------------------------------------------
 
 HARNESS_LABEL = {"claude": "Claude Code", "codex": "Codex"}
@@ -1040,7 +1090,7 @@ def row(r, now):
     """One record as the board's table shows it."""
     u = r.get("usage") or {}
     reported = bool(r.get("usage_reported"))
-    if r.get("attribution") == CONFIRMED:
+    if r.get("attribution") in (CONFIRMED, HOOK):
         proc = (r.get("status") or "running") if r.get("live") else "ended"
     else:
         proc = ""

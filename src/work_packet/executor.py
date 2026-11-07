@@ -156,6 +156,18 @@ def state_diff(old, new):
 
 # --- commit ----------------------------------------------------------------------
 
+def _follow_ups(pkt, n, project):
+    """The committed memento's ``follow_ups:`` to the Inbox (docs/collaboration.md
+    W8). Ids come from the packet and step, so a redone commit writes the same items."""
+    try:
+        from . import inbox, registry
+        m, _ = frontmatter.load(pkt.memento_path)
+        if isinstance(m, dict) and m.get("follow_ups"):
+            inbox.follow_ups(registry.home(), pkt, m, project, step=n)
+    except Exception:           # a proposal never stops a commit
+        pass
+
+
 def _apply(pkt, st, rec):
     """Steps 14-18 of the commit. Safe to redo after a crash at any point."""
     n, d = rec["step"], rec["decision"]
@@ -181,6 +193,7 @@ def _apply(pkt, st, rec):
 
     meta, _ = pkt.load_status()
     if meta["step"] != n:
+        _follow_ups(pkt, n, meta.get("project"))
         kids = list(meta["children"])
         kids += [e["wpid"] for e in d["spawn"] if e["wpid"] not in kids]
         meta.update(state=d["state"], step=n, attempts=0, children=kids,
@@ -1326,6 +1339,36 @@ def pause_request(pkt):
     except (OSError, ValueError):
         return None
     return req if isinstance(req, dict) else {}
+
+
+def requeue(pkt, instruction, by=None):
+    """Change what a queued packet (RUNNABLE or SLEEPING, no step running) starts
+    from: its memento (docs/collaboration-plan.md G5). It takes the lease, as
+    ``admin`` does, so it never races a step that is starting. State files are not
+    touched."""
+    text = (instruction or "").strip()
+    if not text:
+        return Outcome(USAGE, "the instruction is empty")
+    if text.startswith("---"):
+        return Outcome(USAGE, "write the instruction without front matter")
+    try:
+        meta, _ = pkt.load_status()
+    except (OSError, frontmatter.FrontMatterError) as e:
+        return Outcome(USAGE, str(e))
+    try:
+        lease = Lease(pkt.lease_path, meta["step"] + 1, 0, 60).acquire()
+    except LeaseHeld as e:
+        return Outcome(LEASED, "a step is starting or running (%s); send it a note" % e)
+    try:
+        meta, _ = pkt.load_status()
+        if meta["state"] not in ("RUNNABLE", "SLEEPING"):
+            return Outcome(NOT_RUNNABLE, "%s is %s, not queued" % (pkt.wpid[:8], meta["state"]))
+        fsutil.atomic_write(pkt.memento_path, text + "\n")
+        journal.append(pkt.journal_path, {"type": "admin", "op": "requeue", "t": _ts(),
+                                          "by": by or _who()})
+    finally:
+        lease.release()
+    return Outcome(OK, "%s: it will start from the new instruction" % pkt.wpid[:8])
 
 
 def withdraw_pause(pkt):

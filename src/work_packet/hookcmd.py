@@ -112,9 +112,30 @@ def handle(event, ev, env, now=None):
     from . import briefing
     if event == "SessionStart":
         if ev.get("source") == "compact":
-            return rec, ""              # it keeps what it was told in the summary
+            return rec, compact_nudge(proj, wpid, rec)  # it keeps the briefing in the summary
         return rec, briefing.briefing(proj, wpid)
     return rec, briefing.new_notes(proj, wpid, ev.get("session_id"), now)
+
+
+NUDGE = ("The conversation was just compacted, and nobody has recorded a checkpoint "
+         "for this packet since this session started. If you have changed things, "
+         "suggest /wpk-checkpoint to the user, so the board knows where it stands.")
+
+
+def compact_nudge(proj, wpid, rec):
+    """After a compaction (docs/collaboration-plan.md G3): a short nudge when the
+    packet has no checkpoint since the session started, else "". PreCompact can't
+    talk to the session; the SessionStart that follows it can."""
+    from . import checkpoint
+    from .packet import Packet
+    try:
+        got = checkpoint.last(Packet(layout.run_dir(proj, wpid)))
+    except Exception:                   # noqa: BLE001: no packet, no nudge
+        return ""
+    since = (rec or {}).get("since")
+    if since is None or (got and got["t"] and got["t"] >= since):
+        return ""
+    return NUDGE
 
 
 def _apply(event, ev, env, now=None):
@@ -138,8 +159,11 @@ def _apply(event, ev, env, now=None):
         by = getpass.getuser()
     except (KeyError, OSError):
         by = None
+    tp = ev.get("transcript_path")
+    tp = tp if isinstance(tp, str) and os.path.isabs(tp) and tp.endswith(".jsonl") else None
     base = dict(kind="claude", via=via(env), host=socket.gethostname(), pid=pid,
-                session=sid, launch=env.get("WPK_IDE_LAUNCH"), wpid=wpid, by=by)
+                session=sid, launch=env.get("WPK_IDE_LAUNCH"), wpid=wpid, by=by,
+                transcript=tp)
     actor = {"kind": "claude", "via": base["via"], "session": sid}
     if event == "SessionStart":
         rec = presence.beat(proj, src, now, turn="waiting", **base)

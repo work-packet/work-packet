@@ -270,7 +270,18 @@ def _pull(p):
 
 def _brief(i):
     return {"number": i["number"], "title": i["title"], "url": i["html_url"],
-            "state": i["state"], "labels": [x["name"] for x in i.get("labels") or []]}
+            "state": i["state"], "labels": [x["name"] for x in i.get("labels") or []],
+            "milestone": _milestone(i.get("milestone"))}
+
+
+def _milestone(m):
+    """An issue's milestone ``{"title", "due"}`` (``due``: YYYY-MM-DD or None),
+    or None. GitHub and Forgejo both send ``due_on`` as a timestamp."""
+    if not isinstance(m, dict) or not m.get("title"):
+        return None
+    due = m.get("due_on")
+    return {"title": m["title"], "due": due[:10] if isinstance(due, str) and
+            len(due) >= 10 and due[4] == "-" else None}
 
 
 def _issue_out(i, comments):

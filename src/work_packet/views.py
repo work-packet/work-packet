@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 
 from . import clock, frontmatter, layout, report, schema
 from .packet import Packet
@@ -84,11 +85,13 @@ def lifecycle(meta):
     return "open"
 
 
-def ball(meta, running=None, present=()):
+def ball(meta, running=None, present=(), jobs=(), now=None):
     """Whose move it is: ``{"who", "kind", "text"}``. ``who``: you, agent,
-    scheduled or nobody; ``kind`` says why; ``text`` is a short line for a card.
-    ``running``: the live lease (``{"step"}``), if a step runs. ``present``: the
-    project's live presence records (``presence.live``)."""
+    scheduled, external or nobody; ``kind`` says why; ``text`` is a short line
+    for a card. ``running``: the live lease (``{"step"}``), if a step runs.
+    ``present``: the project's live presence records (``presence.live``).
+    ``jobs``: its running jobs (``jobs.live``): with nobody on it, and nothing
+    for you to answer, it waits on them (W7)."""
     st, why = meta.get("state"), meta.get("reason") or ""
     lc = lifecycle(meta)
     if lc != "open":
@@ -111,6 +114,14 @@ def ball(meta, running=None, present=()):
         return {"who": "you", "kind": "question", "text": why or "a question"}
     if st == "FAILED":
         return {"who": "you", "kind": "failure", "text": why or "failed"}
+    if jobs and not present and not meta.get("taken_by"):
+        import time
+        from .jobs import label
+        j = jobs[0]
+        secs = (time.time() if now is None else now) - (j.get("start") or 0)
+        more = " (+%d)" % (len(jobs) - 1) if len(jobs) > 1 else ""
+        return {"who": "external", "kind": "external",
+                "text": "waiting on %s%s, %s" % (label(j["cmd"], 30), more, span(secs))}
     if st == "COMPLETED":
         if _unread(meta):
             return {"who": "you", "kind": "review", "text": "the runner finished: review it"}
@@ -132,6 +143,15 @@ def ball(meta, running=None, present=()):
     return {"who": "you", "kind": "failure", "text": "status.md unreadable"}
 
 
+def span(secs):
+    """``1h12m``, ``5m``, ``40s``."""
+    secs = max(int(secs), 0)
+    if secs < 60:
+        return "%ds" % secs
+    m = secs // 60
+    return "%dh%02dm" % (m // 60, m % 60) if m >= 60 else "%dm" % m
+
+
 def _unread(meta):
     """Stopped, and nobody has looked since (docs/overview-recent.md §2): looking at
     a finished packet is reviewing it. ``stopped`` and ``seen`` as status.md has them,
@@ -150,7 +170,7 @@ def driver(meta, running=None, present=()):
     return "you" if you else "nobody"
 
 
-def column(meta, running=None, present=()):
+def column(meta, running=None, present=(), jobs=()):
     """The board column (docs/collaboration.md §8.2), from the ball and the driver."""
     if lifecycle(meta) != "open":
         return "Done"
@@ -159,12 +179,12 @@ def column(meta, running=None, present=()):
         return "Working: agent"
     if d == "you":
         return "Working: you"
-    b = ball(meta, running, present)
+    b = ball(meta, running, present, jobs)
     if b["kind"] in NEEDS_YOU:
         return "Needs you"
     if b["kind"] == "queued":
         return "Working: agent"
-    if b["kind"] in ("scheduled", "children"):
+    if b["kind"] in ("scheduled", "children", "external"):
         return "Waiting"
     return "Parked"
 
@@ -427,6 +447,24 @@ def timeline(pkt, since=None, limit=None):
                   "kind": typ, "text": "session %s" % ("started" if typ == "session-start"
                                                        else "ended"),
                   "who": _who(r.get("by"))}
+        elif typ == "turn-waiting":
+            a = r.get("actor") or {}
+            from .presence import WHERE
+            ev = {"actor": "Claude (%s)" % WHERE.get(a.get("via"), a.get("via") or "?"),
+                  "kind": "waiting", "text": "waited for you since %s" % (
+                      time.strftime("%H:%M", time.localtime(_epoch(r.get("since")) or 0))),
+                  "who": _who(r.get("by"))}
+        elif typ == "job-start":
+            ev = {"actor": _who(r.get("by")), "kind": "job", "text": "started %s" % _line(
+                r.get("cmd"))}
+        elif typ == "job-end":
+            ev = {"actor": "job", "kind": "job" if r.get("exit") == 0 else "failure",
+                  "text": "%s %s" % (_line(r.get("cmd")), "finished" if r.get("exit") == 0
+                                     else "failed (exit %s)" % r.get("exit"))}
+        elif typ == "split":
+            ev = {"actor": _who(r.get("by")), "kind": "handoff",
+                  "text": "removed the split %s's folder" % r.get("to") if r.get("op") == "removed"
+                  else "split it: %s works in a copy" % r.get("to")}
         elif typ == "note" and r.get("by"):        # a person's (a checkpoint during a step)
             ev = {"actor": _who(r.get("by")), "kind": "note", "text": _line(r.get("msg"))}
         elif typ == "config" and r.get("changes"):

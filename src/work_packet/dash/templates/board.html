@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_inbox.html" as ibx with context %}
 {% import "_side.html" as sidem with context %}
 {% import "_pause.html" as pz with context %}
 {% import "_open.html" as om with context %}
@@ -25,12 +26,6 @@
 .card.Agent { border-left-color: var(--running); } .card.You { border-left-color: var(--RUNNABLE); }
 .card.Needs { border-left-color: var(--NEEDS_INPUT); } .card.Waiting { border-left-color: var(--SLEEPING); } .card.Parked { border-left-color: var(--PAUSED); }
 .card.Failed { border-left-color: var(--FAILED); } .card.Done { border-left-color: var(--COMPLETED); }
-.openmenu { display: inline-block; position: relative; }
-.openmenu > summary { list-style: none; cursor: pointer; }
-.openmenu > summary::-webkit-details-marker { display: none; }
-.openmenu .openitems { position: absolute; z-index: 5; background: var(--panel); border: 1px solid var(--line);
-  border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 150px; }
-.openmenu .openitems form { display: flex; flex-direction: column; gap: 4px; margin: 0; }
 .card .auto { font-size: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 0 5px; color: var(--muted); font-weight: normal; }
 /* Compact: the name and one line. A click unfolds it, a click on it open folds it;
    its name and buttons only act once it is open. */
@@ -53,6 +48,8 @@
 .card[open] .stat { display: none; }
 .card .intent { font-size: 12px; color: var(--muted); }
 .card .asof { font-size: 11.5px; color: var(--muted); }
+.watchform { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; font-size: 12.5px; margin: 6px 0; }
+.watchform input[type=text], .watchform input:not([type]) { max-width: 100%; }
 .card .asof .stale { color: var(--NEEDS_INPUT); }
 .card .body { padding: 0 8px 6px; }
 .card .line { font-size: 12.5px; margin-top: 3px; }
@@ -90,12 +87,10 @@
 <div class="board">
 {% for col in columns %}
   <section class="col" id="col-{{ loop.index }}" data-follow="no" data-col="{{ col }}">
-    <h2><span>{{ col }}</span><span class="muted">{{ cols[col]|length + (captures|length if col == "Inbox" else 0) }}</span></h2>
+    <h2><span>{{ col }}</span><span class="muted">{{ cols[col]|length + ((captures|length + inbox_requests|length) if col == "Inbox" else 0) }}</span></h2>
     {% if col == "Inbox" %}{% for d in captures %}
-    <div class="card Inbox capture"><div class="brief" title="{{ d.text }}">{{ d.text }}</div>
-      <div class="cardpz"><form class="act" method="post" action="/inbox/{{ d.id }}/accept"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini" title="Make it a packet: New, with this as its objective">Make packet</button></form>
-        <form class="act" method="post" action="/inbox/{{ d.id }}/drop"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini">Drop</button></form></div></div>
-    {% endfor %}
+    <div class="card Inbox capture">{{ ibx.row(d, inbox_projects, "/b/" ~ here.name|urlencode) }}</div>
+    {% endfor %}{% for r in inbox_requests %}<div class="card Inbox capture">{{ ibx.request(r) }}</div>{% endfor %}
     <form class="act capture-form" method="post" action="/inbox" style="margin:4px 0 8px">
       <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="board" value="{{ here.name }}">
       <input type="hidden" name="back" value="/b/{{ here.name|urlencode }}">
@@ -107,7 +102,7 @@
     <details class="card {{ c.css }}" id="card-{{ c.name }}" draggable="true" data-project="{{ c.name }}"{% if c.root %} data-root="{{ c.root.wpid }}"{% endif %}>
     <summary>
       <div class="name"><a href="{{ href }}" title="{{ c.name }}">{{ c.name }}</a>
-        <span class="tags">{{ plm.chips(c.plan, c.due) }}{% if c.autonomy != "handoff" %}<span class="auto" title="autonomy: {{ c.autonomy }}">{{ c.autonomy }}</span>{% endif %}{{ pz.badge(c) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</span></div>
+        <span class="tags">{{ plm.chips(c.plan, c.due, c.at_risk, c.forecast) }}{% if c.autonomy != "handoff" %}<span class="auto" title="autonomy: {{ c.autonomy }}">{{ c.autonomy }}</span>{% endif %}{{ pz.badge(c) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</span></div>
       {#- One line, cut to fit; the whole of it is in the body. -#}
       {% if c.running %}{% set brief = (c.running.name or c.running.short) ~ " step " ~ c.running.step ~ (", " ~ c.running.for if c.running.for else "") %}
       {% elif k == "queued" %}{% set why = waiting.get(c.root.wpid) if c.root and waiting else none %}{% set brief = "waiting on: " ~ why.why if why and why.waiting else "due now" %}
@@ -145,38 +140,96 @@
       {% endif %}
       {% if c.root and c.root.summary %}<div class="sum">{{ c.root.summary }}</div>{% endif %}
       {% if c.intent %}<div class="intent">Next: {{ c.intent }}</div>{% endif %}
+      {{ pz.draft(c, "/b/" ~ (here.name|urlencode)) }}
+      {% if c.split_of %}<div class="asof">split of <a href="/p/{{ c.split_of|urlencode }}#split">{{ c.split_of }}</a></div>{% endif %}
       {% if c.since and c.root.summary %}<div class="asof">as of {{ c.since.as_of }}{% if c.since.active %} · <span class="stale" title="a session of this packet was active after its status was written">session {{ "active now" if c.since.live and c.since.active == "now" else "open, last active " ~ c.since.active if c.since.live else "active " ~ c.since.active }}{% if c.since.edits %} · {{ c.since.edits }} edit{{ "s" if c.since.edits != 1 }} since{% endif %}</span>{% endif %}</div>{% endif %}
       <div class="counts">
         {% for st, k in c.counts %}<span class="{{ st }}" title="{{ st }}">{{ k }}</span>{% endfor %}
         <span class="muted" style="margin-left:auto">{{ c.spend_total|money }}{% if c.spend_today %} ({{ c.spend_today|money }} today){% endif %}</span>
       </div>
       <div class="line muted">step {{ c.root.step if c.root else "?" }} · last step {{ c.last_step }}</div>
-      <div class="cardpz"><a class="mini" href="{{ href }}">Page</a>{{ om.menu(c) }}{{ plm.menu(c.name, c.plan, "/b/" ~ (here.name|urlencode)) }}{{ pz.button(c, "/b/" ~ (here.name|urlencode)) }}{{ pz.mark(c, "/b/" ~ (here.name|urlencode)) }}</div>
+      <div class="cardpz"><a class="mini" href="{{ href }}">Page</a>{{ om.menu(c) }}{{ plm.menu(c.name, c.plan, "/b/" ~ (here.name|urlencode), milestones) }}{{ pz.button(c, "/b/" ~ (here.name|urlencode)) }}{{ pz.mark(c, "/b/" ~ (here.name|urlencode)) }}</div>
     </div>
     </details>
     {% endfor %}
   </section>
 {% endfor %}
 </div>
-{% if watchers %}
+<h2 id="milestones">Milestones <a class="mini" href="/status/{{ here.name|urlencode }}" title="A status of this board to paste">Status</a></h2>
+{% for m in milestones %}
+<div class="milestone" id="ms-{{ m.name }}">
+  <p><strong>{{ m.name }}</strong>{% if m.title %} {{ m.title }}{% endif %} · <span class="{{ 'due late' if m.days is not none and m.days < 0 }}">{{ m.date }}{% if m.days is not none %} ({{ "in %d days"|format(m.days) if m.days > 0 else "today" if m.days == 0 else "%d days ago"|format(-m.days) }}){% endif %}</span>
+    · {{ m.now.projects }} project{{ "s" if m.now.projects != 1 }}, {{ m.now.done }} done · left: {{ m.now.runner }} for the runner, {{ m.now.yours }} yours
+    {% if m.forecast %}· <span class="{{ 'due late' if m.late }}" title="the latest forecast among its projects">forecast {{ m.forecast }}</span>{% endif %}
+    · <a href="/status/{{ here.name|urlencode }}/{{ m.name|urlencode }}">Status</a></p>
+  {% if m.cards %}<p class="muted" style="font-size:12.5px">{% for c in m.cards %}<a href="/p/{{ c.name|urlencode }}">{{ c.name }}</a>{% if c.at_risk %} <span class="due late" title="{{ c.at_risk }}">at risk</span>{% endif %}{{ ", " if not loop.last }}{% endfor %}</p>
+  {% else %}<p class="muted" style="font-size:12.5px">No project yet: pick it under a card's Plan ▾.</p>{% endif %}
+  {% if m.chart %}{% set g = m.chart %}<svg class="burn" width="{{ g.w }}" height="{{ g.h }}" viewBox="0 0 {{ g.w }} {{ g.h }}" role="img" aria-label="burn-down of {{ m.name }}">
+    <line x1="24" y1="{{ g.base }}" x2="{{ g.w - 24 }}" y2="{{ g.base }}" stroke="currentColor" stroke-opacity=".3"/>
+    <polyline points="{{ g.ideal }}" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-dasharray="4 3"/>
+    <polyline points="{{ g.total }}" fill="none" stroke="#4a7bd0" stroke-width="2"><title>runner and yours</title></polyline>
+    <polyline points="{{ g.yours }}" fill="none" stroke="#d08a2a" stroke-width="2"><title>yours</title></polyline>
+    <text x="2" y="14" font-size="10" fill="currentColor">{{ g.top }}</text>
+    <text x="24" y="{{ g.h - 6 }}" font-size="10" fill="currentColor">{{ g.start }}</text>
+    <text x="{{ g.w - 24 }}" y="{{ g.h - 6 }}" font-size="10" fill="currentColor" text-anchor="end">{{ g.end }}</text>
+  </svg>
+  <p class="muted" style="font-size:12px">Blue: all work left (runner and yours); orange: yours; dashed: on track to the date. A point a day, from when it was made.</p>
+  {% else %}<p class="muted" style="font-size:12.5px">The burn-down starts with the board's first snapshot of it (one a day).</p>{% endif %}
+  <form class="act" method="post" action="/b/{{ here.name|urlencode }}/milestones" data-confirm="Remove {{ m.name }}? Its projects lose its date.">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="name" value="{{ m.name }}">
+    <button class="mini" name="op" value="remove">Remove</button></form>
+</div>
+{% endfor %}
+<form class="act row" method="post" action="/b/{{ here.name|urlencode }}/milestones">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input name="name" placeholder="rtl-freeze" required pattern="[a-z0-9][a-z0-9_-]*" aria-label="milestone name" size="12">
+  <input type="date" name="date" required aria-label="milestone date">
+  <input name="title" placeholder="what it is (optional)" aria-label="milestone title">
+  <button class="mini" name="op" value="add">Add a milestone</button>
+</form>
+{% macro watch_form(w, label) -%}
+<form class="act watchform" method="post" action="/b/{{ here.name|urlencode }}/watch">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="was" value="{{ w.name if w else '' }}">
+  <label>Name <input name="name" required pattern="[a-z0-9][a-z0-9_-]*" value="{{ w.name if w else '' }}" placeholder="dv-issues"></label>
+  <label>Repositories <input name="repos" required value="{{ w.repos|join(' ') if w else '' }}" placeholder="github:owner/repo github:owner/*" size="34"></label>
+  <label>Labels <input name="labels" value="{{ w.labels|join(' ') if w else '' }}" placeholder="optional"></label>
+  <label>Packet folders in <input name="dir" required value="{{ w.dir if w else '' }}" placeholder="~/work/issues"></label>
+  <label>Every <input name="every" value="{{ w.every if w else '15m' }}" size="5"></label>
+  <label>Pull request <select name="pr">{% for v in ("off", "draft", "ready") %}<option{{ " selected" if (w.pr if w else "off") == v }}>{{ v }}</option>{% endfor %}</select></label>
+  <label title="each new issue goes to the Inbox for you to accept, instead of becoming a project"><input type="checkbox" name="propose" value="1"{{ " checked" if w and w.propose }}> to the Inbox</label>
+  <label title="a project it makes waits for you instead of going to the runner"><input type="checkbox" name="hold" value="1"{{ " checked" if not w or w.hold }}> held</label>
+  <label><input type="checkbox" name="enabled" value="1"{{ " checked" if not w or w.enabled }}> on</label>
+  <button class="mini" name="op" value="save">{{ label }}</button>
+</form>
+{%- endmacro %}
 <h2 id="watchers">Watchers</h2>
+<p class="muted" style="font-size:12.5px;margin-top:-6px">A watcher polls issue trackers and makes a project (or an Inbox item) for each new issue. Saved in <code>boards/{{ here.name }}.toml</code>.</p>
+{% if watchers %}
 <table class="watchers">
 {% for w in watchers %}
   {% if w.problems %}
-  <tr><td>?</td><td class="err" colspan="3">bad [[watch]] in boards/{{ here.name }}.toml: {{ w.problems|join("; ") }}</td></tr>
+  <tr><td>?</td><td class="err" colspan="3">bad [[watch]] in boards/{{ here.name }}.toml: {{ w.problems|join("; ") }}. Fix it by hand; the board won't rewrite it.</td></tr>
   {% else %}
   <tr><td><strong>{{ w.name }}</strong>{% if not w.enabled %} <span class="muted">(off)</span>{% endif %}</td>
     <td>{% for r in w.repos %}<code>{{ r }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
       {% if w.labels %}<span class="muted">· labels {{ w.labels|join(", ") }}</span>{% endif %}
-      <div class="muted">every {{ w.every }} · polled {{ w.polled }} · {{ w.made|length }} made · {{ "held for setup" if w.hold else "handed to the runner" }} · into <code>{{ w.dir }}</code></div>
+      <div class="muted">every {{ w.every }} · polled {{ w.polled }} · {{ w.made|length }} made · {{ "to the Inbox" if w.propose else "held for setup" if w.hold else "handed to the runner" }} · into <code>{{ w.dir }}</code></div>
       {% for k, e in w.failed %}<div class="err">{{ k }}: {{ e }}</div>{% endfor %}
-      {% for e in w.errors %}<div class="err">{{ e }}</div>{% endfor %}</td>
+      {% for e in w.errors %}<div class="err">{{ e }}</div>{% endfor %}
+      <details><summary class="muted">Edit</summary>{{ watch_form(w, "Save") }}
+        <form class="act" method="post" action="/b/{{ here.name|urlencode }}/watch" data-confirm="Remove the watcher {{ w.name }}? The projects it made stay.">
+          <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="name" value="{{ w.name }}">
+          <button class="mini" name="op" value="remove">Remove</button></form></details></td>
     <td>{% for k, n in w.made[-5:] %}<a href="/p/{{ n|urlencode }}">{{ n }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td>
     <td><form class="act" method="post" action="/b/{{ here.name|urlencode }}/watch/{{ w.name|urlencode }}/poll">
       <input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini">Poll now</button></form></td></tr>
   {% endif %}
 {% endfor %}
 </table>
+{% endif %}
+{% if not watchers or not watchers[0].problems %}
+<details><summary class="muted">Add a watcher</summary>{{ watch_form(none, "Add") }}</details>
 {% endif %}
 {% if broken %}
 <h2>Projects that could not be read</h2>

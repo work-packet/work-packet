@@ -18,7 +18,7 @@
 {#- Now (docs/collaboration.md §8.4): who is on it, whose move it is, how much the runner may do. -#}
 <div class="nowline row" id="now">
   <span><span class="muted">Now:</span> {{ {"runner": "the runner is on it", "you": "you have it", "you + runner": "you and the runner are both on it", "nobody": "nobody is on it"}[p.driver] }}
-    · <span class="muted">next move:</span> <strong>{{ {"you": "yours", "agent": "the runner's", "scheduled": "scheduled", "nobody": "none"}[p.ball.who] }}</strong> ({{ p.ball.text }})
+    · <span class="muted">next move:</span> <strong>{{ {"you": "yours", "agent": "the runner's", "scheduled": "scheduled", "external": "a job's", "nobody": "none"}[p.ball.who] }}</strong> ({{ p.ball.text }})
     {% if p.lifecycle != "open" %}· <span class="state COMPLETED">{{ p.lifecycle|upper }}</span>{% endif %}</span>
   {% if p.wpid == e.root %}
   <form class="act row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act">
@@ -27,7 +27,8 @@
     <select id="autonomy" name="autonomy">{% for a, t in (("manual", "manual"), ("handoff", "on hand-off"), ("runner", "runner")) %}<option value="{{ a }}"{{ " selected" if a == p.autonomy }}>{{ t }}</option>{% endfor %}</select>
     <button class="mini" name="action" value="autonomy"{% if p.running %} disabled title="a step is running: change it when it ends"{% endif %}>Set</button>
   </form>
-  {% if p.plan %}{{ plm.chips(p.plan, "") }}{{ plm.menu(e.name, p.plan, "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid) }}{% endif %}
+  {% if p.plan %}{{ plm.chips(p.plan, "") }}{{ plm.menu(e.name, p.plan, "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid, p.milestones) }}{% endif %}
+  {% if p.actuals %}<span class="muted" id="actuals" style="font-size:12.5px">{% if p.plan and p.plan.estimate %}estimate {{ p.plan.estimate }} · {% endif %}<span{% if p.actuals.over %} class="due late"{% endif %}>{{ p.actuals.text }}</span></span>{% endif %}
   {% if not p.running and not p.taken_by %}
   <form class="act" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act"{% if p.lifecycle == "open" %} data-confirm="Close {{ e.name }}? It leaves the active views; Reopen brings it back."{% endif %}>
     <input type="hidden" name="csrf" value="{{ csrf or '' }}">
@@ -90,6 +91,7 @@
   {% if p.meta.reason %}<p class="{{ 'err' if st == 'FAILED' }}">{{ p.meta.reason }}</p>{% endif %}
   <label class="muted" for="note">Note for the next step (optional)</label>
   <textarea id="note" name="note"></textarea>
+  {% if rl and rl.over %}<p class="warn" style="font-size:12.5px">{{ rl.n }} finished {{ "project waits" if rl.n == 1 else "projects wait" }} for your review{% if rl.oldest %} (oldest {{ rl.oldest }}){% endif %}, at or over your limit of {{ rl.limit }}. Handing off more makes more to review: <a href="/#attention">review first</a>?</p>{% endif %}
   <div class="row"><button class="go primary" name="action" value="handoff">Hand off to the runner</button>
     <label class="muted" style="font-size:12.5px" title="It waits while you (or a Claude session) work on the project, and starts when you leave"><input type="checkbox" name="after" value="1"> after I leave</label></div>
 </form>
@@ -128,7 +130,14 @@
 {{ vsm.table(vsc[1]) }}{% endif %}
 {{ vsm.scribe_switch(scribe_on, "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid ~ "#vscode-sessions", csrf) }}
 {% endif %}
-<details class="panel" id="checkpoint" style="margin-bottom:12px">
+{% if p.draft and not p.running %}
+<form class="act panel row" id="draft" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:12px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <span><strong>Draft checkpoint</strong> <span class="muted">the scribe wrote the status from the end of a session (step {{ p.draft.step }}). Accept it as yours (its next action becomes what the runner starts from), or edit it below.</span></span>
+  <button class="go primary" name="action" value="accept-draft">Accept</button>
+</form>
+{% endif %}
+<details class="panel" id="checkpoint" style="margin-bottom:12px"{% if p.draft and not p.running %} open{% endif %}>
   <summary><strong>Checkpoint</strong> <span class="muted">{% if p.running %}a step is running: this becomes a note it sees, and the status stays as it is{% else %}where it stands after work by hand; the board's card shows it{% endif %}</span></summary>
   <form class="act" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act">
     <input type="hidden" name="csrf" value="{{ csrf or '' }}">
@@ -137,7 +146,7 @@
     <label class="muted" for="cp-next">Next action (optional; also what the next autonomous step starts from)</label>
     <input type="text" id="cp-next" name="next" value="{{ p.intent or '' }}">
     <label class="muted" for="cp-body">What changed, decisions, open questions (optional)</label>
-    <textarea id="cp-body" name="body"></textarea>
+    <textarea id="cp-body" name="body">{{ p.draft.body if p.draft and p.draft.body else "" }}</textarea>
     <div class="row"><button class="go primary" name="action" value="checkpoint">Record</button>
       {% if vsc and vsc[0] %}<button class="go" type="button" id="cp-draft" data-url="/p/{{ e.name|urlencode }}/{{ p.wpid }}/checkpoint/draft" title="draft it from the end of this packet's latest VS Code session (a small model call); you can edit it before you record it">Draft from session</button><span class="muted" id="cp-msg" style="font-size:12px"></span>{% endif %}</div>
   </form>

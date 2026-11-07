@@ -59,7 +59,8 @@ def test_after_compaction_no_second_briefing(pkt, capsys):
     d["source"] = "compact"
     capsys.readouterr()
     hookcmd.main(["SessionStart"], io.StringIO(json.dumps(d)), {"CLAUDE_CODE_ENTRYPOINT": "cli"})
-    assert capsys.readouterr().out == ""
+    out = json.loads(capsys.readouterr().out)          # only the checkpoint nudge (plan G3)
+    assert out["hookSpecificOutput"]["additionalContext"] == hookcmd.NUDGE
 
 
 def test_the_cli_finds_the_packet_from_the_folder(pkt, monkeypatch, capsys):

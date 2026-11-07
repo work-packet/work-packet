@@ -1,11 +1,12 @@
 {#- Your planning fields on a card or a row (docs/collaboration.md §9.2). Import
     "with context" (csrf). ``name``: the project; ``plan``: planning.get; ``back``. -#}
-{% macro chips(plan, due) -%}
+{% macro chips(plan, due, risk=None, fc=None) -%}
 {% if plan.priority != "next" %}<span class="prio prio-{{ plan.priority }}" title="your priority">{{ plan.priority }}</span>{% endif %}
 {% if due %}<span class="due{{ ' late' if due.startswith('overdue') or (plan.due_kind == 'hard' and due.startswith('due') and not due.startswith('due in')) }}" title="{{ plan.due }}{{ ' (hard)' if plan.due_kind == 'hard' }}">{{ due }}</span>{% endif %}
+{% if risk %}<span class="due late risk" title="at risk: {{ risk }}{% if fc %} · {{ fc.why|join('; ') }}{% endif %}">at risk</span>{% elif fc %}<span class="muted" style="font-size:11.5px" title="{{ fc.why|join('; ') }}">forecast {{ fc.text }}</span>{% endif %}
 {%- endmacro %}
 
-{% macro menu(name, plan, back) -%}
+{% macro menu(name, plan, back, ms=None) -%}
 <details class="planmenu">
   <summary class="mini" title="Your priority and due date for it">Plan ▾</summary>
   <form class="act planitems" method="post" action="/p/{{ name|urlencode }}/plan">
@@ -16,6 +17,7 @@
     <label class="muted" style="font-size:12px"><input type="checkbox" name="due_kind" value="hard"{{ ' checked' if plan.due_kind == 'hard' }}> someone depends on it</label>
     <label class="muted" style="font-size:12px">estimate <input type="text" name="estimate" value="{{ plan.estimate or '' }}" placeholder="2d" size="5" style="font:inherit"></label>
     <label class="muted" style="font-size:12px">blocked by <input type="text" name="blocked_by" value="{{ (plan.blocked_by or [])|join(', ') }}" placeholder="a packet, PR #41" style="font:inherit"></label>
+    {% if ms %}<label class="muted" style="font-size:12px">milestone <select name="milestone" style="font:inherit"><option value="">none</option>{% for m in ms %}<option value="{{ m.name }}"{{ ' selected' if plan.milestone == m.name }}>{{ m.name }} ({{ m.date }})</option>{% endfor %}</select></label>{% endif %}
     <label class="muted" style="font-size:12px">area <input type="text" name="area" value="{{ plan.area or '' }}" size="8" style="font:inherit"></label>
     <label class="muted" style="font-size:12px"><input type="checkbox" name="force" value="1"> into now even if full</label>
     <button class="mini">Set</button>

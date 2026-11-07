@@ -13,8 +13,8 @@ and the runner holds off while you are there) and C3 (ways to start, Open ▾, a
 the hand-off), C4 (the Desk: what needs you, snoozes, since you were last
 here, the timeline) and C5 (turnover both ways: a briefing for every session,
 notes into your sessions, skills, checkpoints during a step, picking up a runner
-step) and F1 (planning: your priority, due dates, the Backlog and quick capture).
-Later phases add the daily focus brief.
+step), F1 (planning: your priority, due dates, the Backlog and quick capture) and
+F2 (the daily focus brief and the end of the day).
 
 ## Starting a packet
 
@@ -57,6 +57,47 @@ started) opens Compose, which is the hand-off dialog:
 
 Your board shells stay open after a hand-off. The packet page's short **Hand off**
 form (for a paused, failed or asking packet) has the same **after I leave** box.
+
+### Split: the runner works in a copy
+
+When the packet's folder is a git checkout, Compose also offers **Split: the
+runner works in a copy**. It's the third answer to uncommitted changes, after
+Commit as WIP and hand off anyway. The board:
+- makes a git worktree of your folder at `$WPK_HOME/splits/<name>-split`, on a
+  new branch `wpk/<name>-split` from your `HEAD`;
+- makes a project there (`<name>-split`) with your instruction and note, and
+  hands it to the runner.
+
+Your folder and your uncommitted edits are left alone, and you can go on
+working; the split never works under you. Both project pages show the split
+under **Split**: its commits, the files it changed or added, and the diff.
+
+When it has finished:
+- **Bring it into <name>** commits what it left uncommitted, then merges its
+  branch into your folder. That's a fast-forward if you haven't committed
+  since, else a merge commit.
+  - If the merge would overwrite edits of yours, git refuses and nothing
+    changes. Commit or put away your edits, then try again.
+  - Brought in, the split is marked done.
+- **Drop the split** marks it dropped.
+
+Neither removes the split's folder or branch. Once the split is done or
+dropped, its page has **Remove its folder**:
+- the worktree goes and the split leaves the board;
+- its journal is kept at `$WPK_HOME/splits/removed/<name>.journal.jsonl`;
+- the branch is deleted only if it was brought in. A dropped split's branch
+  stays, in case you want it later.
+
+The split's card says **split of <name>**, linking back.
+
+The split starts from your last commit, so your uncommitted and untracked
+files aren't in it. Untracked tool folders (`packages`, `.venv`, `venv`,
+`node_modules`) and untracked top-level links are linked in, so the runner
+uses the same tools. Git ignores the links.
+
+Not yet:
+- splitting a plain folder (a copy in and a copy out);
+- splitting a project that keeps its repositories in `work/`.
 
 ## The board's columns
 
@@ -128,7 +169,13 @@ counts:
 - a **Claude Code session** in the packet's folder, in web or desktop VS Code or a
   terminal, has done something in the last 10 minutes;
 - a **board shell** for it is open, or you typed in it;
-- you opened it in **desktop VS Code** from the board in the last 10 minutes.
+- you opened it in **desktop VS Code** from the board in the last 10 minutes;
+- **files in the packet folder were changed** in the last 10 minutes, after
+  the runner's last step and your last hand-off. This catches an editor opened
+  by hand, with no Claude in it. The runner's queue says "files in it were
+  edited by hand 2 min ago". Version-control, tool and cache folders (`.git`,
+  `node_modules`, `.venv`, …) and the cards don't count. The board checks at
+  most once a minute, and only for packets the runner is about to start.
 
 While you are there the card is in **Working: you** and says where, for example
 "you · VS Code (web) · Claude ×2 (1 blocked)". The runner doesn't start a step on
@@ -148,14 +195,24 @@ happened while you were away.
 
 - **Tiles**: Needs you, **Reviews** (finished work you haven't looked at, and
   the oldest), In progress, Failed, Spend today. Spend today also shows your own
-  sessions' tokens, or their cost where a model profile has a price. Budgets still
-  count only the runner.
+  sessions' tokens, or their cost where a model profile has a price. That
+  includes web VS Code, desktop VS Code and terminal sessions: the board reads a
+  desktop or terminal session's transcript at the path its hook gives, and shows it
+  in the project's sessions table. Budgets still count only the runner.
 - **Needs you**: questions, failures and reviews as before, plus the Claude
   sessions you drive:
   - **BLOCKED**: Claude has waited at a permission prompt for 2 minutes;
   - **YOUR TURN**: Claude ended its turn 15 minutes ago (`[ide] idle_escalate`)
     and nothing has come since;
   - **QUIET**: a session that said it was working has been silent for an hour.
+
+  Also listed, last:
+  - **STALE**: a parked project untouched for longer than its priority allows
+    (now 3 days, next 21, later 42, someday 91). It has **Plan ▾** (lower it,
+    or someday), **Hand off…** and **Open**, and is never pushed.
+  - **REVIEW** rows: besides **Open** and **Done**, they have **Next…** (hand
+    the runner the next thing, in Compose) and **Open ▾** (work on it yourself).
+  - **In progress** rows have **Open ▾** too.
 
   None of these is raised while a web VS Code tab on that project is visible:
   you already see it.
@@ -172,7 +229,18 @@ happened while you were away.
 
 The packet page has a **Timeline**: everything that happened, by whoever did it.
 That covers the runner's steps, your checkpoints and hand-offs, sessions in VS
-Code, done and reopen, and settings changes. **Steps** keeps the runner's detail.
+Code (and "waited for you since 10:02" when a session waited past
+`idle_escalate`), done and reopen, and settings changes. **Steps** keeps the
+runner's detail.
+
+A checkpoint whose **Next action** is filled in starts a new task on the
+project's Tasks list, as a hand-off with a new instruction does. A hand-off
+straight after it names that task rather than adding an empty one.
+
+**Changing a queued project.** Compose can't change a project the runner has.
+One that is only queued (not started yet, or asleep) has a **Save the
+instruction** box, which changes what its next step starts from. A step
+starting at the same moment wins, and the box tells you to send a note.
 
 ## Dragging cards
 
@@ -230,6 +298,9 @@ When Claude starts in a packet folder (with the hooks installed), it is told:
 the packet's name and brief, where it stands (your last checkpoint) and what's
 next, the runner's state, and whether notes are waiting. You don't have to explain
 the packet again. After a compaction it isn't told again; the summary keeps it.
+If nobody has recorded a checkpoint since the session started, it is told instead
+to suggest `/wpk-checkpoint`, so where the packet stands isn't lost with the
+compacted part.
 
 **Notes reach your session too.** A note left on the board (the packet page,
 the console's `/note`, or **Reply** on a Desk row) reaches a running runner step,
@@ -279,8 +350,8 @@ its packet page or the Backlog, or with `wpk plan`:
   you to move one down first, unless you tick "into now even if full".
 - **Due** date, and whether someone depends on it (*hard*) or it's your own
   target. Cards show "due Fri", "due in 9 days" or, in red, "overdue 2 days".
-- **Estimate** (`4h`, `2d`, `1w`), **blocked by** and an **area** tag, in the
-  same menu; **rank** (order within a priority) is typed in on the Backlog.
+- **Estimate** (`4h`, `2d`, `1w`), **blocked by**, an **area** tag and, on a
+  board with milestones, a **milestone**, in the same menu; **rank** (order within a priority) is typed in on the Backlog.
 
 The plan lives in the project's card (`<name>.wp.md`) as a `plan:` block; the
 board never overwrites it. Each change is in the journal.
@@ -297,12 +368,257 @@ quarter). Nothing is removed for you.
 The Desk's top line shows your **Focus** (the projects in *now*, with their due
 dates) and a capture box.
 
-## Quick capture
+## The daily focus brief
 
-Type a line into the capture box on the Desk, the Backlog or a board's **Inbox**
-column; or `wpk todo "…"`, or `/wpk-todo` in a Claude session (it links the item
-to the packet it was captured from). Items wait in the Inbox until you **Make
-packet** (New, with the text as its objective) or **Drop** them.
+Each weekday morning (08:30, or `[focus] time`) the board writes a **brief**:
+
+- **Since the last brief**: what the runner did or what failed, per project;
+- **Needs you**: how many questions, failures, reviews, blocked sessions;
+- **Suggested focus**: the top three, each with why. The score is your priority
+  (now, next, later, someday), then deadlines (overdue, within two days, within a
+  week; more if someone depends on it), then a question the runner waits on, then
+  anything else waiting on you, then how long it has gone untouched;
+- **Hand off before you start**: parked projects with a Next, ready for the
+  runner;
+- **Housekeeping**: projects untouched too long, and any suggested three briefs
+  running without being touched ("still now?") instead of being suggested again.
+
+It comes from the board's own data; no model is asked. The Desk shows it under
+**Today**, with **not today** and **done already** on each suggestion (remembered
+for the day; the brief is rebuilt without it). **Brief** in the side tab shows the
+whole brief, earlier days, and **Rebuild today's**. A Claude session that starts in
+a packet that day is told today's focus in one line. From a shell: `wpk brief`
+(`--rebuild`, `--day`).
+
+## Deadlines: forecast, at risk and milestones
+
+**Your time.** The board counts your time on each project from the same signs
+of you that hold the runner off: Claude Code events, a visible web VS Code tab,
+a board shell. Each sign adds the time since your previous one on that project,
+when that was at most 5 minutes before. Two sessions open at once count once.
+An idle or hidden tab, or a session that ended, adds nothing. There are no
+timers to start. The ledger is `<project dir>/time/<day>.json`.
+
+**Estimates against actuals.** Give a project an **estimate** under Plan ▾
+(`4h`, `2d`, `1w`; a day is 8 hours, a week 5 days). Its packet page then says
+"estimate 2d · so far 3 working days: you 5h, the runner 2h". When the working
+days since its first activity pass the estimate, the brief's Housekeeping says
+"you estimated 2d; 3 working days so far".
+
+**Forecast.** A project with a due date gets a forecast, a range and never one
+date:
+- **The runner's share** is the part of its plan still to do, times how long
+  this project's tasks took (hand-off to finish, so queue waits and questions
+  are in it). The middle half of those times gives the range. A project with no
+  finished task uses the board's.
+- **Your share** is each thing waiting on you times how long you take to answer
+  a question. Once you (the project's owner) have answered five, it uses your own
+  answer times, else everyone's on the board. Two hours to a day each when
+  there's no history. When you are working on it yourself and have set an
+  estimate, it's the hours left at your pace on it over the last two weeks, laid
+  on working days (a weekend doesn't count).
+
+The card shows "forecast Thu-Mon"; hover for the parts.
+
+**At risk.** A project is at risk when:
+- the forecast's late end passes the due date;
+- it is due within two days and has been yours for more than a day; or
+- it is due within a week and is blocked by something not done.
+
+The card shows **at risk**. The Desk lists it as a decision ("dv due Fri: 2 of
+4 plan items for the runner (6h-1d); 1 item yours (2h-1d); at risk: forecast
+Thu-Mon"), with **Hand it off now**, **Plan ▾** to move the date, and **Open**.
+It is never pushed; it goes in the digest. The brief ranks it higher, with the
+reason.
+
+**Dates from your forge.** When a watched issue that is already a project has a
+milestone with a due date (GitHub or Forgejo), the Inbox proposes it ("dv:
+issue gh:o/r#7's milestone v1.2 is due 2026-12-01"). **Use this date** sets it
+as the project's soft due. It's proposed once per date.
+
+**Milestones.** A board can have dated milestones: **Add a milestone** under
+Milestones on the board's page (name, date, what it is). A project joins one under
+Plan ▾ and inherits its date as a soft due, unless it has its own.
+
+Each milestone shows:
+- its projects, with their at-risk marks;
+- what's left: plan items for the runner, and things that are yours;
+- the latest forecast among its projects;
+- a **burn-down** of all the work left and yours, with a dashed line to the
+  date. The board takes a snapshot a day from the day you add the milestone, so
+  the line starts then.
+
+Files: `$WPK_HOME/milestones/<board>.json` and `<board>/<name>.jsonl`.
+
+## The weekly review, standup and status
+
+These are drafts of what people write by hand, from the board's own facts, with
+no model call. Each page has the Markdown in a box to paste, and **Keep a copy**
+(written to `$WPK_HOME/reports/`).
+
+- **Weekly review** (`/review`). The board writes it on Friday after 16:00
+  (`[focus] review_day`, `review_time`; `review = false` turns it off) into
+  `$WPK_HOME/reviews/<YYYY-Www>.md`. It covers:
+  - what was closed, and by whom;
+  - each project's runner tasks and your and the runner's time;
+  - cost;
+  - what has waited on you for over a week;
+  - backlog that has gone untouched;
+  - estimates against actuals;
+  - next week's deadlines and milestones.
+
+  **Tidy the backlog** sets each untouched project to keep, someday or drop in
+  one go. Before Friday, the page shows the week so far; **Rebuild this week's**
+  writes it now.
+- **Standup** (`/standup`):
+  - **Yesterday**, your last working day: your time, hand-offs, the runner's
+    finished tasks, what you closed;
+  - **Today**: the brief's focus;
+  - **Blocked**: what each project waits on, and requests nobody works on.
+- **Status** (`/status/<board>`, or `/status/<board>/<milestone>` from a
+  milestone): a row per open project, with where it is, the next move, the
+  runner tasks this week, the due date and the forecast, at risk in bold.
+
+Linked from the Desk's Today panel, the Brief page and each board's Milestones.
+
+## Your calendar
+
+Set `[calendar] ics` (Settings) to your calendar's ICS address or a file:
+- **The brief** lists today's meetings, and what fits before the next one ("45
+  min before 11:00: 3 reviews or answers fit", at 15 minutes each).
+- **Pushes wait while you are in a meeting** and go out after it.
+
+The board fetches the feed at most hourly into `$WPK_HOME/calendar/feed.ics`. All-day
+events, cancelled ones and ones marked free don't count.
+
+**Not handled:** repeating events (only the first time counts).
+
+## The end of the day
+
+After 17:00 the Desk links **End of the day** (`/shutdown`, or `wpk shutdown`):
+
+1. **Checkpoint** what you were working on (the projects that are yours).
+2. **Load the night shift**: projects with a Next that nobody is running, ticked;
+   one button hands them to the runner, each to start when you leave. Their
+   results come back in tomorrow's brief.
+3. **Tomorrow's first**: put one in *now*, ranked first.
+
+## The Inbox: what might become work
+
+Everything that might become work waits in the **Inbox** until you decide: the
+board's Inbox column (that board's items), and the Backlog's Inbox (all of them).
+Items come from:
+
+- **you**: the capture box on the Desk, the Backlog or a board's Inbox column;
+  `wpk todo "…"`; or `/wpk-todo` in a Claude session (linked to its packet);
+- **a watcher** set to **to the Inbox** (`propose = true`): each new issue
+  lands here instead of becoming a packet straight away. Watchers are added,
+  edited and removed under **Watchers** on the board's page (name, repositories,
+  labels, where the packet folders go, how often, a pull request when done,
+  held, on). The board writes them to `boards/<board>.toml` and checks them
+  first. It rewrites that file, so comments in it are lost. Keys the form doesn't
+  show (`query`, `model`, …) are kept;
+- **the runner**: a step that finds work outside its task (a second bug, a
+  cleanup) lists it under `follow_ups:` in its memento, and each becomes an item
+  naming the project it came from;
+- **requests** from other projects that arrived but haven't started (the project
+  they made is paused, waiting for you). These show with **Open**, and
+  **Decline ▾**, which asks for a reason. The requesting project gets the answer
+  "declined: <reason>" (and wakes, if it was waiting on it), and the project the
+  request made is dropped, since it never ran.
+
+On each item:
+
+- **Make packet**: New, with the text as its objective. A watcher's issue is made
+  straight away with the watcher's recipe.
+- **Merge ▾**: add it to an open project as a note for its next step.
+- **Tomorrow**: snooze it until tomorrow morning.
+- **Until <project> moves** (an item that names a project, such as a follow-up
+  or a `/wpk-todo`): snooze it until that project has a step, a checkpoint or a
+  hand-off, for a week at most.
+- **Drop**: decline it. A watcher won't propose the same issue again.
+
+When an item's words overlap with an open project's, it says **looks like
+<project>: merge instead?**, and Merge ▾ picks that project.
+
+### Rules from your corrections
+
+When you tell the runner the same thing again and again, the Inbox offers to
+make it a rule. Something counts once you've said it three times, or in two
+projects: a note, a note on a hand-off, or an answer to the runner's
+questions, with near-duplicates counted together. The item reads *You have
+said this 3 times (alpha, beta): …*.
+
+**Keep it…** opens the rule, which you can edit, and the projects to give it to.
+Kept, it's a bullet under `## Learned` in each project's `agent.md`, which every
+later step reads, so you don't have to say it again. The rest of `agent.md`
+stays as it is. **Drop** turns the offer down. Either way it's never offered
+again. The board looks for these once an hour, and no model reads your notes
+to do it.
+
+## Pushes and the digest
+
+Set an [ntfy](https://ntfy.sh) topic in **Settings** (`[notify] ntfy_url`) and
+press **Send a test push**. Then:
+
+- a **question** from the runner pushes after 5 minutes (`question_after_s`),
+  and a Claude session **blocked** on a permission prompt pushes after 2;
+- each pushes once. Nothing pushes while a web VS Code tab on that project is in
+  front of you, or while you've snoozed it. *Your turn* never pushes;
+- at most 6 pushes an hour (`max_per_hour`). The rest wait for the digest;
+- the **digest** (`digest = "hourly"` or `"daily"`, at `digest_at`) lists the
+  rest: finished work to review, failures, sessions waiting for you, and pushes
+  held back. Items that have closed since are left out;
+- `brief = true` also pushes the morning brief.
+
+Set `link` to the board's address (for example its tailnet URL) so that tapping
+a push opens the project.
+
+**Browser notifications**: in Settings, **Turn on** (per browser). While a board
+tab is open and hidden, the same questions and blocked sessions show as desktop
+notifications.
+
+## The review budget
+
+The Desk's **Reviews** tile counts finished work you haven't looked at, and
+says when you are at or over `[plan] review_wip` (default 5). At that point the
+hand-off forms (Compose and the packet page) warn that handing off more makes
+more to review.
+
+## Jobs: a long command as a worker
+
+A simulation, a regression or a build you start for a project is a **job**.
+Run it with `wpk run` in the packet's folder (`wpk run -- make sim`), or type it
+into **Run a command** under **Jobs** on the project page, which runs it there
+in the background. `wpk run` behaves like the command itself: the output shows
+in your terminal, and the exit status is the command's.
+
+While a job runs and nobody is on the project, the card sits in **Waiting**, as
+*waiting on make sim, 1h12m*. A question or a failure from the runner still
+comes first.
+
+When the job ends, the Desk lists it (JOB):
+- a failure, or a job whose process vanished (**lost**), as a failure;
+- a success as something to look at.
+
+Neither sends a push; both go into the digest. Opening the job's page (the
+command, times, exit status and the end of its output) takes it off the list.
+The whole log is `jobs/<id>/log` in the project directory.
+
+Not yet: jobs aren't picked up from a plain terminal without `wpk run`
+(`work-sessions.md` stage 2's shell marks), and nothing keeps the board from
+closing a shell that is still running a job.
+
+## Your packet in Claude Code's status line
+
+With the hooks on, a Claude session in a packet folder shows one line in its
+status bar about the packet, for example `wpk uart-fix · needs you: the runner
+finished: review it · 1 job ended (1 failed)`. It's built from the packet's own
+files and never asks the board. It isn't set if you already have a status line,
+in your `~/.claude/settings.json` or the folder's `.claude/settings.json`, and
+turning the hooks off removes it. A VS Code extension can poll
+`/p/<name>/status.json` for the same facts (whose move it is, how much needs
+you, running jobs).
 
 ## Autonomy
 
@@ -324,10 +640,24 @@ Cards show the autonomy when it isn't the default.
 The packet's history credits each entry to whoever did it. A checkpoint you
 record shows as *you (VS Code)* or *you (studio)*, and a scribe draft as *scribe
 (draft)*. Done, drop, reopen and autonomy changes show with your name.
+
+**A scribe draft is a proposal.** With the scribe on, a session that ends
+(web or desktop VS Code, or a terminal) gets a status drafted from its end. The
+card then says **draft checkpoint · Accept · Edit**, and the packet page shows
+it above the Checkpoint form, filled in from the draft:
+- **Accept** records the same text as your checkpoint, so its next action
+  becomes what the runner starts from;
+- **Edit** opens the form, so you can change it and **Record**.
+
+A checkpoint by hand always wins over a draft.
 Checkpoints that leave the packet paused now show up as notes, where before they
 showed nothing.
 
 ## Settings
+
+The **Settings** page (in the side bar) sets these. It edits `config.toml` line
+by line, so your comments and other keys stay; a value set back to its default
+is removed. You can also edit the file yourself.
 
 | `config.toml` | Default | What it does |
 |---|---|---|
@@ -335,6 +665,22 @@ showed nothing.
 | `[ide] presence_ttl` | `600` | Seconds a sign of you (a Claude event, a tab's beat, a keystroke in a board shell) keeps the runner waiting |
 | `[ide] idle_escalate` | `900` | Seconds after Claude ends its turn before it is a YOUR TURN item |
 | `[plan] focus_wip` | `3` | How many projects *now* holds |
+| `[plan] review_wip` | `5` | Reviews waiting before hand-offs warn |
+| `[focus] time` | `"08:30"` | When the morning brief is written (weekdays) |
+| `[focus] weekends` | `false` | Write it on weekends too |
+| `[focus] off` | `false` | No morning brief (you can still build it by hand) |
+| `[focus] review` | `true` | Write the weekly review |
+| `[focus] review_day` | `"fri"` | The day it is written (`mon` ... `sun`) |
+| `[focus] review_time` | `"16:00"` | After this time that day |
+| `[calendar] ics` | none | Your calendar feed (URL or file): meetings in the brief, no pushes during them |
+| `[notify] ntfy_url` | none | The ntfy topic URL; no pushes without it |
+| `[notify] ntfy_token` | none | An access token, if the topic needs one |
+| `[notify] link` | none | The board's URL, for links in pushes |
+| `[notify] question_after_s` | `300` | A question pushes after this long |
+| `[notify] max_per_hour` | `6` | Pushes an hour; the rest go to the digest |
+| `[notify] digest` | `"off"` | `off`, `hourly` or `daily` |
+| `[notify] digest_at` | `"17:30"` | When the daily digest goes |
+| `[notify] brief` | `false` | Push the morning brief |
 
 ## The CLI
 
@@ -356,6 +702,7 @@ Each change also adds an `admin` record to the journal, with `op` set to `done`,
 (`false` unless `--after-me`). An interactive Claude session adds `session-start`
 and `session-end` records naming the session and where it ran.
 
-Presence records live in `<project dir>/presence/<source>.json`. The project dir
+Your time is kept in `<project dir>/time/<YYYY-MM-DD>.json` (seconds per
+person; no record of what you did). Presence records live in `<project dir>/presence/<source>.json`. The project dir
 is the packet folder's `.work-packet/`, or the legacy project directory. They are
 removed a day after they end.

@@ -138,6 +138,12 @@ class Runner:
                     log.exception("VS Code session pass failed")
             else:
                 collectors.clear()
+            if cfg.get("sessions", True):
+                try:                           # desktop VS Code and terminals, by their hooks
+                    ide_sessions.hook_pass(self.home)
+                    _log_waits(self.home, cfg)
+                except Exception:
+                    log.exception("hooked session pass failed")
             self._stopping.wait(every)
 
     def _watch_loop(self):
@@ -149,11 +155,41 @@ class Runner:
         def report(w, r):
             for k, name in r["made"]:
                 log.warning("watch %s/%s: %s made from %s", w["board"], w["name"], name, k)
+            for k in r.get("proposed") or ():
+                log.warning("watch %s/%s: %s put in the Inbox", w["board"], w["name"], k)
             for k, e in r["failed"].items():
                 log.warning("watch %s/%s: %s: %s", w["board"], w["name"], k, e)
             for e in r["errors"]:
                 log.warning("watch %s/%s: %s", w["board"], w["name"], e)
         while not self._stopping.is_set():
+            try:                               # the morning brief (collaboration.md §9.4)
+                from .. import brief
+                cfg = registry.load_config_file(self.home).get("focus") or {}
+                if brief.maybe_build(self.home or registry.home(), cfg):
+                    log.warning("wrote today's focus brief")
+            except Exception:
+                log.exception("focus brief failed")
+            try:                               # pushes and the digest (collaboration.md §4.3)
+                from .. import notify
+                r = notify.run(self.home or registry.home())
+                for e in (r or {}).get("errors") or ():
+                    log.warning("notify: %s", e)
+            except Exception:
+                log.exception("notify pass failed")
+            try:                               # weekly review, milestone snapshots (§9.3, §9.5)
+                from .. import reviews
+                cfg = registry.load_config_file(self.home).get("focus") or {}
+                for what in reviews.tick(self.home or registry.home(), cfg):
+                    log.warning("reviews: %s", what)
+            except Exception:
+                log.exception("reviews pass failed")
+            try:                               # recurring corrections (collaboration.md §7.7)
+                from .. import learn
+                got = learn.maybe_propose(self.home or registry.home())
+                if got:
+                    log.warning("learn: proposed %d rule(s) in the Inbox", len(got))
+            except Exception:
+                log.exception("learn pass failed")
             try:
                 if watch.poll_due(self.home, report=report):
                     self.poke()
@@ -176,5 +212,17 @@ def _reap_presence(home):
     for e in registry.entries(home):
         try:
             presence.reap(e["path"], host)
+        except OSError:
+            pass
+
+
+def _log_waits(home, cfg):
+    """``turn-waiting`` journal records for sessions that waited for you
+    ``[ide] idle_escalate`` (docs/collaboration.md §4.5)."""
+    from .. import attention, registry
+    idle = cfg.get("idle_escalate") or attention.IDLE_ESCALATE_S
+    for e in registry.entries(home):
+        try:
+            attention.log_waits(e["path"], e.get("root"), None, idle)
         except OSError:
             pass

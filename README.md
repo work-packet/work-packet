@@ -91,7 +91,8 @@ for setup (docs/setup.md), `path`, `shell`, `add-input`,
   move it is, presence instead of locks, a typed inbox, the Desk, planning
   fields and a daily focus brief. `docs/collaboration-plan.md` is the build
   plan with status, `docs/collaboration-spike.md` the hooks spike, and
-  `docs/collaboration-guide.md` the user guide.
+  `docs/collaboration-guide.md` the user guide. `docs/where-we-stand.md`
+  says what is built and what comes next.
 - `docs/session-checkpoint.md`: checkpoints: where a packet stands after work
   by hand, the scribe's drafts and the `/wpk-checkpoint` skill.
 - `docs/harness.md`: harness adapters (Claude Code now; Codex and OpenCode

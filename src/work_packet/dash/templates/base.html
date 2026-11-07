@@ -243,6 +243,15 @@ body.con-open main { padding-bottom: 46vh; }
 .planmenu .planitems { position: absolute; right: 0; z-index: 6; background: var(--panel); border: 1px solid var(--line);
   border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 210px; }
 .planmenu button.on { font-weight: 700; }
+.inbox-item { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.inbox-item .cardpz { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+/* Open ▾ (docs/collaboration.md §8.3), on cards and Desk rows */
+.openmenu { display: inline-block; position: relative; }
+.openmenu > summary { list-style: none; cursor: pointer; }
+.openmenu > summary::-webkit-details-marker { display: none; }
+.openmenu .openitems { position: absolute; z-index: 5; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 150px; }
+.openmenu .openitems form { display: flex; flex-direction: column; gap: 4px; margin: 0; }
 </style>
 {% block head %}{% endblock %}
 </head>
@@ -270,6 +279,7 @@ body.con-open main { padding-bottom: 46vh; }
 {% if live %}
 <script src="/static/live.js"></script>
 <script src="/static/page.js?v={{ asset_v }}"></script>
+<script src="/static/notify.js?v={{ asset_v }}"></script>
 {% endif %}
 </body>
 </html>

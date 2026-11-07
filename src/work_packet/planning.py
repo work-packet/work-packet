@@ -16,6 +16,9 @@ write them; an agent only proposes.
       estimate: 2d
       blocked_by: [dma-bug, "PR #41"]
       area: dv
+      milestone: rtl-freeze  # a milestone of the project's board: its date is a soft due
+
+Estimates are working time: 1d is 8h, 1w is 5d (``estimate_hours``).
 """
 
 import os
@@ -34,7 +37,8 @@ DUE_BOOST_DAYS = 2          # due this soon: one class up, never above high
 # Untouched this long, it shows under Housekeeping (§9.6).
 ROT_DAYS = {"now": 3, "next": 21, "later": 42, "someday": 91}
 _EST = re.compile(r"^\d+(\.\d+)?[hdw]$")
-KEYS = ("priority", "rank", "due", "due_kind", "estimate", "blocked_by", "area")
+KEYS = ("priority", "rank", "due", "due_kind", "estimate", "blocked_by", "area", "milestone")
+HOURS = {"h": 1, "d": 8, "w": 40}
 
 
 class PlanError(Exception):
@@ -48,7 +52,7 @@ def path_of(entry):
 def get(entry):
     """The project's plan, with defaults: ``{"priority", "rank", "due", ...}``."""
     out = {"priority": DEFAULT, "rank": None, "due": None, "due_kind": None,
-           "estimate": None, "blocked_by": [], "area": None}
+           "estimate": None, "blocked_by": [], "area": None, "milestone": None}
     p = path_of(entry)
     if not os.path.isfile(p):
         return out
@@ -88,6 +92,8 @@ def validate(changes):
                 raise PlanError("rank is a whole number") from None
         if k == "estimate" and not _EST.match(str(v)):
             raise PlanError("estimate is like 4h, 2d or 1w")
+        if k == "milestone" and not re.match(r"^[a-z0-9][a-z0-9_-]*$", str(v)):
+            raise PlanError("milestone is a milestone's name")
         if k == "blocked_by":
             v = [x.strip() for x in (v.split(",") if isinstance(v, str) else v) if x.strip()]
         out[k] = v
@@ -194,3 +200,80 @@ def rotting(plan, last_t, now=None):
     days = int((now - last_t) // 86400)
     limit = ROT_DAYS.get(plan.get("priority"), ROT_DAYS[DEFAULT])
     return {"days": days, "limit": limit} if days > limit else None
+
+
+# --- estimates and actuals (plan F3a) -------------------------------------------------
+
+def estimate_hours(est):
+    """"2d" -> 16.0 (1d = 8h, 1w = 5d), or None."""
+    if not est or not _EST.match(str(est)):
+        return None
+    return float(str(est)[:-1]) * HOURS[str(est)[-1]]
+
+
+def working_days(d0, d1):
+    """Weekdays from ``d0`` to ``d1``, both included (0 if ``d1`` is before)."""
+    n, d = 0, d0
+    while d <= d1:
+        n += d.weekday() < 5
+        d += timedelta(days=1)
+    return n
+
+
+def _epoch(ts):
+    from . import schema
+    try:
+        return schema.parse_timestamp(ts).timestamp() if ts else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def actuals(entry, now=None):
+    """What a project has taken so far: ``{"yours": {user: s}, "you": s, "runner": s,
+    "first": date, "days": working days, "estimate_h", "over"}``. ``over``: the
+    working days since the first activity pass the estimate's days."""
+    from . import stats, timelog
+    from .packet import Packet
+    now = datetime.now().timestamp() if now is None else now
+    yours = timelog.spent(entry["path"])
+    runner, first = 0.0, None
+    try:
+        wpids = sorted(os.listdir(layout.runs_dir(entry["path"])))
+    except OSError:
+        wpids = []
+    for w in wpids:
+        try:
+            steps = stats.packet_steps(entry["name"], Packet(layout.run_dir(entry["path"], w)))
+        except Exception:               # noqa: BLE001: an unreadable packet counts nothing
+            continue
+        for s in steps:
+            runner += s.duration_s or 0
+            end = _epoch(s.end)
+            if end is not None and s.duration_s is not None:
+                t = end - s.duration_s
+                first = t if first is None or t < first else first
+    days_ = timelog.days(entry["path"])
+    if days_:
+        t = datetime.fromisoformat(days_[0]).timestamp()
+        first = t if first is None or t < first else first
+    today = datetime.fromtimestamp(now).date()
+    d0 = datetime.fromtimestamp(first).date() if first else None
+    est = estimate_hours(get(entry)["estimate"])
+    wd = working_days(d0, today) if d0 else 0
+    return {"yours": yours, "you": sum(yours.values()), "runner": runner, "first": d0,
+            "days": wd, "estimate_h": est,
+            "over": bool(est and wd > est / HOURS["d"])}
+
+
+def actuals_text(a):
+    """"so far 3 working days: you 5h, the runner 2h", or ""."""
+    from .timelog import hours
+    if not a["first"]:
+        return ""
+    bits = []
+    if a["you"]:
+        bits.append("you %s" % hours(a["you"]))
+    if a["runner"]:
+        bits.append("the runner %s" % hours(a["runner"]))
+    return "so far %d working day%s%s" % (a["days"], "" if a["days"] == 1 else "s",
+                                          ": " + ", ".join(bits) if bits else "")

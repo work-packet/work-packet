@@ -1,0 +1,33 @@
+{#- An Inbox item and its triage (docs/collaboration.md W8): make a packet, merge
+    into a project as a note, snooze, drop. -#}
+{% macro row(d, projects, back) -%}
+<div class="inbox-item">
+  <div class="brief" title="{{ d.text }}">{{ d.text }}</div>
+  <div class="muted" style="font-size:12px">{% if d.came %}from {{ d.came }}{% endif %}{% if d.project %} · {{ d.project }}{% endif %}{% if d.ref and d.ref.url %} · <a href="{{ d.ref.url }}" rel="noopener" target="_blank">issue</a>{% endif %} · {{ d.t|epoch }}
+  {% if d.like %}<br><span class="warn" title="Its words overlap with these open projects">looks like {% for n, o in d.like %}<a href="/p/{{ n|urlencode }}">{{ n }}</a>{{ ", " if not loop.last }}{% endfor %}: merge instead?</span>{% endif %}</div>
+  <div class="cardpz">
+    {% if d.source == "learn" %}<a class="mini" href="/learn/{{ d.id }}" title="Make it a rule every later step reads (agent.md); you can edit it first">Keep it…</a>
+    {% elif d.source == "date" %}<form class="act" method="post" action="/inbox/{{ d.id }}/accept"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="{{ back }}"><button class="mini" title="Set it as {{ d.project }}'s due date (soft: your target)">Use this date</button></form>
+    {% else %}<form class="act" method="post" action="/inbox/{{ d.id }}/accept"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="{{ back }}"><button class="mini" title="{{ 'Make the packet with the watcher\'s recipe' if d.source == 'watch' else 'New, with this as its objective' }}">Make packet</button></form>
+    {% if projects %}<details class="planmenu"><summary class="mini" title="Add it to an open project instead">Merge ▾</summary>
+      <form class="act planitems" method="post" action="/inbox/{{ d.id }}/merge"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="{{ back }}">
+        <select name="project" aria-label="merge into">{% for n in projects %}<option{% if d.like and d.like[0][0] == n %} selected{% endif %}>{{ n }}</option>{% endfor %}</select>
+        <button class="mini" title="Add it to that project as a note for its next step">Add as a note</button></form></details>{% endif %}{% endif %}
+    <form class="act" method="post" action="/inbox/{{ d.id }}/snooze"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="{{ back }}"><button class="mini" name="until" value="tomorrow" title="Hide it until tomorrow morning">Tomorrow</button>{% if d.project %}<button class="mini" name="until" value="change" title="Hide it until {{ d.project }} moves (a step, a checkpoint, a hand-off), for a week at most">Until {{ d.project }} moves</button>{% endif %}</form>
+    <form class="act" method="post" action="/inbox/{{ d.id }}/drop"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="{{ back }}"><button class="mini">Drop</button></form>
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro request(r) -%}
+<div class="inbox-item">
+  <div class="brief">{{ r.title }}</div>
+  <div class="muted" style="font-size:12px">a request from {{ r.from }} to <a href="/p/{{ r.project|urlencode }}">{{ r.project }}</a>, not started{% if r.reason %}: {{ r.reason }}{% endif %}</div>
+  <div class="cardpz"><a class="mini" href="/p/{{ r.project|urlencode }}" title="Fix what it needs, then hand it off">Open</a>
+    <details class="planmenu"><summary class="mini" title="Say no: {{ r.from }} gets the answer, and {{ r.project }} (it never ran) is dropped">Decline ▾</summary>
+      <form class="act planitems" method="post" action="/inbox/request/decline"><input type="hidden" name="csrf" value="{{ csrf or '' }}">
+        <input type="hidden" name="from" value="{{ r.from_wpid }}"><input type="hidden" name="id" value="{{ r.id }}"><input type="hidden" name="back" value="{{ back or '/backlog#inbox' }}">
+        <input name="reason" placeholder="why (they see it)" aria-label="reason">
+        <button class="mini">Decline</button></form></details></div>
+</div>
+{%- endmacro %}

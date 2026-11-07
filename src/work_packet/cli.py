@@ -670,6 +670,62 @@ def cmd_todo(args) -> int:
     return 0
 
 
+def cmd_run(args) -> int:
+    from . import jobs
+    cmd = list(args.command)
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    proj = os.environ.get("WPK_PROJECT_DIR")
+    if not (proj and os.path.isfile(os.path.join(proj, "project.toml"))):
+        proj = None
+    try:
+        return jobs.run(cmd, proj=proj)
+    except jobs.JobError as e:
+        print("wpk run: %s" % e, file=sys.stderr)
+        return 2
+
+
+def cmd_statusline(args) -> int:
+    from . import statusline
+    print(statusline.line(sys.stdin))
+    return 0
+
+
+def cmd_brief(args) -> int:
+    """wpk brief [--rebuild] [--day D] (docs/collaboration.md §9.4)."""
+    import time as _time
+    from . import brief, registry
+    h = registry.home()
+    day = args.day or _time.strftime("%Y-%m-%d")
+    b = brief.load(h, day)
+    if args.rebuild or (b is None and not args.day):
+        b = brief.build(h)
+    if b is None:
+        return _err("no brief for %s" % day)
+    print(brief.render(b))
+    return 0
+
+
+def cmd_shutdown(args) -> int:
+    """wpk shutdown: what to do before you stop (docs/collaboration.md §9.5)."""
+    from . import brief, registry
+    s = brief.shutdown(registry.home())
+    print("Checkpoint what you were working on:")
+    for c in s["open"] or ():
+        print("  %s  (wpk checkpoint %s -m ...)" % (c["name"], c["name"]))
+    if not s["open"]:
+        print("  nothing open")
+    print("Could run overnight (wpk handoff <name> --after-me):")
+    for c in s["night"] or ():
+        print("  %s: %s" % (c["name"], c["intent"]))
+    if not s["night"]:
+        print("  nothing ready")
+    print("Tomorrow's first (wpk plan <name> --priority now --rank 1):")
+    for c in s["tomorrow"][:3]:
+        print("  %s" % c["name"])
+    return 0
+
+
 def cmd_hooks(args) -> int:
     """wpk hooks install|remove|status [target] (docs/collaboration.md §4.3)."""
     from . import ide, registry, sessionhooks
@@ -2162,6 +2218,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--estimate", help="like 4h, 2d, 1w")
     p.add_argument("--blocked-by", dest="blocked_by", help="comma-separated")
     p.add_argument("--area")
+    p.add_argument("--milestone", help="a milestone of its board; its date is a soft due")
     p.add_argument("--force", action="store_true", help="put it in now even if now is full")
     p.set_defaults(func=cmd_plan)
 
@@ -2173,6 +2230,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--list", action="store_true", help="list what is captured")
     p.add_argument("--drop", metavar="ID", help="drop an item")
     p.set_defaults(func=cmd_todo)
+
+    p = sub.add_parser("run", help="run a command as a job of the packet you are in",
+                       description="Runs the command as usual (its output here, its exit "
+                       "status yours) and, in a packet folder, records it as a job: the "
+                       "board shows it waiting on the command, and a failure needs you "
+                       "(docs/collaboration.md W7). The board's Run a command does the same.")
+    p.add_argument("command", nargs=argparse.REMAINDER, help="-- then the command")
+    p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("statusline", help="one line about the packet you are in, for "
+                       "Claude Code's statusLine",
+                       description="Reads Claude Code's status line JSON on stdin (its cwd) "
+                       "and prints whose move it is and what waits on you. The board's "
+                       "hooks switch sets it in a packet folder that has no status line of "
+                       "its own (docs/collaboration.md §7.10).")
+    p.set_defaults(func=cmd_statusline)
+
+    p = sub.add_parser("brief", help="today's focus brief: overnight, what needs you, "
+                       "where to focus and why",
+                       description="Built each weekday morning by the board ([focus] time, "
+                       "default 08:30), from its own data; no model call "
+                       "(docs/collaboration.md §9.4). Prints today's, building it if needed.")
+    p.add_argument("--rebuild", action="store_true", help="build it again now")
+    p.add_argument("--day", help="an earlier day's, YYYY-MM-DD")
+    p.set_defaults(func=cmd_brief)
+
+    p = sub.add_parser("shutdown", help="the end of the day: checkpoint, load the night "
+                       "shift, pick tomorrow's first")
+    p.set_defaults(func=cmd_shutdown)
 
     p = sub.add_parser("hooks", help="the Claude Code hooks that tell the board about "
                        "sessions in a packet folder",

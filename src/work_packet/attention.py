@@ -64,6 +64,34 @@ def session_items(proj, now=None, idle_escalate=IDLE_ESCALATE_S):
     return sorted(out, key=lambda x: x["since"])
 
 
+def log_waits(proj, root, now=None, idle_escalate=IDLE_ESCALATE_S):
+    """The journal's ``turn-waiting`` record (docs/collaboration.md §4.5): a Claude
+    session that has waited for you ``idle_escalate``, once per wait. Written by
+    the board's loop, not by the hook. Returns how many it wrote."""
+    from . import journal, layout
+    now = time.time() if now is None else now
+    n = 0
+    for r in presence.records(proj, now, ttl=None):
+        since = r.get("turn_since")
+        if r.get("kind") != "claude" or r.get("turn") != "waiting" or not since or \
+                now - since < idle_escalate or r.get("waited") == since:
+            continue
+        wpid = r.get("wpid") or root
+        if not wpid:
+            continue
+        ts = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        try:
+            journal.append(os.path.join(layout.run_dir(proj, wpid), "journal.jsonl"), {
+                "type": "turn-waiting", "t": ts(since + idle_escalate), "by": r.get("by"),
+                "session": r.get("session"), "since": ts(since),
+                "actor": {"kind": "claude", "via": r.get("via"), "session": r.get("session")}})
+        except OSError:
+            continue
+        presence.mark(proj, r["source"], waited=since)
+        n += 1
+    return n
+
+
 def key(project, item):
     """An item's identity for a snooze: what it is, and when its cause began."""
     return "%s|%s|%s|%d" % (project, item.get("type"), item.get("source") or "",

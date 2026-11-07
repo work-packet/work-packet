@@ -37,6 +37,14 @@ details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
   <form class="act row" method="post" action="/p/{{ q }}/{{ c.tg.packet.wpid }}/act" style="display:inline-flex;margin:0 0 0 8px">
     <input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="go" name="action" value="pause">Pause it</button></form>
   {% else %}<a href="/p/{{ q }}/{{ c.tg.packet.wpid }}/live">Live view</a>; send it a note there.{% endif %}</div>
+{% if c.queued is not none %}
+<form class="act panel" id="requeue" method="post" action="/p/{{ q }}/compose" style="margin-bottom:12px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <label class="muted" for="rq-text">It is queued and hasn't started: change what it starts from (<code>memento.md</code>). Its state files stay as they are.</label>
+  <textarea id="rq-text" name="instruction" rows="6" required>{{ c.queued }}</textarea>
+  <button class="go primary" name="action" value="requeue">Save the instruction</button>
+</form>
+{% endif %}
 {% endif %}
 
 {% if c.mode == "next" %}
@@ -60,7 +68,7 @@ details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
       {% if ck.fix and ck.level != "ok" %}
         {% for fx in ck.fix[:2] %}<code class="fix">{{ fx }}</code>{% endfor %}
         {% if c.owned %}<div class="row" style="margin-top:4px">
-          {% if ck.safe %}<form class="act" method="post" action="/p/{{ q }}/compose"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="check" value="{{ ck.id }}"><button class="go" name="action" value="fix">{{ "Commit as WIP" if ck.id.startswith("next.dirty.") else "Do it" }}</button></form>{% endif %}
+          {% if ck.safe %}<form class="act" method="post" action="/p/{{ q }}/compose"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="check" value="{{ ck.id }}"><button class="go" name="action" value="fix">{{ "Commit as WIP" if ck.id.startswith("next.dirty.") else "Do it" }}</button></form>{% endif %}{% if split_ok and ck.id.startswith("next.dirty.") %} <span class="muted" style="font-size:12px">or keep them and <strong>Split</strong> below: the runner works in a copy</span>{% endif %}
           {% if shell_ok %}<button class="go" type="button" data-typeit="{{ ck.fix[0] }}">Type it</button>{% endif %}
         </div>{% endif %}
       {% endif %}
@@ -93,10 +101,12 @@ details > summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
         <label><input type="radio" name="after" value="0" checked> Start now</label>
         <label title="It waits while you (or a Claude session) work on the project, and starts when you leave"><input type="radio" name="after" value="1"> After I leave</label>
       </div>{% endif %}
+      {% if rl and rl.over %}<p class="warn" style="font-size:12.5px">{{ rl.n }} finished {{ "project waits" if rl.n == 1 else "projects wait" }} for your review{% if rl.oldest %} (oldest {{ rl.oldest }}){% endif %}, at or over your limit of {{ rl.limit }}. Handing off more makes more to review: <a href="/#attention">review first</a>?</p>{% endif %}
       {% if c.owned %}
       <div class="row">
         <button class="go" name="action" value="save">Save</button>
         <button class="go primary" name="action" value="handoff" {{ "disabled" if c.missing }}>Hand off to the runner</button>
+        {% if split_ok %}<button class="go" name="action" value="split" title="The runner works in its own copy (a git worktree on a new branch); your folder and your uncommitted edits are left alone. You bring its result in when it is done.">Split: the runner works in a copy</button>{% endif %}
         {% if c.missing %}<label class="muted"><input type="checkbox" name="force" value="1" data-enable="handoff"> hand off anyway ({{ c.missing }} missing)</label>{% endif %}
         {% if not runner %}<span class="muted" style="font-size:12px">No runner here: run <code>wpk tick</code> after, or start the board with <code>--run</code>.</span>{% endif %}
       </div>

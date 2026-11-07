@@ -136,6 +136,9 @@
     if (!dirty && !(st && !st.done)) return;
     dirty = false;
     var ol = $(".nj-steps");
+    // The steps scroll in a bounded box; the list is rebuilt below, so keep where it was
+    // scrolled to, and keep following the end if it was at the end.
+    var top = ol.scrollTop, end = top + ol.clientHeight >= ol.scrollHeight - 4;
     ol.innerHTML = "";
     var start = null;
     st.steps.forEach(function (s) {
@@ -187,6 +190,7 @@
       if (sub.childNodes.length) li.appendChild(sub);
       ol.appendChild(li);
     });
+    ol.scrollTop = end ? ol.scrollHeight : top;
     $(".nj-clock").textContent = start != null ? secs((st.done ? st.done.t : now()) - start) : "";
     $(".nj-activity").textContent = st.done ? "" : (st.activity || "starting…");
     $(".nj-nlines").textContent = st.nlines ? "(" + st.nlines + " lines)" : "";

@@ -42,7 +42,7 @@ REASON_HELD = "held"
 REASON_DONE = "done"              # marked done or dropped while the runner had it
 REASON_CLAIMED = "claimed"        # opened in VS Code: yours until you hand it back
 
-MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item", "size")
+MEMENTO_FIELDS = ("resume", "reason", "ask", "spawn", "item", "size", "follow_ups")
 ITEM_MAX = 80
 MEMENTO_LATER = {"every": "Stage 2", "wait": "Stage 3"}
 SPAWN_FIELDS = ("name", "instruction", "copy", "model")
@@ -221,6 +221,11 @@ JOURNAL_TYPES = {
     # docs/collaboration.md §4.5: an interactive session in the packet (hookcmd)
     "session-start": ("by", "session", "actor"),
     "session-end": ("by", "session", "actor"),
+    "turn-waiting": ("session", "since"),   # waited for you idle_escalate (attention.log_waits)
+    # docs/collaboration.md W7, §5.4: jobs (jobs.py) and splits (split.py)
+    "job-start": ("job", "cmd", "by"),
+    "job-end": ("job", "exit"),
+    "split": ("to", "by"),
 }
 DECISION_FIELDS = ("state", "resume_expr", "wake_at", "reason", "model",
                    "summary", "spawn")
@@ -523,6 +528,12 @@ def validate_memento(meta, body, proposal=True):
                             "after the answer"))
     if "spawn" in meta and meta["spawn"] is not None:
         out += validate_spawn(meta["spawn"])
+    if "follow_ups" in meta:
+        v = meta["follow_ups"]
+        if not (isinstance(v, list) and len(v) <= 5 and all(
+                isinstance(x, str) and x.strip() and len(x) <= 2000 for x in v)):
+            out.append(_err("follow_ups", "a list of at most 5 short texts: work you found "
+                            "that is not this task's"))
     if "size" in meta and not is_name(meta["size"]):
         out.append(_err("size", "must be the name of a job size, such as look"))
     if r is not None and r.kind not in ("done", "fail") and not body.strip():
@@ -925,19 +936,84 @@ def _validate_plan(d):
         return []
     if not isinstance(t, dict):
         return [_err("plan", "must be a table")]
-    out = _unknown(t, ("focus_wip",), "plan")
-    v = t.get("focus_wip", 3)
-    if not (isinstance(v, int) and not isinstance(v, bool) and v > 0):
-        out.append(_err("plan.focus_wip", "must be a positive whole number"))
+    out = _unknown(t, ("focus_wip", "review_wip"), "plan")
+    for k in ("focus_wip", "review_wip"):
+        v = t.get(k, 3)
+        if not (isinstance(v, int) and not isinstance(v, bool) and v > 0):
+            out.append(_err("plan." + k, "must be a positive whole number"))
+    return out
+
+
+def _validate_notify(d):
+    """``[notify]``: pushes and the digest (docs/collaboration.md §4.3; plan C6)."""
+    t = d.get("notify")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("notify", "must be a table")]
+    out = _unknown(t, ("ntfy_url", "ntfy_token", "link", "question_after_s", "max_per_hour",
+                       "digest", "digest_at", "brief"), "notify")
+    for k in ("ntfy_url", "link"):
+        v = t.get(k, "")
+        if not (isinstance(v, str) and (v == "" or v.startswith(("https://", "http://")))):
+            out.append(_err("notify." + k, "must be an http(s) URL"))
+    if not isinstance(t.get("ntfy_token", ""), str):
+        out.append(_err("notify.ntfy_token", "must be a string"))
+    for k in ("question_after_s", "max_per_hour"):
+        v = t.get(k, 1)
+        if not (isinstance(v, int) and not isinstance(v, bool) and v >= 0):
+            out.append(_err("notify." + k, "must be a whole number >= 0"))
+    if t.get("digest", "off") not in ("off", "hourly", "daily"):
+        out.append(_err("notify.digest", "must be off, hourly or daily"))
+    if "digest_at" in t and not (isinstance(t["digest_at"], str)
+                                 and re.match(r"^\d{1,2}:\d{2}$", t["digest_at"])):
+        out.append(_err("notify.digest_at", "must be HH:MM"))
+    if not isinstance(t.get("brief", False), bool):
+        out.append(_err("notify.brief", "must be true or false"))
+    return out
+
+
+def _validate_focus(d):
+    """``[focus]``: the daily brief (docs/collaboration.md §9.4)."""
+    t = d.get("focus")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("focus", "must be a table")]
+    out = _unknown(t, ("time", "weekends", "off", "review", "review_day", "review_time"),
+                   "focus")
+    for k in ("time", "review_time"):
+        if k in t and not (isinstance(t[k], str) and re.match(r"^\d{1,2}:\d{2}$", t[k])):
+            out.append(_err("focus." + k, "must be HH:MM"))
+    if "review_day" in t and not (isinstance(t["review_day"], str) and t["review_day"][:3].lower()
+                                  in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")):
+        out.append(_err("focus.review_day", "must be a day: mon, tue, ... sun"))
+    for k in ("weekends", "off", "review"):
+        if k in t and not isinstance(t[k], bool):
+            out.append(_err("focus." + k, "must be true or false"))
+    return out
+
+
+def _validate_calendar(d):
+    """``[calendar]``: a calendar feed for the brief and pushes (plan F3f)."""
+    t = d.get("calendar")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("calendar", "must be a table")]
+    out = _unknown(t, ("ics",), "calendar")
+    if "ics" in t and not isinstance(t["ics"], str):
+        out.append(_err("calendar.ics", "must be a URL or a file path"))
     return out
 
 
 def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
                                                 "console", "harnesses", "plugins", "site",
-                                                "studio", "plan")) \
-        + _validate_limits(d) + _validate_profiles(d) + _validate_server(d) + _validate_ide(d) \
-        + _validate_plan(d) \
+                                                "studio", "plan", "focus", "notify", "calendar")) \
+        + _validate_calendar(d) + _validate_limits(d) + _validate_profiles(d) \
+        + _validate_server(d) + _validate_ide(d) \
+        + _validate_plan(d) + _validate_focus(d) + _validate_notify(d) \
         + _validate_console(d) + _validate_studio(d) + _validate_forges(d.get("forge")) \
         + _validate_harness(d) \
         + _validate_plugins(d) + _validate_site(d)
@@ -1177,7 +1253,7 @@ def validate_board(d, stem=None):
 
 
 WATCH_KEYS = ("name", "repos", "dir", "labels", "query", "every", "hold", "from", "model",
-              "harness", "max_new", "enabled", "pr")      # docs/starters-v1.md, watchers
+              "harness", "max_new", "enabled", "pr", "propose")   # docs/starters-v1.md, watchers
 WATCH_REPO_RX = re.compile(r"^[a-z0-9][a-z0-9_-]*:[\w.-]+/(\*|[\w.-]+)$")   # owner/*: all
 
 
@@ -1209,7 +1285,7 @@ def validate_watches(lst):
         for x in ("query", "from", "model", "harness"):
             if x in w and not isinstance(w[x], str):
                 out.append(_err(k + "." + x, "must be a string"))
-        for x in ("hold", "enabled"):
+        for x in ("hold", "enabled", "propose"):
             if x in w and not isinstance(w[x], bool):
                 out.append(_err(k + "." + x, "must be true or false"))
         if "pr" in w and w["pr"] not in ("off", "draft", "ready"):

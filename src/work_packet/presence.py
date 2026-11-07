@@ -15,7 +15,7 @@ import os
 import re
 import time
 
-from . import fsutil
+from . import fsutil, timelog
 
 DIR = "presence"
 TTL_S = 600                 # a record this old is gone (``[ide] presence_ttl``)
@@ -26,7 +26,7 @@ TURNS = ("working", "waiting", "blocked", "ended")
 # What a record may hold: identifiers, times and states; no prompt or reply text.
 FIELDS = ("source", "kind", "via", "host", "pid", "session", "launch", "wpid", "by",
           "since", "beat", "active", "turn", "turn_since", "tool", "attached", "visible",
-          "idle_since")
+          "idle_since", "transcript", "waited")
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
 
 
@@ -63,6 +63,22 @@ def beat(proj, source, now=None, **fields):
     if rec.get("turn") != was:
         rec["turn_since"] = now
     os.makedirs(os.path.dirname(p), exist_ok=True)
+    fsutil.atomic_write(p, json.dumps(rec, sort_keys=True) + "\n")
+    if rec.get("by"):
+        try:
+            timelog.add(proj, rec["by"], now, timelog.counts(fields))
+        except OSError:
+            pass                        # the ledger never breaks presence
+    return rec
+
+
+def mark(proj, source, **fields):
+    """Set ``fields`` on a record without a beat (the board's own notes on it)."""
+    p = path(proj, source)
+    rec = _load(p)
+    if rec is None:
+        return None
+    rec.update({k: v for k, v in fields.items() if k in FIELDS})
     fsutil.atomic_write(p, json.dumps(rec, sort_keys=True) + "\n")
     return rec
 
@@ -102,6 +118,17 @@ def records(proj, now=None, ttl=TTL_S):
             continue
         out.append(rec)
     return out
+
+
+def every(proj):
+    """Every record of ``proj``, ended ones too, as they are (nothing removed)."""
+    d = os.path.join(proj, DIR)
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return []
+    return [r for r in (_load(os.path.join(d, n)) for n in names if n.endswith(".json"))
+            if r is not None]
 
 
 def reap(proj, host, now=None, alive=None):
@@ -221,6 +248,73 @@ def _epoch(ts):
         return None
 
 
+# --- by-hand edits (design §4.2 fallback) ------------------------------------------
+
+EDIT_SKIP = frozenset((".git", ".hg", ".svn", ".work-packet", ".vscode", ".claude", ".codex",
+                       "node_modules",
+                       ".venv", "venv", "__pycache__", "packages", ".tox", ".mypy_cache",
+                       ".pytest_cache", ".ruff_cache"))
+EDIT_MAX = 20000            # entries looked at; a bigger tree is only partly seen
+EDIT_EVERY_S = 60
+_edits = {}
+
+
+def edited(folder, now=None, limit=EDIT_MAX):
+    """The newest change time of a file under the packet ``folder``, or None. Version
+    control, tool and cache folders, the board's own folder and the cards
+    (``*.wp.md``) are left out. Cached ``EDIT_EVERY_S``. It sees an editor with no
+    Claude session in it (desktop VS Code opened by hand) and works in a plain
+    folder."""
+    now = time.time() if now is None else now
+    got = _edits.get(folder)
+    if got and 0 <= now - got[0] < EDIT_EVERY_S:
+        return got[1]
+    newest, seen, stack = None, 0, [folder]
+    while stack and seen < limit:
+        try:
+            it = os.scandir(stack.pop())
+        except OSError:
+            continue
+        with it:
+            for de in it:
+                seen += 1
+                try:
+                    if de.is_dir(follow_symlinks=False):
+                        if de.name not in EDIT_SKIP:
+                            stack.append(de.path)
+                    elif de.is_file(follow_symlinks=False) and not de.name.endswith(".wp.md"):
+                        m = de.stat(follow_symlinks=False).st_mtime
+                        if m <= now + 60 and (newest is None or m > newest):
+                            newest = m
+                except OSError:
+                    continue
+    _edits[folder] = (now, newest)
+    return newest
+
+
+def _mtime(p):
+    try:
+        return os.path.getmtime(p)
+    except OSError:
+        return 0.0
+
+
+def edits_hold(proj, journals, now=None, ttl=TTL_S):
+    """Files in the packet folder changed in the last ``ttl``, after anything the
+    runner or the board wrote to ``journals`` (so the runner's own writes, and
+    edits made before a hand-off, don't count): ``"N min ago"``, else None. Only
+    the packet layout: a legacy project opens read-only."""
+    from . import layout
+    if not layout.is_packet_layout(proj):
+        return None
+    now = time.time() if now is None else now
+    m = edited(layout.packet_folder(proj), now)
+    after = max([_mtime(j) for j in journals] + [0.0])
+    if m is None or m <= after + 1 or now - m > ttl:
+        return None
+    return "%d min ago" % max(1, round((now - m) / 60))
+
+
 def holds(proj, journals, now=None, ttl=TTL_S):
     """Why the runner should not start a step in ``proj`` now (docs/collaboration.md
     §5.1), or None. Someone is working on it, and the newest hand-off in
@@ -229,7 +323,9 @@ def holds(proj, journals, now=None, ttl=TTL_S):
     now = time.time() if now is None else now
     on, since = attended(proj, now, ttl)
     if not on:
-        return None
+        ago = edits_hold(proj, journals, now, ttl)
+        return ("files in it were edited by hand %s; it starts once they are quiet for "
+                "%d min, or when you hand it off" % (ago, ttl // 60)) if ago else None
     hs = sorted((h for j in journals for h in _handoffs(j)), key=lambda h: h.get("t") or "")
     if hs and hs[-1].get("defer") is False:
         t = _epoch(hs[-1].get("t"))

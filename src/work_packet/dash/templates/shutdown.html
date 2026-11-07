@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% import "_side.html" as sidem with context %}
+{% import "_plan.html" as plm with context %}
+{#- The end of the day (docs/collaboration.md §9.5): close out, load the night shift,
+    pick tomorrow's first. -#}
+{% block title %}End of the day{% endblock %}
+{% block main %}
+<div class="withside">
+{{ sidem.tab(side, none, "shutdown") }}
+<div style="max-width:760px">
+<h1>End of the day</h1>
+
+<h2>1. Checkpoint what you were working on</h2>
+{% if s.open %}<ul class="list">{% for c in s.open %}<li><a href="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}#checkpoint"><strong>{{ c.name }}</strong></a> <span class="what muted">{{ c.ball.text }}</span> <a class="mini" href="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}#checkpoint">Checkpoint</a></li>{% endfor %}</ul>
+<p class="muted" style="font-size:12.5px">Or <code>/wpk-checkpoint</code> in the Claude session you have open there.</p>
+{% else %}<p class="muted">Nothing is yours right now.</p>{% endif %}
+
+<h2>2. Load the night shift</h2>
+{% if s.night %}
+<form class="act" method="post" action="/shutdown/handoff">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <ul class="list">{% for c in s.night %}<li><label><input type="checkbox" name="project" value="{{ c.name }}" checked> <strong>{{ c.name }}</strong></label> <span class="what">Next: {{ c.intent }}</span></li>{% endfor %}</ul>
+  <button class="go primary" title="Each starts when you leave (nobody is working on it), with its Next as where it goes on from">Hand these to the runner for tonight</button>
+</form>
+<p class="muted" style="font-size:12.5px">Projects with a Next that nobody is running: their results come back in tomorrow's brief.</p>
+{% else %}<p class="muted">Nothing has a next action ready to hand over. Record one with a checkpoint (its Next), then come back.</p>{% endif %}
+
+<h2>3. Tomorrow's first</h2>
+<ul class="list">{% for c in s.tomorrow %}<li><strong>{{ c.name }}</strong> {{ plm.chips(c.plan, c.due) }} <span class="what muted">{{ c.ball.text }}</span>
+  <form class="act" method="post" action="/p/{{ c.name|urlencode }}/plan"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="/shutdown"><input type="hidden" name="priority" value="now"><input type="hidden" name="rank" value="1"><button class="mini">First tomorrow</button></form></li>{% endfor %}</ul>
+</div>
+</div>
+{% endblock %}

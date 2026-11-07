@@ -260,24 +260,35 @@ def tasks(entry, nodes):
     (the wpids of the children it spawned)."""
     if not nodes:
         return []
+    from ..checkpoint import BY_HAND, next_of
     root = nodes[0]
     recs = Packet(root["path"]).journal().records
     batch, of, why, ended, reports, spawned = 1, {}, {}, {}, {}, {}
+    worker, fresh = {}, False       # fresh: a task a checkpoint began, with no step yet
     for r in recs:
         t = r.get("type")
         if t == "step-start" and isinstance(r.get("step"), int):
             of[r["step"]] = batch
+            worker[r["step"]] = r.get("worker")
+            fresh = False
         elif t == "commit-begin":
-            for sp in (r.get("decision") or {}).get("spawn") or ():
+            d = r.get("decision") or {}
+            for sp in d.get("spawn") or ():
                 if sp.get("wpid"):
                     spawned[sp["wpid"]] = of.get(r.get("step"), batch)
+            nxt = next_of(d.get("summary"))
+            if nxt and (d.get("worker") or worker.get(r.get("step"))) in BY_HAND:
+                ended[batch] = "COMPLETED"      # your checkpoint set what comes next (G5)
+                batch += 1
+                why[batch], fresh = nxt, True
         elif t == "handoff":
             if r.get("report"):
                 reports[batch] = r["report"]
             if "instruction" in r:
-                ended[batch] = r.get("from")
-                batch += 1
-                why[batch] = r.get("instruction")
+                if not fresh:
+                    ended[batch] = r.get("from")
+                    batch += 1
+                why[batch], fresh = r.get("instruction"), False
     subtrees, cur = {}, None
     for n in nodes[1:]:
         if n["depth"] == 1:
@@ -371,6 +382,28 @@ def session_items(entry):
         return []
 
 
+def glance(c):
+    """A card at a glance (docs/collaboration.md §7.10): ``status.json``, and the
+    line ``wpk statusline`` prints. ``needs``: what waits on you there (its own
+    question, failure or review, the sessions that need you, the jobs that ended)."""
+    b = c["ball"]
+    needs = (1 if b["kind"] in views.NEEDS_YOU else 0) + len(c.get("sessions") or ()) + \
+        len(c.get("job_items") or ())
+    return {"name": c["name"], "ball": b, "driver": c.get("driver"), "column": c["column"],
+            "needs": needs, "jobs": len(c.get("jobs") or ()),
+            "url": "/p/%s" % urlquote(c["name"])}
+
+
+def job_state(entry):
+    """The project's running jobs, and its attention items for jobs that ended
+    and you have not opened (``jobs.items``)."""
+    from .. import jobs
+    try:
+        return jobs.live(entry["path"]), jobs.items(entry["path"])
+    except OSError:
+        return [], []
+
+
 def present(entry, now=None):
     """The project's live presence records (docs/collaboration.md §4.2), by the
     wall clock (``now`` is not used: records are written in real time, as leases are)."""
@@ -380,6 +413,25 @@ def present(entry, now=None):
                              or presence.TTL_S)
     except OSError:
         return []
+
+
+def _milestones_of(entry):
+    from .. import milestones
+    try:
+        return milestones.of_board(registry.board_of(
+            entry, [b["name"] for b in registry.boards()]))
+    except Exception:                   # noqa: BLE001
+        return []
+
+
+def _actuals(entry):
+    """For the packet page's Now line: ``{"text", "over", "estimate"}`` (plan F3a)."""
+    try:
+        a = planning.actuals(entry)
+    except Exception:                   # noqa: BLE001: never breaks the page
+        return None
+    text = planning.actuals_text(a)
+    return {"text": text, "over": a["over"]} if text else None
 
 
 def card(entry, now=None, nodes=None):
@@ -394,8 +446,9 @@ def card(entry, now=None, nodes=None):
     here = present(entry, now)
     sessions = session_items(entry)
     plan = planning.get(entry)
-    column = views.column(facts, lease, here)
-    ball = views.ball(facts, lease, here)
+    running_jobs, job_items = job_state(entry)
+    column = views.column(facts, lease, here, running_jobs)
+    ball = views.ball(facts, lease, here, running_jobs)
     counts = {}
     for n in nodes:
         counts[n["state"]] = counts.get(n["state"], 0) + 1
@@ -439,8 +492,10 @@ def card(entry, now=None, nodes=None):
         since = since_checkpoint(entry, root, tz, now)
     return {
         "name": entry["name"], "column": column, "root": root, "running": run,
+        "draft": _draft(root), "split_of": _split_of(entry),
         "css": COLUMN_CLASS[column] + (" Failed" if ball["kind"] == "failure" else ""),
         "ball": ball, "driver": views.driver(facts, lease, here), "present": here,
+        "jobs": running_jobs, "job_items": job_items,
         "sessions": sessions,
         # your planning fields (docs/collaboration.md §9.2)
         "plan": plan, "due": planning.due_text(plan),
@@ -523,11 +578,50 @@ def board(h=None, now=None, rows=None):
         if rows is not None:
             rows += packet_rows(e, on, nodes)
         cols[c["column"]].append(c)
+    deadlines([c for v in cols.values() for c in v], h, now)
     # Sleepers soonest first; the rest by name.
     far = now + timedelta(days=36500)
     for c in cols.values():
         c.sort(key=lambda k: ((k["root"] or {}).get("wake_at") or far, k["name"]))
     return cols, broken
+
+
+def deadlines(cards, h=None, now=None):
+    """Each open card's effective due date (its own, else its milestone's), and
+    for those with one, a forecast and at risk (docs/collaboration.md §9.3, plan
+    F3b): ``due_eff``, ``due_kind``, ``milestone``, ``forecast`` (with ``text``)
+    and ``at_risk``."""
+    from .. import forecast, milestones
+    now = now or clock.now()
+    now_t = now.timestamp()
+    today = now.astimezone().date()
+    done = {c["name"] for c in cards if c.get("lifecycle") == "done"}
+    ms = {}
+    for c in cards:
+        c.update({"due_eff": None, "due_kind": None, "milestone": None, "forecast": None,
+                  "at_risk": None})
+        plan = c.get("plan") or {}
+        b = c.get("board") or registry.DEFAULT_BOARD
+        if plan.get("milestone") and b not in ms:
+            ms[b] = milestones.of_board(b, h)
+        due, kind, m = milestones.effective_due(plan, b, h, ms.get(b, []))
+        c["milestone"] = m
+        if not due or c.get("lifecycle") != "open":
+            continue
+        c["due_eff"], c["due_kind"] = due, kind
+        if not plan.get("due"):
+            c["due"] = "%s %s" % (m["name"], planning.due_text({"due": due}, today))
+        e = registry.get(c["name"], h)
+        if e is None:
+            continue
+        try:
+            fc = forecast.forecast(e, c, now_t, h)
+        except Exception:               # noqa: BLE001: a forecast never breaks the board
+            fc = None
+        if fc:
+            fc["text"] = forecast.range_text(fc, today)
+        c["forecast"] = fc
+        c["at_risk"] = forecast.at_risk(due, kind, fc, c, today, now_t, done)
 
 
 def packet_rows(entry, board, nodes):
@@ -561,6 +655,16 @@ def side(h, cols, broken):
                     "n": len(cards) + sum(1 for x in broken if x["board"] == b["name"]),
                     "needs": sum(1 for c in cards if c["column"] == "Needs you")})
     return out
+
+
+def risk_item(c):
+    """A card at risk as an attention item (plan F3b): keyed by its due date and
+    the kind of risk, so a new date or reason brings a snoozed one back."""
+    from .. import forecast
+    return {"type": "atrisk", "source": "%s:%s" % (c["due_eff"], c["at_risk"].split()[0]),
+            "since": 0, "text": forecast.decision_text(c["name"], c.get("due") or "",
+                                                       c.get("forecast"), "at risk: " +
+                                                       c["at_risk"])}
 
 
 def attention_key(a):
@@ -661,13 +765,28 @@ def overview(cols, broken, side, burn, now=None, coming=8):
     # The sessions you drive: blocked, your turn, gone quiet (docs/collaboration.md §4.3)
     attention += [{"kind": {"your turn": "yourturn"}.get(it["type"], it["type"]), "card": c,
                    "item": it} for c in cards for it in c.get("sessions") or ()]
+    # Jobs that ended since you looked (W7): a failure is a failure, the rest a review.
+    attention += [{"kind": "job", "card": c, "item": it} for c in cards
+                  for it in c.get("job_items") or ()]
+    # At risk of missing a due date (§9.3): a decision for you, never pushed.
+    attention += [{"kind": "atrisk", "card": c, "item": risk_item(c)} for c in cards
+                  if c.get("at_risk")]
+    # Parked and untouched for longer than its priority allows (F1 rot, plan G5).
+    attention += [{"kind": "rot", "card": c, "item": {
+        "type": "rot", "source": "%s:%d" % (c["plan"].get("priority"), c["rot"]["limit"]),
+        "since": 0, "text": "untouched for %d days (%s allows %d)" % (
+            c["rot"]["days"], c["plan"].get("priority"), c["rot"]["limit"])}}
+        for c in cards if c.get("rot") and c["column"] == "Parked"
+        and c.get("lifecycle") == "open"]
     # Finished (to review) or stopped by a limit since anyone looked.
     unread = sorted((c for c in cards if c["unread"]), key=lambda c: c["unread"]["at"],
                     reverse=True)
     attention += [{"kind": c["unread"]["kind"], "card": c} for c in unread]
     order = {"needs": 0, "failed": 0, "blocked": 0, "trouble": 1, "stalled": 1, "stuck": 1,
-             "done": 2, "stopped": 2, "yourturn": 3, "stale": 3}
-    attention.sort(key=lambda a: order.get(a["kind"], 2))       # stable: in-kind order kept
+             "atrisk": 1,
+             "done": 2, "stopped": 2, "yourturn": 3, "stale": 3, "rot": 4}
+    attention.sort(key=lambda a: order.get(a["kind"], 2) if a["kind"] != "job" else
+                   1 if a["item"]["failed"] else 2)       # stable: in-kind order kept
     for a in attention:
         a["key"] = attention_key(a)
     reviews = [a for a in attention if a["kind"] == "done" and a["card"]["lifecycle"] == "open"]
@@ -844,12 +963,15 @@ def packet(entry, wpid, now=None):
         "driver": views.driver(meta, live, here), "present": here,
         "hooks": _hooks(entry) if wpid == entry.get("root") else None,
         "plan": planning.get(entry) if wpid == entry.get("root") else None,
+        "actuals": _actuals(entry) if wpid == entry.get("root") else None,
+        "milestones": _milestones_of(entry) if wpid == entry.get("root") else None,
         "lifecycle": views.lifecycle(meta),
         "autonomy": views.autonomy(meta), "review": meta.get("review"),
         "taking": _taking(pkt), "studio": _studio_ok(entry, wpid),
         "fields": [(k, meta.get(k)) for k in schema.STATUS_FIELDS if k in meta],
         "summary": body.strip(), "summary_html": md(body.strip()),
         "status_line": _first_line(body), "intent": _intent(body), "memento": memento, "files": files, "children": kids,
+        "draft": _checkpoint_draft(pkt),
         "parent": parent, "steps": list(reversed(steps(pkt))), "running": live,
         "timeline": views.timeline(pkt, limit=60),
         "next": _next(meta, now, tz), "journal": pkt.journal().records[-200:],
@@ -1594,6 +1716,8 @@ def compose(entry, now=None):
         # runner has not seen it, so it is the hand-off note's draft (W4).
         "context": summary if mode == "next" and _by_hand_last(tg.packet) else "",
         "tg": tg, "meta": meta, "state": state, "running": run, "owned": owned,
+        "queued": _memento(tg.packet) if not owned and not run and state in (
+            "RUNNABLE", "SLEEPING") else None,
         "mode": mode, "held_for_setup": held_for_setup(meta),
         "groups": groups, "missing": len(setup.missing(checks)),
         "instruction": text, "where": where, "draft": draft,
@@ -1608,6 +1732,35 @@ def compose(entry, now=None):
         "shell_dir": tg.proj if mode == "setup" else tg.packet.path,
     }
 
+
+
+def _split_of(entry):
+    """The project this one is a split of (plan G7), or None."""
+    from .. import split
+    d = split.info(entry)
+    return d["of"] if d else None
+
+
+def _draft(root):
+    """The card's root has the scribe's draft as its last checkpoint (plan G3)."""
+    done = [s for s in (root or {}).get("steps") or () if s.get("outcome") == "committed"]
+    return bool(done) and done[-1].get("worker") == "scribe"
+
+
+def _checkpoint_draft(pkt):
+    from .. import checkpoint
+    try:
+        return checkpoint.draft_of(pkt)
+    except Exception:                   # noqa: BLE001: a nicety; never fail the page
+        return None
+
+
+def _memento(pkt):
+    try:
+        with open(pkt.memento_path, encoding="utf-8") as fp:
+            return fp.read().strip()
+    except OSError:
+        return ""
 
 
 def _by_hand_last(pkt):
@@ -1697,6 +1850,7 @@ def watchers(h, board):
         out.append({"name": w["name"], "repos": w["repos"], "labels": w.get("labels") or [],
                     "every": w.get("every", "15m"), "enabled": w.get("enabled", True),
                     "hold": w.get("hold", True), "dir": w["dir"],
+                    "propose": w.get("propose", False), "pr": w.get("pr", "off"),
                     "polled": _ago(s.get("polled")), "made": sorted(s["seen"].items()),
                     "failed": sorted(s["failed"].items()), "errors": s.get("errors") or []})
     return out
@@ -1709,3 +1863,91 @@ def _ago(t):
     d = int(_t.time() - t)
     return "%ds ago" % d if d < 90 else "%dm ago" % (d // 60) if d < 5400 else \
         "%dh ago" % (d // 3600) if d < 172800 else "%dd ago" % (d // 86400)
+
+
+def review_load(h=None, now=None):
+    """The attention budget (docs/collaboration.md §7.6): finished work waiting for
+    your review, ``{"n", "oldest", "limit", "over"}``. Reads each root's status
+    only, so a hand-off form can say it cheaply."""
+    from .. import views
+    now = now or clock.now()
+    stops = []
+    for e in archived.entries(h):
+        try:
+            meta, _ = Packet(layout.run_dir(e["path"], e["root"])).load_status()
+        except (OSError, frontmatter.FrontMatterError, KeyError, TypeError):
+            continue
+        if views.ball(meta)["kind"] == "review":
+            stops.append(_ts(meta.get("stopped")) if isinstance(meta.get("stopped"), str)
+                         else meta.get("stopped"))
+    try:
+        limit = int((registry.load_config_file(h).get("plan") or {}).get("review_wip") or 5)
+    except (registry.ConfigError, ValueError, TypeError):
+        limit = 5
+    at = [t for t in stops if t]
+    return {"n": len(stops), "limit": limit, "over": len(stops) >= limit,
+            "oldest": relative(-(now - min(at)).total_seconds()).replace(" ago", "")
+            if at else ""}
+
+
+def _about(card):
+    """The root's instruction, shortened: what a project is about."""
+    root = card.get("root") or {}
+    try:
+        _, body = Packet(root["path"]).load_memento()
+    except (KeyError, TypeError, OSError, frontmatter.FrontMatterError):
+        return ""
+    return body[:600]
+
+
+INBOX_FROM = {"watch": "a watcher", "agent": "the runner", "session": "a Claude session",
+              "cli": "the command line", "phone": "your phone",
+              "learn": "your corrections", "date": "an issue's milestone"}
+
+
+def inbox_view(h, cols, board=None):
+    """The Inbox (docs/collaboration.md W8) for a page: items (one board's, given
+    ``board``) with where each came from and the open projects it looks like, and
+    the requests that have not started. ``{"entries", "requests", "projects"}``."""
+    from .. import inbox
+    cards = [c for v in cols.values() for c in v]
+    its = inbox.items(h or registry.home())
+    if its:                     # what each project is about, for the duplicate hint
+        cards = [dict(c, intent="%s %s" % (c.get("intent") or "", _about(c))) for c in cards]
+    items = []
+    for d in its:
+        if board and (d.get("board") or registry.DEFAULT_BOARD) != board:
+            continue
+        d = dict(d, came=INBOX_FROM.get(d.get("source") or "", ""),
+                 like=inbox.similar(d["text"], cards))
+        items.append(d)
+    reqs = [r for r in inbox.requests(h)
+            if not board or any(c["name"] == r["project"] for c in cards)]
+    return {"entries": items, "requests": reqs,
+            "projects": sorted(c["name"] for c in cards if c.get("lifecycle", "open") == "open")}
+
+
+def milestones_view(h, cols, board, now=None):
+    """The board page's Milestones panel (plan F3d): each milestone with its
+    projects, today's figures, the burn-down chart, and the latest forecast."""
+    from .. import forecast, milestones
+    now = now or clock.now()
+    today = now.astimezone().date()
+    cards = [c for v in cols.values() for c in v]
+    out = []
+    for m in milestones.of_board(board, h):
+        mine = [c for c in cards if (c.get("plan") or {}).get("milestone") == m["name"]]
+        rows = milestones.snaps(board, m["name"], h)
+        fcs = [c["forecast"] for c in mine if c.get("forecast")]
+        late = max(fcs, key=lambda f: f["high"]) if fcs else None
+        try:
+            days = (datetime.fromisoformat(m["date"]).date() - today).days
+        except ValueError:
+            days = None
+        out.append(dict(m, cards=mine, now=milestones.count(cards, board, m["name"], h),
+                        chart=milestones.chart(m, rows), days=days,
+                        forecast=forecast.range_text(late, today) if late else None,
+                        late=bool(late and datetime.fromtimestamp(late["high"]).date().isoformat()
+                                  > m["date"]),
+                        risky=[c["name"] for c in mine if c.get("at_risk")]))
+    return out

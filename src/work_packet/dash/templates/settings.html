@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% import "_side.html" as sidem with context %}
+{% import "_vscode.html" as vs with context %}
+{#- The board's Settings (docs/collaboration-plan.md C6, §2a): the config.toml keys
+    you change day to day. config.toml is edited line by line; your comments stay. -#}
+{% block title %}Settings{% endblock %}
+{% block main %}
+<div class="withside">
+{{ sidem.tab(side, none, "settings") }}
+<div style="max-width:760px">
+<h1>Settings</h1>
+{% if not owner %}<p class="muted">Only the board's owner can change these.</p>{% endif %}
+<form class="act" method="post" action="/settings">
+<input type="hidden" name="csrf" value="{{ csrf or '' }}">
+{% set heads = {"ide": "Sessions", "focus": "The daily brief", "plan": "Limits", "notify": "Pushes (ntfy)"} %}
+{% for r in rows %}
+{% if loop.first or r.table != loop.previtem.table %}{% if not loop.first %}</table>{% endif %}
+<h2 id="{{ r.table }}">{{ heads[r.table] }}</h2>
+<table class="kv">{% endif %}
+<tr><td><label for="s-{{ r.name }}">{{ r.label }}</label></td><td>
+{% if r.type == "bool" %}<input type="checkbox" id="s-{{ r.name }}" name="{{ r.name }}" value="1"{% if r.value %} checked{% endif %}{% if not owner %} disabled{% endif %}>
+{% elif r.name == "notify.digest" %}<select id="s-{{ r.name }}" name="{{ r.name }}"{% if not owner %} disabled{% endif %}>{% for o in ("off", "hourly", "daily") %}<option{% if r.value == o %} selected{% endif %}>{{ o }}</option>{% endfor %}</select>
+{% elif r.secret %}<input type="password" id="s-{{ r.name }}" name="{{ r.name }}" placeholder="{{ 'set; empty keeps it' if r.set else 'none' }}" autocomplete="off"{% if not owner %} disabled{% endif %}>
+{% else %}<input type="{{ 'number' if r.type == 'int' else 'text' }}" id="s-{{ r.name }}" name="{{ r.name }}" value="{{ r.value }}" placeholder="{{ r.default }}"{% if not owner %} disabled{% endif %}>
+{% endif %}<span class="muted" style="font-size:12px"> <code>[{{ r.table }}] {{ r.name.split('.')[1] }}</code></span></td></tr>
+{% if loop.last %}</table>{% endif %}
+{% endfor %}
+{% if owner %}<p><button class="go">Save</button> <span class="muted" style="font-size:12.5px">Written to <code>config.toml</code> line by line: your comments and other keys stay. A value set back to its default is removed.</span></p>{% endif %}
+</form>
+{% if owner %}<form class="act" method="post" action="/settings/test-push"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini" title="Send one push to the ntfy topic above, as saved">Send a test push</button></form>{% endif %}
+<p class="muted" style="font-size:12.5px">Only a question from the runner and a Claude session blocked on a permission prompt push, each once, past its threshold, and not while its VS Code tab is in front of you. "Your turn" never pushes. Finished work, failures and your turn go to the digest, if you turn one on.</p>
+<h2 id="browser">Browser notifications</h2>
+<p><button type="button" class="mini" id="notify-browser">Turn on</button> <span class="muted" id="notify-browser-state"></span></p>
+<p class="muted" style="font-size:12.5px">While a board tab is open in this browser and hidden, the same questions and blocked sessions show as notifications. This is set per browser.</p>
+<h2 id="hooks">Claude Code hooks</h2>
+{% if owner %}{{ vs.hooks_switch(hooks, "/settings#hooks", csrf) }}{% else %}<p>{{ "On" if hooks else "Off" }}.</p>{% endif %}
+</div>
+</div>
+{% endblock %}

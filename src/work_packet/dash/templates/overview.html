@@ -3,6 +3,8 @@
 {% import "_panels.html" as xpm %}
 {% import "_tokens.html" as tkm %}
 {% import "_pause.html" as pz with context %}
+{% import "_open.html" as om with context %}
+{% import "_plan.html" as plm with context %}
 {% import "_vscode.html" as vsm %}
 {#- How every board is doing, what needs you, and token use (docs/overview.md). -#}
 {% block title %}Overview{% endblock %}
@@ -71,7 +73,7 @@ ul.list button.x:hover { color: var(--FAILED); }
   <a class="tile{{ ' hot' if t.needs }}" href="#attention"><div class="k">Needs you</div><div class="v">{{ t.needs }}</div>
     <div class="s">{% if t.oldest %}oldest waiting {{ t.oldest }}{% endif %}</div></a>
   <a class="tile{{ ' hot' if t.reviews }}" href="#attention" title="Work the runner finished that you have not looked at yet"><div class="k">Reviews</div><div class="v">{{ t.reviews }}</div>
-    <div class="s">{% if t.oldest_review %}oldest {{ t.oldest_review }}{% endif %}</div></a>
+    <div class="s">{% if t.oldest_review %}oldest {{ t.oldest_review }}{% endif %}{% if t.review_wip and t.reviews >= t.review_wip %} · <span class="err" title="[plan] review_wip: hand-offs warn at this many">over your limit of {{ t.review_wip }}</span>{% endif %}</div></a>
   <a class="tile{{ ' run' if t.progress }}" href="#running" title="Packets someone is working on: you, or the runner"><div class="k">In progress</div><div class="v">{{ t.progress }}</div>
     <div class="s">{% if ov.next_wake %}next wake {{ ov.next_wake }}{% endif %}</div></a>
   <a class="tile{{ ' bad' if t.failed }}" href="#attention"><div class="k">Failed</div><div class="v">{{ t.failed }}</div>
@@ -105,6 +107,16 @@ ul.list button.x:hover { color: var(--FAILED); }
 </nav>{% endif %}
 
 {% set focus = [] %}{% for col, cs in ov.cols.items() if col != "Done" %}{% for c in cs if c.plan.priority == "now" %}{% set _ = focus.append(c) %}{% endfor %}{% endfor %}
+{% if ov.brief %}{% set b = ov.brief %}
+<section class="panel todaybrief" style="margin:10px 0 0">
+  <div class="row" style="margin:0;justify-content:space-between"><strong>Today</strong>
+    <span class="muted" style="font-size:12.5px"><a href="/brief">the whole brief</a> · <a href="/standup">standup</a> · <a href="/review">weekly review</a>{% if ov.shutdown %} · <a href="/shutdown">end of the day</a>{% endif %}</span></div>
+  <ol style="margin:4px 0 0 18px;padding:0">{% for f in b.focus %}<li><a href="/p/{{ f.project|urlencode }}"><strong>{{ f.project }}</strong></a>
+    <span class="muted">{{ f.why|join(", ") or "next up" }}{% if f.next %} · Next: {{ f.next }}{% endif %}</span>
+    <form class="act" method="post" action="/brief/feedback" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="project" value="{{ f.project }}"><input type="hidden" name="back" value="/"><button class="mini" name="kind" value="not today">not today</button><button class="mini" name="kind" value="done already">done already</button></form></li>{% endfor %}</ol>
+  {% if b.handoff %}<div class="muted" style="font-size:12.5px;margin-top:4px">Hand off before you start: {% for h in b.handoff %}<a href="/p/{{ h.project|urlencode }}/compose">{{ h.project }}</a>{{ ", " if not loop.last }}{% endfor %}</div>{% endif %}
+</section>
+{% elif ov.shutdown %}<p class="muted" style="margin:8px 0 0"><a href="/shutdown">End of the day</a>: checkpoint, load the night shift, pick tomorrow's first.</p>{% endif %}
 <div class="row focusbar" style="margin:8px 0 0">
   {% if focus %}<span><strong>Focus:</strong> {% for c in focus %}<a href="/p/{{ c.name|urlencode }}">{{ c.name }}</a>{% if c.due %} <span class="muted">({{ c.due }})</span>{% endif %}{{ " · " if not loop.last }}{% endfor %}</span>{% else %}<span class="muted">Nothing in <em>now</em>: set a project's priority with Plan ▾, or on the <a href="/backlog">Backlog</a>.</span>{% endif %}
   <form class="act row" method="post" action="/inbox" style="margin:0 0 0 auto">
@@ -148,6 +160,9 @@ ul.list button.x:hover { color: var(--FAILED); }
     {% elif a.kind == "stale" %}<span class="state PAUSED" title="A session that said it was working has gone quiet">QUIET</span>
     {% elif a.kind == "done" %}<input type="checkbox" name="project" value="{{ c.name }}" aria-label="tick {{ c.name }}">{% if c.lifecycle == "open" %}<span class="state COMPLETED" title="The runner finished: look it over, then mark it done or hand it the next thing">REVIEW</span>{% else %}<span class="state COMPLETED">DONE</span>{% endif %}
     {% elif a.kind == "stopped" %}<input type="checkbox" name="project" value="{{ c.name }}" aria-label="tick {{ c.name }}"><span class="state PAUSED">STOPPED</span>
+    {% elif a.kind == "job" %}<a class="state {{ 'FAILED' if a.item.failed else 'COMPLETED' }}" href="/p/{{ c.name|urlencode }}/jobs/{{ a.item.job }}" title="A command you ran for it ended">JOB</a>
+    {% elif a.kind == "atrisk" %}<span class="state PAUSED" title="It may miss its due date: decide what gives">AT RISK</span>
+    {% elif a.kind == "rot" %}<span class="state PAUSED" title="Parked and untouched for longer than its priority allows: pick it up, lower it, or drop it">STALE</span>
     {% else %}<span class="state FAILED">FAILED</span>{% endif %}
     <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
     {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
@@ -162,6 +177,9 @@ ul.list button.x:hover { color: var(--FAILED); }
       <span class="muted">· nobody is working on it</span>
     {% elif a.kind == "stuck" %}{% set k = a.pkt %}<code>{{ k.name or k.short }}</code> sleeps, but
       {% for ch in k.children %}<code>{{ ch.short }}</code> is {{ ch.state }}{{ ", " if not loop.last }}{% endfor %}
+    {% elif a.kind in ("atrisk", "rot") %}<span class="ell" title="{{ a.item.text }}">{{ a.item.text }}</span>
+    {% elif a.kind == "job" %}<span class="ell{{ ' err' if a.item.failed }}">{{ a.item.text }}</span>
+      <span class="muted">· {{ a.item.since|epoch }}</span>
     {% elif a.kind in ("blocked", "yourturn", "stale") %}{{ a.item.text }}
       <span class="muted">· {{ a.item.since|epoch }}</span>
     {% elif a.kind in ("done", "stopped") %}{% set u = c.unread %}<span class="ell" title="{{ u.outcome }}">{{ u.outcome or ("finished" if a.kind == "done" else "stopped") }}</span>
@@ -173,8 +191,17 @@ ul.list button.x:hover { color: var(--FAILED); }
       <a class="mini" href="/p/{{ a.req.project|urlencode }}{{ '#answer' if a.req.state == 'NEEDS_INPUT' }}">{{ "Answer" if a.req.state == "NEEDS_INPUT" else "Open" }}</a>
     {% elif a.kind == "stuck" %}<button class="mini" form="act-{{ loop.index }}" title="Run it now">Wake</button>
     {% elif a.kind in ("done", "stopped") %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>{% if a.kind == "done" and c.lifecycle == "open" %}
-      <button class="mini" form="act-{{ loop.index }}" title="It is finished: take it off the active views (Reopen brings it back)">Done</button>{% endif %}
+      <button class="mini" form="act-{{ loop.index }}" title="It is finished: take it off the active views (Reopen brings it back)">Done</button>
+      <a class="mini" href="/p/{{ c.name|urlencode }}/compose" title="Hand the runner the next thing to do">Next…</a>
+      {{ om.menu(c) }}{% endif %}
       <button class="x" form="seen-one" name="project" value="{{ c.name }}" title="Take it off the list without opening it" aria-label="dismiss {{ c.name }}">×</button>
+    {% elif a.kind == "atrisk" %}<a class="mini" href="/p/{{ c.name|urlencode }}/compose" title="Give the runner more of it now">Hand it off now</a>
+      {{ plm.menu(c.name, c.plan, "/") }}
+      <a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>
+    {% elif a.kind == "rot" %}{{ plm.menu(c.name, c.plan, "/") }}
+      <a class="mini" href="/p/{{ c.name|urlencode }}/compose" title="Give it to the runner">Hand off…</a>
+      <a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>
+    {% elif a.kind == "job" %}<a class="mini" href="/p/{{ c.name|urlencode }}/jobs/{{ a.item.job }}">Open</a>
     {% elif a.kind in ("blocked", "yourturn", "stale") %}<a class="mini" href="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}#vscode-sessions">Open</a>
       {% if a.kind == "yourturn" %}<details class="snz"><summary class="mini" title="The board cannot type into your session: the reply waits as a note, and Claude gets it with your next prompt there">Reply</summary>
         <span class="snzitems"><input form="reply-{{ loop.index }}" name="note" placeholder="reaches it with your next prompt" aria-label="reply" required><button class="mini" form="reply-{{ loop.index }}" name="action" value="note">Send</button></span></details>{% endif %}
@@ -245,7 +272,8 @@ ul.list button.x:hover { color: var(--FAILED); }
   <li><span class="state PAUSED" title="You have it ({{ c.ball.text }})">YOU</span>
     {{ pz.badge(c) }}<a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
     <span class="what">{{ c.ball.text }}</span>
-    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}</li>
+    {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
+    {{ om.menu(c) }}</li>
 {% endfor %}
 {% for c in ov.running %}
   <li><span class="state running pulse">RUNNING</span>
@@ -253,7 +281,7 @@ ul.list button.x:hover { color: var(--FAILED); }
     <span class="what">{{ c.running.name or c.running.short }} step {{ c.running.step }}{% if c.running.for %}, {{ c.running.for }}{% endif %}
       {% if c.running.now %}<br><span class="muted ell">{{ c.running.now }}</span>{% endif %}</span>
     {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
-    {{ pz.button(c, "/#running") }}</li>
+    {{ pz.button(c, "/#running") }} {{ om.menu(c) }}</li>
 {% endfor %}
 </ul>
 {% else %}<p class="muted">Nobody is working on anything.</p>{% endif %}

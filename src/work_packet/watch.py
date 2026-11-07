@@ -51,6 +51,68 @@ def watchers(h=None):
     return out
 
 
+# --- editing from the board (docs/collaboration-plan.md G4) -----------------------
+
+def _load_board(board, h):
+    path = _board_file(board, h)
+    try:
+        return path, load_toml(path)
+    except FileNotFoundError:
+        if board != registry.DEFAULT_BOARD:
+            raise WatchError("no board %s" % board) from None
+        return path, {}                 # main has no file until it needs one
+    except (OSError, ValueError) as e:
+        raise WatchError("boards/%s.toml: %s; edit it by hand" % (board, e)) from None
+
+
+def _write_board(path, d, ws):
+    from .tomlio import save_toml
+    bad = ["%s: %s" % (p.field.split(".", 1)[-1], p.msg)
+           for p in schema.validate_watches(ws) if p.level == "error"]
+    if bad:
+        raise WatchError("; ".join(bad))
+    d = dict(d)
+    if ws:
+        d["watch"] = ws
+    else:
+        d.pop("watch", None)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    save_toml(path, d)
+
+
+def save(board, w, was=None, h=None):
+    """Add a watcher to ``board``, or replace the one named ``was`` (keys the form
+    doesn't show, such as ``query`` or ``model``, are kept). It is checked as
+    ``[[watch]]`` is; nothing is written if it doesn't pass."""
+    path, d = _load_board(board, h)
+    ws = [dict(x) for x in d.get("watch") or []]
+    w = {k: v for k, v in w.items() if v not in (None, "", [])}
+    if was:
+        i = next((i for i, x in enumerate(ws) if x.get("name") == was), None)
+        if i is None:
+            raise WatchError("%s has no watcher %s" % (board, was))
+        keep = {k: v for k, v in ws[i].items() if k not in FORM_KEYS}
+        ws[i] = dict(keep, **w)
+    else:
+        if any(x.get("name") == w.get("name") for x in ws):
+            raise WatchError("%s has a watcher %s already" % (board, w.get("name")))
+        ws.append(w)
+    _write_board(path, d, ws)
+    return w
+
+
+def remove(board, name, h=None):
+    """Remove a watcher. What it made stays; so does what it has seen."""
+    path, d = _load_board(board, h)
+    ws = [x for x in d.get("watch") or [] if x.get("name") != name]
+    if len(ws) == len(d.get("watch") or []):
+        raise WatchError("%s has no watcher %s" % (board, name))
+    _write_board(path, d, ws)
+
+
+FORM_KEYS = ("name", "repos", "dir", "labels", "every", "propose", "hold", "enabled", "pr")
+
+
 def find(spec, h=None):
     """Watchers named by ``board`` or ``board/name``; all for None."""
     ws = [w for w in watchers(h) if not w.get("problems")]
@@ -77,6 +139,7 @@ def load_state(w, h=None):
         s = {}
     s.setdefault("seen", {})        # "forge:owner/repo#n" -> project made
     s.setdefault("failed", {})      # "forge:owner/repo#n" -> the error, tried again
+    s.setdefault("dates", {})       # project -> the milestone date proposed for it
     return s
 
 
@@ -131,10 +194,12 @@ def known_issues(h=None):
 
 def poll(w, h=None, dry_run=False, now=None):
     """Poll one watcher. Returns {made: [(key, project)], would: [key],
-    failed: {key: error}, errors: [str]}. Only one poll of a watcher at a time
+    failed: {key: error}, errors: [str], proposed: [key]}. A watcher with
+    ``propose = true`` puts each new issue in the Inbox instead of making it.
+    Only one poll of a watcher at a time
     (a lock beside its state file)."""
     from . import forges, starters
-    out = {"made": [], "would": [], "failed": {}, "errors": []}
+    out = {"made": [], "would": [], "failed": {}, "errors": [], "proposed": [], "dates": []}
     lock = state_path(w, h) + ".lock"
     os.makedirs(os.path.dirname(lock), exist_ok=True)
     with open(lock, "w") as lf:
@@ -159,6 +224,11 @@ def poll(w, h=None, dry_run=False, now=None):
                 if not set(labels) <= set(i.get("labels") or []):
                     continue          # a forge that ignored the filter
                 k = _key(fname, repo, i["number"])
+                made = known.get(k) or s["seen"].get(k)
+                if made and not dry_run and not made.startswith("inbox:"):
+                    d = propose_date(made, i, k, s, h)
+                    if d:
+                        out["dates"].append(d)
                 if k in s["seen"]:
                     continue
                 if k in known:
@@ -169,6 +239,20 @@ def poll(w, h=None, dry_run=False, now=None):
         for k, ref, i in fresh[:w.get("max_new", MAX_NEW)]:
             if dry_run:
                 out["would"].append(k)
+                continue
+            if w.get("propose"):          # to the Inbox, for you to accept (collaboration.md W8)
+                from . import inbox
+                try:
+                    d = inbox.add(h or registry.home(), "%s (%s)" % (i.get("title") or k, k),
+                                  source="watch", board=w["board"],
+                                  ref={"watch": w["name"], "key": k, "url": i.get("url")})
+                except (ValueError, OSError) as e:
+                    s["failed"][k] = str(e)
+                    out["failed"][k] = str(e)
+                    continue
+                s["seen"][k] = "inbox:" + d["id"]
+                s["failed"].pop(k, None)
+                out["proposed"].append(k)
                 continue
             try:
                 plan = starters.make(recipe(w, k, h), h)
@@ -184,6 +268,30 @@ def poll(w, h=None, dry_run=False, now=None):
             s["errors"] = out["errors"]
             _save_state(w, s, h)
     return out
+
+
+def propose_date(project, issue, key, s, h=None):
+    """A due date from the issue's milestone, as an Inbox item for ``project``
+    (docs/collaboration.md §9.3, plan F3c): once per project and date, and only
+    when the project's due is not that date already. Returns the item's id."""
+    from . import inbox, planning
+    m = issue.get("milestone") or {}
+    due = m.get("due")
+    if not due or s["dates"].get(project) == due:
+        return None
+    e = registry.get(project, h)
+    if e is None or planning.get(e)["due"] == due:
+        s["dates"][project] = due
+        return None
+    try:
+        d = inbox.add(h or registry.home(), "%s: issue %s's milestone %s is due %s" % (
+            project, key, m["title"], due), source="date", project=project,
+            ref={"date": due, "project": project, "from": "%s milestone %s" % (key, m["title"]),
+                 "url": issue.get("url")})
+    except (ValueError, OSError):
+        return None
+    s["dates"][project] = due
+    return d["id"]
 
 
 def _expand(refs, h, errors):

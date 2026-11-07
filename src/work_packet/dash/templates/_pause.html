@@ -29,3 +29,15 @@
 </form>
 {% endif %}
 {%- endmacro %}
+{#- The scribe's draft as a proposal (docs/collaboration-plan.md G3). -#}
+{% macro draft(c, back) -%}
+{% if c.draft and c.root and not c.running %}
+<form class="act pz asof" method="post" action="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}/act">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="back" value="{{ back }}">
+  <span title="the scribe drafted the status above from the end of a session; accept it as yours, or edit it">draft checkpoint</span> ·
+  <button class="mini" name="action" value="accept-draft">Accept</button>
+  <a href="/p/{{ c.name|urlencode }}/{{ c.root.wpid }}#checkpoint">Edit</a>
+</form>
+{% endif %}
+{%- endmacro %}

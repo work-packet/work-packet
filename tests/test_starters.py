@@ -286,7 +286,7 @@ def test_watch_an_org_and_the_board_page(forge, tmp_path):
     _watch_board(tmp_path, repos=["home:owner/*"])
     [w] = watch.watchers()
     assert watch.poll(w, dry_run=True) == {"made": [], "would": ["home:owner/dv-solve#7"],
-                                           "failed": {}, "errors": []}
+                                           "failed": {}, "errors": [], "proposed": [], "dates": []}
     c = _client()
     page = c.get("/b/solver").text
     assert 'id="watchers"' in page and "home:owner/*" in page and "polled never" in page

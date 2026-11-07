@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{#- Keep a recurring correction as a rule (docs/collaboration.md §7.7, plan C7c). -#}
+{% block title %}Keep a rule{% endblock %}
+{% block main %}
+<div style="max-width:760px">
+<h1>Keep it as a rule</h1>
+<p>You have said this {{ ref.times }} time{{ "s" if ref.times != 1 }}. Kept, it goes under <code>## Learned</code> in each project's <code>agent.md</code>, which every later step reads, so you don't have to say it again.</p>
+<form class="act" method="post" action="/learn/{{ d.id }}"><input type="hidden" name="csrf" value="{{ csrf or '' }}">
+<p><label for="rule">The rule</label><br>
+<textarea id="rule" name="rule" rows="3" style="width:100%" required{% if not owner %} disabled{% endif %}>{{ ref.rule }}</textarea></p>
+<p>Into:</p>
+<p>{% for n in names %}<label style="margin-right:12px"><input type="checkbox" name="project" value="{{ n }}"{% if n in ref.projects %} checked{% endif %}{% if not owner %} disabled{% endif %}> {{ n }}</label>{% endfor %}</p>
+{% if owner %}<p><button class="go">Keep it</button> <a href="/backlog">Not now</a></p>{% endif %}
+</form>
+</div>
+{% endblock %}

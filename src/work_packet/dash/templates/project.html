@@ -41,6 +41,36 @@
 {{ vsm.table(vsc, where=True) }}
 {{ vsm.scribe_switch(scribe_on, "/p/" ~ (e.name|urlencode) ~ "#vscode-sessions", csrf) }}
 {% endif %}
+{% if sv.me or sv.splits %}
+<h2 id="split">Split</h2>
+{% if sv.me %}{% set m = sv.me %}
+<p>A split of <a href="/p/{{ m.of|urlencode }}"><strong>{{ m.of }}</strong></a>: the runner works here, on branch <code>{{ m.branch }}</code> from <code>{{ m.base[:8] }}</code>, and <code>{{ m.folder }}</code> is left alone.</p>
+{% if m.error %}<p class="err">{{ m.error }}</p>{% elif m.diff %}{% set d = m.diff %}
+{% if d.commits %}<p>Commits:</p><ul>{% for ln in d.commits %}<li><code>{{ ln }}</code></li>{% endfor %}</ul>{% endif %}
+{% if d.stat %}<pre class="log">{{ d.stat }}</pre>{% endif %}
+{% if d.untracked %}<p>New files: {% for u in d.untracked %}<code>{{ u }}</code>{{ ", " if not loop.last }}{% endfor %}</p>{% endif %}
+{% if d.text %}<details><summary>The diff{% if d.cut %} (cut short){% endif %}</summary><pre class="log">{{ d.text }}</pre></details>{% endif %}
+{% if not (d.commits or d.stat or d.untracked) %}<p class="muted">No changes yet.</p>{% endif %}
+{% endif %}
+{% if is_owner and card.lifecycle == "open" %}<form class="act" method="post" action="/p/{{ e.name|urlencode }}/split"><input type="hidden" name="csrf" value="{{ csrf or '' }}">
+<button class="go primary" name="op" value="land"{% if m.busy %} disabled title="{{ m.busy }}"{% else %} title="Commit what it left, then merge its branch into {{ m.of }}'s folder; git refuses if your own edits would be overwritten"{% endif %}>Bring it into {{ m.of }}</button>
+<button class="go" name="op" value="drop" title="Mark it dropped; its folder and branch stay">Drop the split</button>{% if m.busy %} <span class="muted">{{ m.busy }}</span>{% endif %}</form>{% endif %}
+{% if is_owner and card.lifecycle != "open" %}<form class="act" method="post" action="/p/{{ e.name|urlencode }}/split" data-confirm="Remove {{ e.name }}'s folder? Its worktree goes and it leaves the board; its journal is kept under splits/removed/. The branch {{ m.branch }} goes only if it was brought in."><input type="hidden" name="csrf" value="{{ csrf or '' }}">
+<button class="go" name="op" value="remove">Remove its folder</button> <span class="muted">it is {{ card.lifecycle }}</span></form>{% endif %}
+{% endif %}
+{% if sv.splits %}<p>Splits of this project:</p><ul>{% for s in sv.splits %}<li><a href="/p/{{ s.name|urlencode }}">{{ s.name }}</a> <span class="muted">· {{ s.state }}{% if s.lifecycle != "open" %} · {{ s.lifecycle }}{% endif %} · branch <code>{{ s.branch }}</code></span></li>{% endfor %}</ul>{% endif %}
+{% endif %}
+{% if jobs or is_owner %}
+<h2 id="jobs">Jobs</h2>
+{% if jobs %}<table class="kv">{% for j in jobs %}
+<tr><td><a class="state {{ {'running': 'RUNNING', 'ok': 'COMPLETED', 'failed': 'FAILED', 'lost': 'FAILED'}[j.state] }}" href="/p/{{ e.name|urlencode }}/jobs/{{ j.id }}">{{ j.state|upper }}</a></td>
+<td><a href="/p/{{ e.name|urlencode }}/jobs/{{ j.id }}"><code>{{ jobs_label(j.cmd, 60) }}</code></a>
+<span class="muted">· {{ j.by }} · {{ j.start|epoch }}{% if j.state == "running" %} · {{ span(now_t - j.start) }} so far{% elif j.end %} · took {{ span(j.end - j.start) }}{% endif %}{% if j.state == "failed" %} · exit {{ j.exit }}{% endif %}</span></td></tr>
+{% endfor %}</table>{% if more_jobs %}<p class="muted">and {{ more_jobs }} older</p>{% endif %}
+{% else %}<p class="muted">No jobs yet. A long command you run for this project (<code>wpk run -- make sim</code> in its folder, or below) shows here, and the card waits on it while it runs.</p>{% endif %}
+{% if is_owner %}<form class="act" method="post" action="/p/{{ e.name|urlencode }}/jobs"><input type="hidden" name="csrf" value="{{ csrf or '' }}">
+<input name="cmd" placeholder="make sim" aria-label="command" required style="min-width:280px"> <button class="mini" title="Runs in the project's folder, in the background, as wpk run">Run a command</button></form>{% endif %}
+{% endif %}
 <h2>Tasks</h2>
 {{ ptm.table(e, tasks) }}
 {% endblock %}

@@ -61,6 +61,11 @@ executor; if you change one, this step is thrown away.
   If the step prompt lists "Job sizes", `size: <name>` gives the next
   step a job of that size, for that step only.
 
+  If you find work that is not this task's (a second bug, a cleanup, a
+  missing test elsewhere), don't do it: add `follow_ups:`, a list of up to
+  5 one-line descriptions. Each goes to the owner's Inbox, for them to
+  decide on.
+
   To ask the person who owns the task something, add `ask: <question>`
   next to `resume`. The packet then waits: no step runs until they hand it
   back, and their answer is under "Hand-off" in the next step's prompt.

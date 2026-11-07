@@ -301,6 +301,14 @@ Decisions taken for the build (§9 answered with the recommendations):
 `doctor` is the checker's name; smoke runs warn; `origin` stays the local
 path; no history learning yet; our own pty + pyte widget.
 
+Since 2026-11-06 (`collaboration-plan.md` C2, C3), `wpk doctor` also reports
+the packet-local Claude Code hooks ("hooks: installed / modified / off") and
+`--fix` installs them. **Setup is no longer a state a person sees**: a packet
+that has not been handed off is *Parked*, worked by you, and the checks below
+run as the hand-off dialog's pre-flight (missing items are listed, and "hand off
+anyway" is allowed). `REASON_SETUP` remains internally, and the CLI guard on
+`resume`/`handoff` is kept.
+
 Until L1 lands there is no `HELD` state: a project held for setup is
 `PAUSED` with `reason: setup`, and its memento body is empty. `wpk check`
 accepts the empty memento in that state. `wpk resume` and `wpk handoff`

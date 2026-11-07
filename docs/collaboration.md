@@ -1,6 +1,9 @@
 # Working together: a dashboard and working model for people and agents
 
-Status: proposal for review (2026-11-06). Nothing here is built. It reframes
+Status (2026-11-07): built, phases C0-C7 and F1-F3, with gaps listed per step in
+`collaboration-plan.md`. Two parts are not built: §5.3 waits for triggers, and
+the F2 brief is a board job, not a routine packet (plan D9). How to use it:
+`collaboration-guide.md`. Proposed 2026-11-06. It reframes
 `product.md` §1 principle 2 ("one owner at a time"). It builds on
 `session-checkpoint.md`, `vscode-monitor-plan.md`, `orientation.md`,
 `ergonomics.md`, `long-running.md` §1 (HELD) and `workflow-review.md`, and
@@ -239,7 +242,9 @@ Claude Code hooks**:
   marker or a hook record) treats `end_turn` as **waiting**, not finished.
   Finished stays the label for runner steps.
 - Codex: use its `notify` hook for turn end. A permission wait is only inferred
-  there. Say so on the card ("probably waiting").
+  there. Say so on the card ("probably waiting"). *Not measured yet: Codex
+  wasn't signed in for the spike, and `notify` lives in Codex's global config
+  (plan §2a).*
 - Hooks write no prompt or reply text. A last-message preview reads the transcript
   tail and is behind the existing opt-in (`[ide] sessions_scribe`, D2).
 
@@ -318,6 +323,9 @@ and the risk line: "both editing <folder>". On a git packet, the board suggests
 split (§5.4).
 
 ### 5.3 Triggers, schedules and children while attended
+
+*Awaits triggers (`triggers.md`, design only). The presence gate and the
+**decision** item type are built and ready for it.*
 
 They are queued as **decision** items ("trigger *nightly-regress* fired 09:12:
 run now / after you leave / skip"). The default is *after you leave*. This
@@ -697,6 +705,9 @@ remaining work is the runner's, and wpk has history to forecast it with
 
 ### 9.4 The daily focus brief
 
+*Built without routines (plan D9): the board builds the brief each morning and
+keeps it under `$WPK_HOME/briefs/`.*
+
 Each morning (time set per person, default 08:30 on weekdays) wpk writes a
 **brief**. It is short enough to read in a minute and has four parts:
 
@@ -870,7 +881,7 @@ Each phase can be used on its own. The order follows value per unit of work.
 | **C3** | New-packet start modes (W1); Open ▾ on every card; hand-off dialog with pre-flight and the dirty-tree choice (W4). | "new packet assumes hand-off" |
 | **C4** | Desk: typed inbox, In progress, Since you were last here, Timeline tab, split cost. | "recent activity ignores humans" |
 | **F1** | Planning fields (`plan:` in the card: priority, rank, due, blocked_by), *now* WIP limit, priority→class mapping, Backlog view, quick capture into Inbox, rot detection. Deterministic only. Can run alongside C2-C4. | pending, priorities, backlog |
-| **F2** | Daily focus brief as a routine packet (deterministic score with reasons), on Desk and in the first SessionStart briefing; end-of-day shutdown with "load the night shift". | "here's where to focus" |
+| **F2** | Daily focus brief (deterministic score with reasons), built as a board job rather than a routine packet (plan D9), on Desk and in the first SessionStart briefing; end-of-day shutdown with "load the night shift". | "here's where to focus" |
 | **C5** | SessionStart briefing, notes into interactive sessions, continue a runner step in VS Code, `/wpk-handoff`. | turnover in both directions |
 | **C6** | Push notifications (blockers past threshold), digest, attention budget, snooze, Inbox triage. | attention |
 | **C7** | Split / pairing, jobs as workers (`work-sessions.md` 1-4), learn-from-corrections, VS Code status bar. | concurrency, history |

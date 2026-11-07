@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% import "_side.html" as sidem with context %}
+{#- The daily focus brief (docs/collaboration.md §9.4): today's, or a day before. -#}
+{% block title %}Brief {{ day }}{% endblock %}
+{% block main %}
+<div class="withside">
+{{ sidem.tab(side, none, "brief") }}
+<div style="max-width:760px">
+<div class="row" style="justify-content:space-between">
+  <h1 style="margin:0">Focus brief</h1>
+  <form class="act" method="post" action="/brief/build"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="/brief"><button class="mini" title="Build today's again from what the board knows now">Rebuild today's</button></form>
+</div>
+{% if html %}<div class="md panel">{{ html|safe }}</div>
+{% else %}<p class="muted">No brief for {{ day }} yet. The board writes one each weekday morning ([focus] time, 08:30 unless set); Rebuild makes today's now.</p>{% endif %}
+<p class="muted" style="font-size:12.5px">Also: <a href="/standup">standup</a> · <a href="/review">weekly review</a> · status per board, from each board's page or <a href="/status/main">main</a>.</p>
+{% if days %}<h2>Earlier</h2>
+<p>{% for d in days %}<a href="/brief/{{ d }}"{% if d == day %} style="font-weight:700"{% endif %}>{{ d }}</a>{{ " · " if not loop.last }}{% endfor %}</p>{% endif %}
+<p class="muted" style="font-size:12.5px">Every line comes from the board's own data, with no model call. Focus is scored by your priority, then deadlines, then what unblocks the runner, then how long it has waited; each suggestion says why.</p>
+</div>
+</div>
+{% endblock %}

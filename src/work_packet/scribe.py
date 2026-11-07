@@ -303,7 +303,8 @@ def due(home, now, cfg, records=None):
         w = r.get("last_work_t")
         if not (r.get("project") and r.get("wpid") and w) or now - w > MAX_AGE_S:
             continue
-        ended = r.get("attribution") == ide_sessions.CONFIRMED and not r.get("live")
+        ended = r.get("attribution") in (ide_sessions.CONFIRMED, ide_sessions.HOOK) \
+            and not r.get("live")
         if not (ended or now - (r.get("last_activity_t") or 0) >= idle):
             continue
         k = (r["project"], r["wpid"])

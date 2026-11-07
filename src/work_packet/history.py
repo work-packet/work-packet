@@ -250,7 +250,7 @@ def _tasks_and_questions(recs):
             for q in r["questions"]:
                 qid = q.get("id") or "q"
                 questions.append({"qid": qid, "asked": asked_at or r["t"], "answered": r["t"],
-                                  "answer": ans.get(qid)})
+                                  "answer": ans.get(qid), "by": r.get("by")})
     if cur is not None:
         tasks.append(cur)
     return tasks, questions
