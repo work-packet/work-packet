@@ -16,6 +16,9 @@ from .. import clock, fsutil, procs, registry, schema
 
 TTL_S = 90
 REFRESH_S = 30
+# Set by a wpkd that exec'd itself to restart (dash/restart.py): the lease
+# naming this host and pid is the old image's, so ours.
+RESTART_ENV = "WPK_RESTARTED"
 
 
 class HomeBusy(Exception):
@@ -89,8 +92,10 @@ class HomeLease:
             except FileExistsError:
                 held = read(self.h)
                 if held and not stale(held):
-                    raise HomeBusy(held, self.path) from None
-                # Expired or dead: take it. A rename over it is atomic, and the
+                    if not self._ours(held):
+                        raise HomeBusy(held, self.path) from None
+                    rec = self._record(held.get("started"))
+                # Expired, dead or ours: take it. A rename over it is atomic, and the
                 # read-back below catches a race with another taker.
                 fsutil.atomic_write(self.path, json.dumps(rec) + "\n")
             else:
@@ -102,6 +107,13 @@ class HomeLease:
                 self.mine = rec
                 return self
         raise HomeBusy(read(self.h) or {}, self.path)
+
+    @staticmethod
+    def _ours(held):
+        """The lease the image before an in-place restart held: same host, same pid."""
+        return (os.environ.get(RESTART_ENV) is not None
+                and held.get("host") == socket.gethostname()
+                and held.get("pid") == os.getpid())
 
     def refresh(self):
         held = read(self.h) or {}
@@ -123,6 +135,11 @@ class HomeLease:
                     pass
         self._thread = threading.Thread(target=loop, name="wpkd-lease", daemon=True)
         self._thread.start()
+
+    def keep(self):
+        """Stop refreshing but leave the file: the process is about to exec into
+        a wpkd that takes the lease over (``_ours``) within its TTL."""
+        self._stop.set()
 
     def release(self):
         self._stop.set()

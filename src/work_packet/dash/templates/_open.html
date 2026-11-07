@@ -1,15 +1,16 @@
 {#- Open ▾ (docs/collaboration.md §8.3): work on a project yourself, from wherever its
-    card is. Import "with context" (csrf, ide, ide_web). ``c``: a card. -#}
-{% macro menu(c, cls="mini") -%}
-{% if c.root and c.lifecycle == "open" %}
-<details class="openmenu">
+    card is. Import "with context" (csrf, ide, ide_web). ``c``: a card; ``key`` keeps ids apart
+    when one page lists a card twice (live.js keeps open menus by id). -#}
+{% macro menu(c, cls="mini", key="") -%}
+{% if c.root and c.lifecycle == "open" and (ide.desktop or ide_web or not c.running) %}
+<details class="openmenu" id="open-{{ key }}{{ c.name }}">
   <summary class="{{ cls }}" title="Work on it yourself in VS Code: it is yours, and the runner leaves it, until you hand it back">Open ▾</summary>
   <div class="openitems">
-    {% if ide.desktop or ide_web == "ok" %}
+    {% if ide.desktop or ide_web %}
     <form class="act" method="post" action="/p/{{ c.name|urlencode }}/ide">
       <input type="hidden" name="csrf" value="{{ csrf or '' }}">
       <input type="hidden" name="wpid" value="{{ c.root.wpid }}">
-      {% if ide_web == "ok" %}<button class="{{ cls }}" name="go" value="web" formtarget="_blank">VS Code (browser)</button>{% endif %}
+      {% if ide_web %}<button class="{{ cls }}" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>VS Code (browser)</button>{% endif %}
       {% if ide.desktop %}<button class="{{ cls }}" name="go" value="desktop">VS Code (desktop)</button>{% endif %}
     </form>
     {% endif %}
@@ -19,7 +20,6 @@
       <button class="{{ cls }}">Studio</button>
     </form>
     {% endif %}
-    <a class="{{ cls }}" href="/p/{{ c.name|urlencode }}/compose">Shell and files</a>
   </div>
 </details>
 {% endif %}

@@ -27,7 +27,8 @@ nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(-
 <script src="/static/sched.js?v={{ asset_v }}"></script>{# data-confirm on Stop now #}
 <div class="pbar">
   {% if card.root and card.root.state == "NEEDS_INPUT" and not card.running %}<a class="btn hi" href="{{ base }}#answer" title="It is waiting on you: answer its questions">Answer</a>{% endif %}
-  {% if can_task %}<a class="btn hi" href="{{ base }}/compose" title="Compose: instruction, inputs, settings, shell">{{ "Set it up" if card.setup else "New task" }}</a>{% endif %}
+  {% if can_task or card.setup %}<a class="btn hi" href="{{ base }}/compose" title="Compose: instruction, inputs, settings, shell">{{ "Set it up" if card.setup else "New task" }}</a>
+  {% elif not e.archived %}<a class="btn" href="{{ base }}/compose" title="Compose: instruction, inputs, settings, shell">Compose</a>{% endif %}
   {% if card.running %}<a class="btn hi" href="{{ base }}/{{ card.running.wpid }}/live">Live view</a>{% endif %}
   {% if not e.archived %}{{ pz.button(card, base, "btn", stop=True) }}{% endif %}
   {% if og and og.forge and card.root and not card.running and card.root.state in ("COMPLETED", "FAILED", "PAUSED", "NEEDS_INPUT") %}
@@ -69,10 +70,10 @@ nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(-
   {% if ide.desktop %}
   <details class="menu" id="vscode"><summary class="btn">Open in VS Code ▾</summary>
   <div class="panel">
-  <form class="act row" method="post" action="{{ base }}/ide">
+  <form class="act" method="post" action="{{ base }}/ide" style="display:flex;flex-direction:column;align-items:flex-start;gap:6px">
     <input type="hidden" name="csrf" value="{{ csrf or '' }}">
-    <button class="go" name="go" value="desktop">Open the project</button>
-    {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>In the browser</button>{% endif %}
+    <button class="go" name="go" value="desktop" title="Open the project in VS Code on your desktop">Desktop</button>
+    {% if ide_web %}<span class="row"><button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% else %} title="Open the project in VS Code in a new browser tab"{% endif %}>Browser</button>{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}</span>{% endif %}
     <span class="muted" style="font-size:12px">{{ "The root packet's worktrees and state/." if card.root and not card.setup else "Its root: work/, state/ and the prompt." }}</span>
   </form>
   {% if work %}

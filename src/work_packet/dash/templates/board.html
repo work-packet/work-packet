@@ -54,7 +54,12 @@
 .card .body { padding: 0 8px 6px; }
 .card .line { font-size: 12.5px; margin-top: 3px; }
 .card .sum { font-size: 12.5px; margin-top: 4px; color: var(--muted); }
-.cardpz { display: flex; gap: 6px; align-items: center; justify-content: flex-end; margin-top: 6px; }
+.cardpz { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; margin-top: 6px; }
+.cardpz summary { white-space: nowrap; }
+/* The board scrolls, which clips a dropdown: in a card, an open menu takes its own row. */
+.cardpz :is(.openmenu, .planmenu)[open] { flex-basis: 100%; text-align: right; }
+.cardpz :is(.openmenu, .planmenu)[open] > summary { display: inline-block; }
+.cardpz :is(.openitems, .planitems) { position: static; margin-top: 4px; text-align: left; min-width: 0; box-sizing: border-box; }
 .cardpz form.pz { display: inline-flex; gap: 6px; margin: 0; }
 .badge { font-size: 11px; font-weight: 700; color: #fff; background: var(--FAILED);
   border-radius: 9px; padding: 0 6px; }
@@ -148,7 +153,7 @@
         <span class="muted" style="margin-left:auto">{{ c.spend_total|money }}{% if c.spend_today %} ({{ c.spend_today|money }} today){% endif %}</span>
       </div>
       <div class="line muted">step {{ c.root.step if c.root else "?" }} · last step {{ c.last_step }}</div>
-      <div class="cardpz"><a class="mini" href="{{ href }}">Page</a>{{ om.menu(c) }}{{ plm.menu(c.name, c.plan, "/b/" ~ (here.name|urlencode), milestones) }}{{ pz.button(c, "/b/" ~ (here.name|urlencode)) }}{{ pz.mark(c, "/b/" ~ (here.name|urlencode)) }}</div>
+      <div class="cardpz"><a class="mini" href="/p/{{ c.name|urlencode }}">Page</a>{{ om.menu(c) }}{{ plm.menu(c.name, c.plan, "/b/" ~ (here.name|urlencode), milestones) }}{{ pz.button(c, "/b/" ~ (here.name|urlencode)) }}{{ pz.mark(c, "/b/" ~ (here.name|urlencode)) }}</div>
     </div>
     </details>
     {% endfor %}

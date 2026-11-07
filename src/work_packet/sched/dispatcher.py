@@ -79,6 +79,7 @@ class Dispatcher:
         self.backoff_s = 0
         self.last_plan = None           # (items, reasons, ctx) of the last fill
         self._sent = set()              # job IDs this dispatcher sent a cancel to
+        self.no_drain = False           # stop without waiting for steps (restart --force)
 
     def cfg(self):
         return self._cfg if self._cfg is not None else sconfig.load(self.h)
@@ -580,7 +581,8 @@ class Dispatcher:
         if self.backend.name != "local":
             return
         deadline = None if timeout is None else time.monotonic() + timeout
-        while self.backend.running() and (deadline is None or time.monotonic() < deadline):
+        while self.backend.running() and not self.no_drain and (
+                deadline is None or time.monotonic() < deadline):
             self.reap()
             time.sleep(0.05)
         self.reap()

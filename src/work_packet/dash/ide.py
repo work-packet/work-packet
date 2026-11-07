@@ -277,6 +277,45 @@ class Backend:
             ide_launch.update(self.home, self.key, cur["launch_id"], ended=time.time())
         log.info("stopped VS Code's server %s", self.key)
 
+    def detach(self):
+        """Let go of the server and leave it running, with its pid file and
+        socket, for the image an in-place restart execs into to adopt."""
+        if self._idle is not None:
+            self._idle.cancel()
+        self.proc = None
+
+    async def adopt(self):
+        """At the board's start: take over a server an earlier board left
+        (restarted or crashed), so its idle timer runs even if no tab comes
+        back. A dead one's files are cleared and its launch ended."""
+        async with self._lock:
+            if self.proc is not None:
+                return self.running()
+            if self._adopt():
+                log.info("using VS Code's server %s left by an earlier board, pid %d",
+                         self.key, self.proc)
+                self.last = self._clock()
+                if self._idle is None or self._idle.done():
+                    self._idle = asyncio.ensure_future(self._idle_loop())
+                return True
+            self._clear_leftover()
+            return False
+
+    def _clear_leftover(self):
+        try:
+            with open(self.pid_path) as fp:
+                pid = int(fp.read().split()[0])
+        except (OSError, ValueError, IndexError):
+            return
+        if _alive(pid):
+            return                       # not answering on our socket: not ours to touch
+        for p in (self.pid_path, self.sock):
+            with contextlib.suppress(OSError):
+                os.unlink(p)
+        cur = ide_launch.current(self.home, self.key)
+        if cur is not None and cur.get("pid") == pid and not cur.get("ended"):
+            ide_launch.update(self.home, self.key, cur["launch_id"], ended=time.time())
+
     def stop(self):
         """With the board. Call it on the board's event loop thread."""
         if self._idle is not None:
@@ -742,6 +781,31 @@ class Backends:
         for b in self.servers.values():
             b.stop()
 
+    def detach(self):
+        """An in-place restart: every server is left running, for the next
+        image to adopt (``adopt``). Job servers are left anyway."""
+        for b in self.servers.values():
+            b.detach()
+        self.servers.clear()
+
+    async def adopt(self):
+        """Take over the local servers an earlier board left running: their
+        idle timers and ``max_servers`` count from now. Returns their keys."""
+        if self.slot:
+            return []                   # job servers re-attach through their records
+        root = os.path.join(self.home, "ide", "servers")
+        try:
+            keys = sorted(k for k in os.listdir(root) if KEY.match(k)
+                          and os.path.exists(os.path.join(root, k, "serve.pid")))
+        except OSError:
+            return []
+        got = []
+        for k in keys:
+            be = self.get(k)
+            if be is not None and await be.adopt():
+                got.append(k)
+        return got
+
 
 def _alive(pid):
     """Running (a zombie is not: it has exited and waits for its parent)."""
@@ -753,9 +817,15 @@ def _alive(pid):
         return True
     try:
         with open("/proc/%d/stat" % pid) as fp:
-            return fp.read().rpartition(")")[2].split()[0] != "Z"
+            if fp.read().rpartition(")")[2].split()[0] != "Z":
+                return True
     except (OSError, IndexError):
         return True
+    # An adopted server is our child after an in-place restart (restart.py), with
+    # no Popen to reap it.
+    with contextlib.suppress(ChildProcessError):
+        os.waitpid(pid, os.WNOHANG)
+    return False
 
 
 def _wait(p, timeout):

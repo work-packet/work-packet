@@ -228,6 +228,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             return why
         host = split_host(request.headers.get("host", ""))[0] or ""
         if request.url.scheme != "https" and host not in ("localhost", "127.0.0.1", "::1"):
+            if request.scope.get("state", {}).get("listener") == "tailnet":
+                return ('needs HTTPS: set tls = "tailscale" under [server] in config.toml '
+                        "and restart wpk serve (docs/server.md §2.3)")
             return "needs HTTPS: open the board as localhost (ssh -L) or turn on TLS"
         return "ok"
 
@@ -845,7 +848,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         from .. import jobs, split as split_mod
         jl = await run_in_threadpool(jobs.all_jobs, e["path"])
         sv = await run_in_threadpool(split_mod.view, e, home)
+        auto = request.query_params.get("open")    # just made: open it (collaboration.md W1)
         return render(request, "project.html", rp=rp, live=True, asks=asks, vsc=vsc,
+                      autoopen=auto if auto in ("ide-web", "ide-desktop", "studio") else None,
                       jobs=jl[:10], more_jobs=max(len(jl) - 10, 0), now_t=time.time(),
                       is_owner=is_owner(request), sv=sv,
                       span=views.span, jobs_label=jobs.label,
@@ -1953,18 +1958,16 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         return RedirectResponse(made(plan, start), status_code=303)
 
     def made(plan, start):
-        """The page to go to once ``plan`` is made (``start``: one of ``STARTS``). For
-        VS Code or the studio, its packet page, which opens it (``open=``)."""
+        """The page to go to once ``plan`` is made (``start``: one of ``STARTS``): its
+        overview, which for VS Code or the studio opens it (``open=``)."""
         q = {"ok": "1"}
+        url = "/p/%s" % urllib.parse.quote(plan.name)     # its overview, however it starts
         if start == "handoff":
             poke()
-            url = "/p/%s" % urllib.parse.quote(plan.name)
             q["msg"] = "created %s at %s; the runner has it" % (plan.name, plan.path)
         elif start == "none":
-            url = "/p/%s/%s" % (urllib.parse.quote(plan.name), plan.root)
             q["msg"] = "created %s at %s" % (plan.name, plan.path)
         else:
-            url = "/p/%s/%s" % (urllib.parse.quote(plan.name), plan.root)
             q.update(open=start, msg="created %s at %s; opening it" % (plan.name, plan.path))
         return "%s?%s" % (url, urllib.parse.urlencode(q))
 

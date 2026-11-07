@@ -13,6 +13,14 @@
       history.replaceState(null, "", location.pathname + location.hash);
       setTimeout(function () { f.submit(); }, 300);
     }
+    // The packet overview: old anchors moved to tabs (docs/packet-page.md §2.5).
+    if (document.querySelector("[data-old-anchors]")) {
+      var to = {"#tokens": "/cost", "#context": "/cost#context", "#settings": "/settings",
+                "#sched": "/settings#sched"};
+      var h = location.hash, base = location.pathname.replace(/\/$/, "");
+      if (to[h]) location.replace(base + to[h]);
+      if (h === "#vscode") { var d = document.getElementById("vscode"); if (d) d.open = true; }
+    }
     // The Desk: you are here, so "since you were last here" counts from your next visit.
     var v = document.querySelector("[data-visit]");
     if (v && window.fetch) {

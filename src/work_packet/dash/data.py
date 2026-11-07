@@ -296,6 +296,9 @@ def tasks(entry, nodes):
         if cur is not None:
             cur.append(dict(n, kind="child"))
     out = []
+    if (batch == 1 and not why and not root["steps"] and not root["running"] and not subtrees
+            and not (_read(os.path.join(entry["path"], "prompt.md")) or "").strip()):
+        return []                   # just made, nothing asked of it yet: no task
     for i in range(1, batch + 1):
         st = [s for s in root["steps"] if of.get(s["n"], 1) == i]
         done = [s for s in st if s["outcome"] == "committed"]

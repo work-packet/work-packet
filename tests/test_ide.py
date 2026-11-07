@@ -239,7 +239,7 @@ def test_board_opens_the_project_on_loopback(home, source, tmp_path):
     proj, pkt = setup_root(tmp_path, source)
     c, origin, tok = _board_client("loopback")
     page = c.get("/p/dvs").text
-    assert "Open the project" in page and "Your clone" in page and "Open (shared)" in page
+    assert "on your desktop\">Desktop</button>" in page and "Your clone" in page and "Open (shared)" in page
     assert "Packet worktree" not in page                     # none before a step
     ws = os.path.join(proj, ".vscode", "project.code-workspace")
     # a browser on this machine: VS Code here first
@@ -293,7 +293,7 @@ def test_board_without_desktop_buttons(home, source, tmp_path):
     proj, pkt = setup_root(tmp_path, source)
     open(os.path.join(home, "config.toml"), "w").write("[ide]\ndesktop = false\n")
     c, origin, tok = _board_client("loopback")
-    assert "Open the project" not in c.get("/p/dvs").text
+    assert "on your desktop\">Desktop</button>" not in c.get("/p/dvs").text
 
 
 # --- web VS Code (V3) ----------------------------------------------------------------

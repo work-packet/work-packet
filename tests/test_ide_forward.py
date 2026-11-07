@@ -154,6 +154,15 @@ def test_tokens_are_reused_and_expire():
     assert t.resolve(c) is None and t.resolve(None) is None
 
 
+def test_rewrite_html():
+    h = ide_forward.rewrite_html
+    assert h(b'<base href="http://localhost:4000/s/">', 4000, "/fwd/t") == b'<base href="/fwd/t/s/">'
+    assert h(b'"HTTP://127.0.0.1:4000" http://[::1]:4000/x', 4000, "/fwd/t") == b'"/fwd/t" /fwd/t/x'
+    for other in (b"http://localhost:40000/", b"http://localhost:400/", b"http://example.com:4000/",
+                  b"ws://localhost:4000/"):
+        assert h(other, 4000, "/fwd/t") == other
+
+
 def test_rewrite_workbench():
     page = b'<meta x="&quot;enableWorkspaceTrust&quot;:true"><script src=a></script><script>'
     got = rewrite_workbench(page, True, True)
@@ -231,12 +240,18 @@ def test_a_localhost_link_is_forwarded_sandboxed(short_home, tmp_path):
         assert r.headers["access-control-allow-origin"] == "*"
         assert "access-control-allow-credentials" not in r.headers
         assert r.headers["referrer-policy"] == "no-referrer"
+        assert "x-content-type-options" not in r.headers            # ORB: see ide_forward.DROP
         css = c.get(base + "/s/style.css")
         assert css.status_code == 200 and "color: red" in css.text  # a relative link resolves
         assert c.head(base + "/s/").status_code == 200
         assert c.get(base + "/redir", follow_redirects=False).headers["location"] == base + "/x"
         assert c.get(base + "/abs", follow_redirects=False).headers["location"] == base + "/y#top"
         assert c.get(base + "/nope").status_code == 404
+        # a page that names its own origin (vscode-print's <base href>) stays on the board
+        r = c.get(base + "/b/")
+        assert '<base href="%s/b/">' % base in r.text and 'href="%s/x"' % base in r.text
+        assert 'href="http://localhost:%d1/"' % port in r.text           # another port: left alone
+        assert int(r.headers["content-length"]) == len(r.content)
         # read-only, and nothing without a live token
         assert c.post(base + "/s/", headers=origin, content=b"x").status_code == 405
         assert c.get("/fwd/nope/s/").status_code == 403

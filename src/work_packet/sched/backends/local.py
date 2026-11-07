@@ -19,6 +19,20 @@ def _alive(pid, start):
     return st is not None and st["state"] != "Z" and (start is None or st["start"] == start)
 
 
+def _reap(pid, start):
+    """The exit code of an adopted job that is our child: after an in-place
+    restart (dash/restart.py) the steps the old image started are still this
+    process's children, with no Popen to wait on them. None if it is not ours."""
+    st = procs._stat(pid)
+    if st is None or st["state"] != "Z" or (start is not None and st["start"] != start):
+        return None
+    try:
+        got, status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return None
+    return os.waitstatus_to_exitcode(status) if got == pid else None
+
+
 def _split(ref):
     pid, _, start = ref.partition(":")
     return int(pid), (int(start) if start else None)
@@ -69,7 +83,8 @@ class Local(Backend):
             except ValueError:
                 out[ref] = JobState(DONE)
                 continue
-            out[ref] = JobState(RUNNING) if _alive(pid, start) else JobState(DONE)
+            out[ref] = JobState(RUNNING) if _alive(pid, start) else \
+                JobState(DONE, code=_reap(pid, start))
         return out
 
     def cancel(self, ref, hard=False):

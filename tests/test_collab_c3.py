@@ -46,7 +46,7 @@ def test_start_by_opening_it(fake, tmp_path, start, how, action):
     e, pkt = _root("s1")
     loc = r.headers["location"]
     want = {"ide": "ide-" + how if how else None, "studio": "studio"}[start]
-    assert loc.startswith("/p/s1/%s?" % pkt.wpid) and "open=" + want in loc
+    assert loc.startswith("/p/s1?") and "open=" + want in loc          # the overview
     meta = pkt.load_status()[0]
     assert meta["autonomy"] == "manual" and meta["state"] == "PAUSED"
     page = c.get(loc).text
@@ -81,7 +81,9 @@ def test_cards_have_open(fake):
     _new("a")
     page = _client().get("/b/main").text
     card = page.split('id="card-a"')[1].split("</details>\n    {%")[0]
-    assert "Open ▾" in card and "/studio/open" in card and "/compose" in card
+    assert "Open ▾" in card and "/studio/open" in card and "/compose" not in card
+    assert 'id="open-a"' in card and 'href="/p/a">Page<' in card     # Page: always the packet page
+    assert 'href="/p/a/compose"' in _client().get("/p/a").text       # Compose lives there
 
 
 def test_hand_off_after_a_checkpoint(fake):

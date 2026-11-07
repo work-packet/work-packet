@@ -74,7 +74,12 @@ class ExtensionPage(http.server.BaseHTTPRequestHandler):
             return self.answer(200, body.encode(), "text/html", set_cookie="app=1; Path=/",
                                content_security_policy="img-src 'self'",
                                access_control_allow_credentials="true")
-        if path == "/s/style.css":
+        if path == "/b/":           # vscode-print's page: a <base> on its own origin
+            body = ('<base href="http://localhost:%d/b/"><link rel="stylesheet" href="style.css">'
+                    '<a href="http://127.0.0.1:%d/x">self</a><a href="http://localhost:%d1/">other</a>'
+                    % (EXT_PORT, EXT_PORT, EXT_PORT))
+            return self.answer(200, body.encode(), "text/html")
+        if path in ("/s/style.css", "/b/style.css"):
             return self.answer(200, b"pre { color: red }", "text/css")
         if path == "/redir":
             return self.answer(302, location="/x")

@@ -73,18 +73,41 @@ class Runner:
         """Look for due packets now."""
         self._poke.set()
 
-    def stop(self, timeout=None):
-        """Start no new step, wait for running ones, release the lock."""
-        self._stopping.set()
-        self._poke.set()
+    def stop(self, timeout=None, release=True):
+        """Start no new step, wait for running ones, release the lock.
+        ``release=False``: keep the lease file for the image an in-place
+        restart execs into (docs/serve-restart-plan.md)."""
+        self.halt()
         if self._thread is not None:
             self._thread.join(timeout)
         for t in (self._watcher, self._sessions):
             if t is not None:
                 t.join(timeout)
         if self._lease is not None:
-            self._lease.release()
+            if release:
+                self._lease.release()
+            else:
+                self._lease.keep()
             self._lease = None
+
+    def halt(self):
+        """Start no new step; the running ones go on (``stop`` waits for them)."""
+        self._stopping.set()
+        self._poke.set()
+
+    def abandon(self):
+        """Stop waiting for running steps: they go on, and the next wpkd adopts
+        them (sched/dispatcher.py ``adopt``)."""
+        if self.dispatcher is not None:
+            self.dispatcher.no_drain = True
+
+    def running(self):
+        """How many steps this process waits for on a stop."""
+        d = self.dispatcher
+        try:
+            return len(d.backend.running()) if d is not None else 0
+        except (AttributeError, NotImplementedError):
+            return 0
 
     @property
     def alive(self):

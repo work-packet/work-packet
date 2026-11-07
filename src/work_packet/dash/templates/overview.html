@@ -193,7 +193,7 @@ ul.list button.x:hover { color: var(--FAILED); }
     {% elif a.kind in ("done", "stopped") %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>{% if a.kind == "done" and c.lifecycle == "open" %}
       <button class="mini" form="act-{{ loop.index }}" title="It is finished: take it off the active views (Reopen brings it back)">Done</button>
       <a class="mini" href="/p/{{ c.name|urlencode }}/compose" title="Hand the runner the next thing to do">Next…</a>
-      {{ om.menu(c) }}{% endif %}
+      {{ om.menu(c, key="att-") }}{% endif %}
       <button class="x" form="seen-one" name="project" value="{{ c.name }}" title="Take it off the list without opening it" aria-label="dismiss {{ c.name }}">×</button>
     {% elif a.kind == "atrisk" %}<a class="mini" href="/p/{{ c.name|urlencode }}/compose" title="Give the runner more of it now">Hand it off now</a>
       {{ plm.menu(c.name, c.plan, "/") }}
@@ -273,7 +273,7 @@ ul.list button.x:hover { color: var(--FAILED); }
     {{ pz.badge(c) }}<a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
     <span class="what">{{ c.ball.text }}</span>
     {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
-    {{ om.menu(c) }}</li>
+    {{ om.menu(c, key="you-") }}</li>
 {% endfor %}
 {% for c in ov.running %}
   <li><span class="state running pulse">RUNNING</span>
@@ -281,7 +281,7 @@ ul.list button.x:hover { color: var(--FAILED); }
     <span class="what">{{ c.running.name or c.running.short }} step {{ c.running.step }}{% if c.running.for %}, {{ c.running.for }}{% endif %}
       {% if c.running.now %}<br><span class="muted ell">{{ c.running.now }}</span>{% endif %}</span>
     {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
-    {{ pz.button(c, "/#running") }} {{ om.menu(c) }}</li>
+    {{ pz.button(c, "/#running") }} {{ om.menu(c, key="run-") }}</li>
 {% endfor %}
 </ul>
 {% else %}<p class="muted">Nobody is working on anything.</p>{% endif %}

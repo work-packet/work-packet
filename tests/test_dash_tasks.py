@@ -214,7 +214,7 @@ def test_new_task_form_creates_a_held_project(tmp_path, fake):
                follow_redirects=False)
     e = registry.get("nt")
     # nothing started: its page (docs/collaboration.md W1)
-    assert r.status_code == 303 and r.headers["location"].startswith("/p/nt/%s?" % e["root"])
+    assert r.status_code == 303 and r.headers["location"].startswith("/p/nt?")
     assert e["path"] == str(tmp_path / "pp" / "nt" / ".work-packet")       # a packet
     assert os.path.isfile(tmp_path / "pp" / "nt" / "nt.wp.md")
     meta, _ = Packet(os.path.join(e["path"], "runs", e["root"])).load_status()
@@ -224,6 +224,18 @@ def test_new_task_form_creates_a_held_project(tmp_path, fake):
     assert not ok and "already" in msg and r.headers["location"].startswith("/new?")
     r = c.post("/new", data={"name": "Bad Name"}, follow_redirects=False)
     assert not _flash(r)[1]
+
+
+def test_new_packet_has_no_task_until_asked(tmp_path, fake):
+    from work_packet import clock
+    from work_packet.dash import data
+    c = _client()
+    c.post("/new", data={"name": "nt0", "dir": str(tmp_path)})
+    c.post("/new", data={"name": "nt1", "dir": str(tmp_path), "objective": "Fix the parser"})
+    for name, want in (("nt0", 0), ("nt1", 1)):       # held with an objective: task 1
+        e = registry.get(name)
+        assert len(data.tasks(e, data.tree(e, clock.now()))) == want, name
+    assert "task 1" not in c.get("/p/nt0").text and "task 1" in c.get("/p/nt1").text
 
 
 def test_compose_setup_flow(tmp_path, fake):

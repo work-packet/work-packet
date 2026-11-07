@@ -29,11 +29,12 @@
     if (d.open) opened[d.dataset.project] = 1; else delete opened[d.dataset.project];
     save(); label();
   }, true);
-  // A click on an open card's body folds it, unless it hit a link, a button or a form,
+  // A click on an open card's body folds it, unless it hit a link, a button, a form or a
+  // menu's summary (Open ▾, Plan ▾),
   // or was the end of selecting text.
   document.addEventListener("click", function (e) {
     var d = e.target.closest && e.target.closest("details.card[open] > .body");
-    if (!d || e.target.closest("a, button, form, input, select, textarea, label")) return;
+    if (!d || e.target.closest("a, button, form, input, select, textarea, label, summary")) return;
     var sel = window.getSelection && window.getSelection();
     if (sel && !sel.isCollapsed) return;
     d.parentNode.open = false;

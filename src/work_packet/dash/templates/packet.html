@@ -7,6 +7,7 @@
 {% import "_vscode.html" as vsm %}
 {% import "_answer.html" as ans with context %}
 {% import "_plan.html" as plm with context %}
+{% import "_autoopen.html" as aom with context %}
 {% block title %}{{ p.short }} · {{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <code>{{ p.short }}</code>{% endblock %}
 {% block main %}
@@ -40,18 +41,7 @@
   {% endif %}
 </div>
 {% set sbase = "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid ~ "/studio" %}
-{% if autoopen %}
-{#- Just made, to work on yourself (docs/collaboration.md W1): open it now. The form
-    is the fallback when the script does not run. -#}
-<form class="act panel row" id="autoopen" method="post" action="{{ sbase ~ '/open' if autoopen == 'studio' else '/p/' ~ (e.name|urlencode) ~ '/ide' }}" style="margin-bottom:12px">
-  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
-  {% if autoopen != "studio" %}<input type="hidden" name="wpid" value="{{ p.wpid }}">
-  <input type="hidden" name="go" value="{{ 'web' if autoopen == 'ide-web' else 'desktop' }}">{% endif %}
-  <span>Opening it {{ "in the studio" if autoopen == "studio" else "in VS Code" ~ (" (in the browser)" if autoopen == "ide-web" else "") }}…</span>
-  <button class="go primary">Open it</button>
-</form>
-
-{% endif %}
+{% if autoopen %}{{ aom.form(e, p.wpid, autoopen) }}{% endif %}
 {% if p.taken_by %}
 <div class="panel" style="margin-bottom:12px">In studio ({{ p.taken_by }}) since {{ p.taken|when }}: the runner leaves it alone until it is released.
   {% if p.taken_by == user %}<a href="{{ sbase }}"><strong>Return to the studio</strong></a>{% else %}<a href="{{ sbase }}">See the studio</a>{% endif %}</div>

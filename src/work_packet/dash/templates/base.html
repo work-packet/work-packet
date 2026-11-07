@@ -88,6 +88,7 @@ form.act textarea { min-height: 4.5em; }
 button.go { font: inherit; padding: 4px 12px; border-radius: 5px; border: 1px solid var(--line);
   background: var(--panel); color: var(--ink); cursor: pointer; }
 button.go.primary { background: var(--link); border-color: var(--link); color: #fff; }
+button:disabled, button:disabled:hover { opacity: .45; cursor: not-allowed; filter: grayscale(1); }
 .ask { border-left: 4px solid var(--NEEDS_INPUT); }
 .report { border-left: 5px solid var(--COMPLETED); margin: 0 0 16px; padding: 14px 18px; }
 .report.FAILED { border-left-color: var(--FAILED); }

@@ -5,23 +5,13 @@
 {% import "_project_tasks.html" as ptm %}
 {% import "_answer.html" as ans with context %}
 {% import "_vscode.html" as vsm %}
+{% import "_autoopen.html" as aom with context %}
 {% block title %}{{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a>{% endblock %}
-{% block head %}
-<script>
-// Old anchors moved to tabs (docs/packet-page.md §2.5).
-(function () {
-  var to = {"#tokens": "/cost", "#context": "/cost#context", "#settings": "/settings",
-            "#sched": "/settings#sched", "#vscode": "#vscode"};
-  var h = location.hash, base = location.pathname.replace(/\/$/, "");
-  if (to[h] && to[h].charAt(0) === "/") location.replace(base + to[h]);
-  if (h === "#vscode") addEventListener("DOMContentLoaded", function () {
-    var d = document.getElementById("vscode"); if (d) d.open = true; });
-})();
-</script>
-{% endblock %}
 {% block main %}
+<span hidden data-old-anchors></span>
 {{ tabs.top(e, card, "overview", work) }}
+{% if autoopen and nodes %}{{ aom.form(e, nodes[0].wpid, autoopen) }}{% endif %}
 {% for n, qs in asks %}{{ ans.form(e, n.wpid, qs, "answer" if loop.first else "answer-" ~ n.short,
    (n.name or n.short) if n.depth else None, "project") }}{% endfor %}
 {{ snap.panel(e, card, tl, on) }}

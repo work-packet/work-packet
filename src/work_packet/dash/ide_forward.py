@@ -15,6 +15,9 @@ process (or the job's certificate), and dies with it: a new server's ports
 belong to other processes.
 """
 
+import contextlib
+import json
+import os
 import re
 import secrets
 import threading
@@ -34,14 +37,18 @@ CSP = ("sandbox allow-scripts allow-forms allow-modals allow-popups allow-downlo
 HEADERS = [
     (b"content-security-policy", CSP.encode()),
     (b"referrer-policy", b"no-referrer"),      # the token is in the path: never send it on
-    (b"x-content-type-options", b"nosniff"),
     # an opaque origin reads its own answers (fetch("completed")) only with CORS;
     # with no credentials, "*" gives nothing to anyone without the token
     (b"access-control-allow-origin", b"*"),
 ]
-# What the guard drops from upstream before adding HEADERS.
-DROP = {b"set-cookie", b"referrer-policy", b"x-content-type-options",
-        b"access-control-allow-origin", b"access-control-allow-credentials"}
+# No nosniff of ours: the page is an opaque origin, so every answer is checked
+# as cross-origin, and with nosniff Chrome's ORB blocks a mislabelled script or
+# stylesheet the page loads fine on its own origin (vscode-print serves a script
+# as application/json and a stylesheet as text/plain). The upstream's own stays.
+# What the guard drops from upstream before adding HEADERS:
+DROP = {b"set-cookie", b"referrer-policy", b"access-control-allow-origin",
+        b"access-control-allow-credentials"}
+SELF_ORIGIN = re.compile(rb"https?://(?:localhost|127\.0\.0\.1|\[::1\]):(\d+)(?![\d])", re.I)
 UPSTREAM_LOCATION = re.compile(r"https?://(localhost|127\.0\.0\.1|\[::1\]):(\d+)(/[^#]*)?(#.*)?\Z",
                                re.I)
 
@@ -96,6 +103,47 @@ class Tokens:
         with self.lock:
             self.by_token.pop(token, None)
 
+    def save(self, path):
+        """Write the live tokens for the image an in-place restart execs into
+        (restart.py); ``load`` takes them back. Owner-only: they are bearer keys."""
+        from .. import fsutil
+        now = self.clock()
+        with self.lock:
+            rows = [{"token": t, "key": f.key, "port": f.port, "identity": f.identity,
+                     "issued": f.issued, "used": f.used}
+                    for t, f in self.by_token.items() if self._live(f, now)]
+        if not rows:
+            return
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        fsutil.atomic_write(path, json.dumps(rows) + "\n")
+        os.chmod(path, 0o600)
+
+    def load(self, path):
+        """The tokens ``save`` left, still live; the file is removed either way."""
+        try:
+            with open(path) as fp:
+                rows = json.load(fp)
+        except (OSError, ValueError):
+            rows = []
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+        now = self.clock()
+        with self.lock:
+            for r in rows if isinstance(rows, list) else ():
+                try:
+                    f = Forward(r["key"], int(r["port"]), r["identity"], 0)
+                    f.issued, f.used = float(r["issued"]), float(r["used"])
+                    tok = str(r["token"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if self._live(f, now):
+                    self.by_token[tok] = f
+
+
+def saved_path(home):
+    """Where the forward tokens wait across an in-place restart."""
+    return os.path.join(home, "run", "fwd-tokens.json")
+
 
 TOKENS = Tokens()
 
@@ -134,6 +182,14 @@ def rewrite_location(value, port, base):
     if value.startswith("/") and not value.startswith("//"):
         return base + value
     return value
+
+
+def rewrite_html(body, port, base):
+    """The page's own origin, written out in its HTML, under ``base``: vscode-print
+    sets ``<base href="http://localhost:<port>/<session>/">``, so even its
+    relative links would leave the board. URLs a script builds are not reached."""
+    return SELF_ORIGIN.sub(lambda m: base.encode() if int(m.group(1)) == port else m.group(0),
+                           body)
 
 
 def _refused(status, why):
@@ -214,6 +270,15 @@ async def proxy_forward(backends, request):
         if k == "location":
             v = rewrite_location(v, f.port, base)
         out.append((k.encode("latin-1"), v.encode("latin-1")))
+    if r.headers.get("content-type", "").startswith("text/html"):
+        from starlette.responses import Response
+        body = rewrite_html(await r.aread(), f.port, base)
+        await r.aclose()
+        resp = Response(body, status_code=r.status_code)
+        # aread() decoded the body: it goes out as it is now
+        resp.raw_headers = [(k, v) for k, v in out if k != b"content-encoding"] + \
+            [(b"content-length", str(len(body)).encode())]
+        return resp
     resp = StreamingResponse(r.aiter_raw(), status_code=r.status_code,
                              background=BackgroundTask(r.aclose))
     resp.raw_headers = out

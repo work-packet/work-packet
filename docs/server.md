@@ -115,7 +115,9 @@ on the dev host stays as it is.
 WireGuard already encrypts the traffic, so plain HTTP over the tailnet is
 not readable on the wire. Because §2 needs no cookies, it does not need a
 browser "secure context" either. TLS is optional, and the default is
-`tls = "off"` on the tailnet listener.
+`tls = "off"` on the tailnet listener. One exception: VS Code in the
+browser needs a secure page, so over plain HTTP on the tailnet the board
+shows that button disabled. Turn TLS on to use it.
 
 `tls = "tailscale"` gives a real certificate for
 `<host>.<tailnet-domain>` with no browser warning:
@@ -223,6 +225,7 @@ The unit replaces the two units in long-running.md §4:
 Description=work-packet daemon (runner + board)
 [Service]
 ExecStart=%h/.local/bin/wpk serve
+ExecReload=/bin/kill -USR2 $MAINPID
 Restart=on-failure
 TimeoutStopSec=35min
 [Install]
@@ -231,6 +234,18 @@ WantedBy=default.target
 
 On SIGTERM the board stops accepting connections at once, and the runner
 does what §4 says (wait for steps).
+
+**Restarting in place** (docs/serve-restart-plan.md): `wpk serve --restart`,
+or SIGUSR2 (`systemctl --user reload wpkd`), restarts wpkd on new code and
+config and keeps the web VS Code servers, with the sessions in their
+terminals. The board starts no new step and waits for running ones while it
+keeps serving (`--force`: it doesn't wait, and the new image adopts them).
+Then it closes without stopping the VS Code servers and `exec`s itself, so
+the pid, the lease and systemd's view of the unit stay the same. The new
+image adopts the servers, and open tabs reconnect. Browser shells and studio
+agents end, as on a stop. If the code on disk doesn't import, wpkd says so
+and keeps running. `stop` and `restart` (systemctl's) still stop
+everything, VS Code included.
 
 ## 6. Config and commands
 
@@ -261,6 +276,7 @@ loopback Host name, since it is the laptop's.
 | `wpk dash [--tailnet] [--port N] [--host ADDR]` | The board alone (S1, built). `--tailnet` overrides `[server] tailnet`; `--host` replaces both listeners with one, identity-checked unless loopback |
 | `wpk url` | Prints the running board's URLs (built); with `auth = "token"`, a fresh login link (S3) |
 | `wpk serve [-j N] [--detach] [--ensure]` | The daemon (§5): board and scheduler (built with the scheduler, docs/scheduler-plan.md Q4.6). `--detach` starts it in the background, log in `$WPK_HOME/log/wpkd.log`; `--ensure` does that only if no wpkd holds `wpkd.lease` (for cron on a login node) |
+| `wpk serve --stop` / `--restart [--force]` | Stop wpkd (SIGTERM), or restart it in place keeping web VS Code (SIGUSR2, §5); `--force` does not wait for running steps |
 | `wpk serve --stop [--wait S]` | Stops this home's wpkd (or, with none, a `wpk dash` board): SIGTERM, as systemd sends, then waits up to S seconds (30) for it to exit. Running steps are waited for (§4); if they outlast the wait it says so and leaves wpkd to finish (`wpk sched stop` kills them). A wpkd on another host sharing the home is named, not signalled. Under systemd use `systemctl --user stop wpkd` instead |
 | `wpk serve --install-unit` | Writes `wpkd.service`; prints the `enable-linger` and `systemctl --user enable --now` lines (S2) |
 | `wpk logout --all` | Clears sessions (token and pam modes, S3) |
@@ -354,7 +370,9 @@ page served on loopback where web VS Code runs, opened from a localhost
 link. The guard treats it as `/sc/` (no login, GET and HEAD, cookies
 dropped), with its own headers: `sandbox allow-scripts allow-forms
 allow-modals allow-popups allow-downloads; frame-ancestors 'none'`, beside
-the page's own CSP, and `Access-Control-Allow-Origin: *`. Only the owner
+the page's own CSP, and `Access-Control-Allow-Origin: *`. It does not add
+`nosniff`, because Chrome's ORB would then block a page's mislabelled
+assets (vscode-plan.md §4.6). Only the owner
 can mint a token (`/ide/<key>/__wpk/open`, under `/ide/`, with
 `Sec-Fetch-Site: same-origin`), and only for a port of the owner's uid that
 is not the board's.

@@ -104,7 +104,9 @@
         (st.pk[sid] = st.pk[sid] || {})[ev.name] = ev;
         break;
       case "task":
-        (st.tasks[sid] = st.tasks[sid] || {})[ev.name] = ev;
+        var tks = st.tasks[sid] = st.tasks[sid] || {}, was = tks[ev.name];
+        ev.t0 = was && was.state === "run" && ev.state === "run" ? was.t0 : ev.t;
+        tks[ev.name] = ev;
         break;
       case "git":
         st.git[sid + "|" + (ev.pkg && ev.pkg !== "[clone]" ? ev.pkg : "")] = ev;
@@ -115,6 +117,7 @@
         log.appendChild(document.createTextNode(ev.text + "\n"));
         while (log.childNodes.length > MAX_LINES) log.removeChild(log.firstChild);
         if (ev.text.trim()) st.activity = ev.text;
+        st.lastAt = ev.t;
         break;
       case "diag":
         if (ev.severity === "note") st.activity = ev.msg;
@@ -184,7 +187,8 @@
           : (t.at != null && t.total ? t.at + "/" + t.total + " " : "") + (t.msg || ""));
         if (t.state === "run" && t.at != null && t.total) act.appendChild(bar(100 * t.at / t.total));
         row.appendChild(act);
-        row.appendChild(el("span", "meta", t.secs != null ? secs(t.secs) : ""));
+        row.appendChild(el("span", "meta", t.secs != null ? secs(t.secs)
+                           : t.state === "run" && t.t0 != null ? secs(now() - t.t0) : ""));
         sub.appendChild(row);
       });
       if (sub.childNodes.length) li.appendChild(sub);
@@ -192,7 +196,10 @@
     });
     ol.scrollTop = end ? ol.scrollHeight : top;
     $(".nj-clock").textContent = start != null ? secs((st.done ? st.done.t : now()) - start) : "";
-    $(".nj-activity").textContent = st.done ? "" : (st.activity || "starting…");
+    // A long compile can be silent for minutes: say how long, so quiet reads as busy.
+    var quiet = st.lastAt != null ? now() - st.lastAt : 0;
+    $(".nj-activity").textContent = st.done ? "" : (st.activity || "starting…") +
+      (quiet >= 10 ? "  (no output for " + secs(quiet).replace(/\.\ds$/, "s") + ")" : "");
     $(".nj-nlines").textContent = st.nlines ? "(" + st.nlines + " lines)" : "";
     if (st.done) finish(st.done);
   }

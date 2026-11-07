@@ -190,6 +190,11 @@ class Board:
         self.sock = None
         self.names = set()
         self._stop = None
+        # An in-place restart asked for (docs/serve-restart-plan.md):
+        # {"ids": request ids to answer, "force": do not wait for steps}.
+        self.restart = None
+        self.restarted = None           # the ids this image was exec'd for
+        self._closing = False           # past the point where a restart can be called off
 
     def guard(self, kind):
         return Guard(self.app, kind, self.secret, tailnet=self.tailnet,
@@ -337,10 +342,18 @@ class Board:
                 await task
 
     async def run(self, ready=None):
+        from . import ide_forward, restart
         self._stop = asyncio.Event()
+        self.restarted = restart.restarted()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, self._stop.set)
+            loop.add_signal_handler(sig, self._on_stop)
+        loop.add_signal_handler(signal.SIGUSR2, self._on_restart)
+        if self.restarted is not None:
+            ide_forward.TOKENS.load(ide_forward.saved_path(self.home))
+        else:                           # a stop ended them; a crash leaves the file
+            with contextlib.suppress(OSError):
+                os.unlink(ide_forward.saved_path(self.home))
         tasks, servers = [], []
         try:
             if self.network:
@@ -380,24 +393,39 @@ class Board:
             if self.runner is not None:
                 self.runner.start()
             self._write_state()
+            tasks.append(asyncio.ensure_future(self._adopt_ide()))
+            if self.restarted is not None:
+                log.warning("restarted in place (pid %d)", os.getpid())
+                restart.set_status(self.home, self.restarted, "done")
             if ready:
                 ready(self)
             await self._stop.wait()
+            await self._wait_steps()
         finally:
             self._stop.set()
+            self._closing = True
+            restarting = self.restart is not None
             self.shells.shutdown()
             self.agents.shutdown()
-            self.ide.stop()             # on the loop: it cancels the idle task
+            if restarting:              # left running, for the next image to adopt
+                self.ide.detach()
+                with contextlib.suppress(OSError):
+                    ide_forward.TOKENS.save(ide_forward.saved_path(self.home))
+            else:
+                self.ide.stop()         # on the loop: it cancels the idle task
             await self.events.stop()
             for srv, _ in servers:
                 srv.should_exit = True
             await asyncio.gather(*tasks, *(t for _, t in servers), return_exceptions=True)
             if self.runner is not None:
-                if self.runner.busy:
-                    log.warning("waiting for running steps to finish")
-                await loop.run_in_executor(None, self.runner.stop)
+                if restarting:
+                    await loop.run_in_executor(None, lambda: self.runner.stop(release=False))
+                else:
+                    if self.runner.busy:
+                        log.warning("waiting for running steps to finish")
+                    await loop.run_in_executor(None, self.runner.stop)
             with contextlib.suppress(OSError):
-                if (read_state(self.home) or {}).get("pid") == os.getpid():
+                if not restarting and (read_state(self.home) or {}).get("pid") == os.getpid():
                     os.unlink(state_path(self.home))
             if self.sock:
                 with contextlib.suppress(OSError):
@@ -407,9 +435,87 @@ class Board:
                 if (renders.read_listener(self.home) or {}).get("pid") == os.getpid():
                     os.unlink(renders.listener_file(self.home))
             self.renders.stop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
+            for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGUSR2):
                 loop.remove_signal_handler(sig)
 
     def stop(self):
         if self._stop is not None:
             self._stop.set()
+
+    # -- restarting in place (docs/serve-restart-plan.md) ----------------------
+
+    def _on_stop(self):
+        """SIGINT/SIGTERM: a stop, even during a restart that waits for steps."""
+        if self.restart is not None and not self._closing:
+            from . import restart
+            log.warning("stopping instead of restarting")
+            restart.set_status(self.home, self.restart["ids"], "failed",
+                               "wpkd was stopped instead")
+            self.restart = None
+        self._stop.set()
+
+    def _on_restart(self):
+        asyncio.ensure_future(self._restart_request())
+
+    async def _restart_request(self):
+        """SIGUSR2: restart in place once the new code loads. A request file
+        (``wpk serve --restart``) may say ``force``; a bare signal waits."""
+        from . import restart
+        req = await asyncio.get_running_loop().run_in_executor(None, restart.take, self.home)
+        rid, force = req.get("id"), bool(req.get("force"))
+        if self.restart is not None:            # one is under way: join it
+            self.restart["ids"].append(rid)
+            if force and not self.restart["force"]:
+                self.restart["force"] = True
+                log.warning("restarting now: not waiting for running steps (--force)")
+                if self.runner is not None:
+                    self.runner.abandon()
+            return
+        if self._stop.is_set():
+            restart.set_status(self.home, [rid], "failed", "wpkd is stopping")
+            return
+        why = await asyncio.get_running_loop().run_in_executor(None, restart.preflight)
+        if why:
+            log.error("not restarting: the code on disk does not load: %s", why)
+            restart.set_status(self.home, [rid], "failed",
+                               "the code on disk does not load: %s" % why)
+            return
+        if self._stop.is_set() or self.restart is not None:
+            return
+        self.restart = {"ids": [rid], "force": force}
+        log.warning("restarting in place%s", " now (--force)" if force else "")
+        self._stop.set()
+
+    async def _adopt_ide(self):
+        """The VS Code servers an earlier board left (an in-place restart, or a
+        crash) are ours again at once, not when a tab next asks for one."""
+        try:
+            got = await self.ide.adopt()
+        except Exception:                       # noqa: BLE001: the board still serves
+            log.exception("taking over VS Code's servers failed")
+            return
+        if got:
+            log.warning("took over %d VS Code server(s) left running: %s",
+                        len(got), " ".join(got))
+
+    async def _wait_steps(self):
+        """Before a restart closes anything: start no new step and wait for the
+        running ones, still serving, unless ``force`` (then the next image adopts
+        them). Returns at once on a stop: the stop waits as it always has."""
+        from . import restart
+        r = self.runner
+        if self.restart is None or r is None:
+            return
+        r.halt()
+        if self.restart["force"]:
+            r.abandon()
+        said = None
+        while self.restart is not None and r.alive:
+            n = r.running()
+            if n != said:
+                if n:
+                    log.warning("restart: waiting for %d running step(s)", n)
+                restart.set_status(self.home, self.restart["ids"], "waiting",
+                                   "%d running step(s)" % n)
+                said = n
+            await asyncio.sleep(0.25)

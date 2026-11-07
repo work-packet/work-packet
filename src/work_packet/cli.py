@@ -1749,9 +1749,19 @@ def cmd_dash(args) -> int:
                 ", ".join(cfg["allow"]) or board.tailnet.owner() or "this node's owner"),
                 file=sys.stderr)
     try:
-        asyncio.run(Board(cfg, host=args.host, runner=runner).run(ready))
+        board = Board(cfg, host=args.host, runner=runner)
+        asyncio.run(board.run(ready))
     except ServeError as e:
         return _err(str(e))
+    if board.restart is not None:          # in place: same pid (docs/serve-restart-plan.md)
+        from .dash import restart
+        try:
+            restart.exec_self(board.restart["ids"])
+        except OSError as e:
+            restart.set_status(board.home, board.restart["ids"], "failed",
+                               "cannot exec: %s" % e)
+            return _err("cannot restart: %s; the VS Code servers are left running for the "
+                        "next `wpk serve`" % e)
     return 0
 
 
@@ -1819,9 +1829,14 @@ def cmd_serve(args) -> int:
     from .sched import home_lease
     h = registry.home()
     held = home_lease.live(h)
-    if args.stop:
-        if args.detach or args.ensure:
-            return _err("--stop does not go with --detach or --ensure")
+    if args.force and not args.restart:
+        return _err("--force goes with --restart")
+    if args.stop or args.restart:
+        if args.detach or args.ensure or (args.stop and args.restart):
+            return _err("--%s does not go with --detach, --ensure or --%s" % (
+                ("stop", "restart") if args.stop else ("restart", "stop")))
+        if args.restart:
+            return _restart_wpkd(h, held, args.force, args.wait)
         return _stop_wpkd(h, held, args.wait)
     if args.ensure and held:
         print("wpk: wpkd is running (host %s, pid %s)" % (held.get("host"), held.get("pid")),
@@ -1871,27 +1886,83 @@ def _is_wpk(pid):
     return any(b"work_packet" in a or os.path.basename(a) == b"wpk" for a in argv)
 
 
+def _wpkd_pid(h, held, flag):
+    """``(pid, what)`` of this home's wpkd (or a `wpk dash` board) on this host,
+    safe to signal; or ``(None, exit code)`` with the reason printed."""
+    import socket
+    from .dash.server import read_state
+    what = "wpkd"
+    if held is None:                       # no wpkd: maybe a `wpk dash` board
+        st = read_state(h)
+        if not st:
+            return None, _err("wpkd is not running for %s" % h)
+        held, what = {"host": socket.gethostname(), "pid": st["pid"]}, "the board"
+    pid = int(held["pid"])
+    if held.get("host") != socket.gethostname():
+        return None, _err("%s for %s runs on host %s (pid %d); run `wpk serve %s` there"
+                          % (what, h, held.get("host"), pid, flag))
+    if not _is_wpk(pid):
+        return None, _err("pid %d (in %s's lease) is not wpk; not signalling it" % (pid, what))
+    return pid, what
+
+
+def _restart_wpkd(h, held, force, wait_s):
+    """``wpk serve --restart``: a request file and SIGUSR2; the board waits for
+    running steps (not with ``force``), then execs itself with the same pid and
+    adopts its VS Code servers (docs/serve-restart-plan.md). Reports how it went."""
+    import signal
+    import time
+    from .dash import restart
+    from .sched import authz
+    pid, what = _wpkd_pid(h, held, "--restart")
+    if pid is None:
+        return what
+    try:
+        rid = restart.request(h, force, authz.principal_cli())
+    except OSError as e:
+        return _err("cannot write the restart request: %s" % e)
+    try:
+        os.kill(pid, signal.SIGUSR2)
+    except ProcessLookupError:
+        return _err("%s (pid %d) had already exited" % (what, pid))
+    except PermissionError as e:
+        return _err("cannot signal %s (pid %d): %s" % (what, pid, e))
+    print("wpk: restarting %s (pid %d)%s" % (what, pid, " now" if force else ""),
+          file=sys.stderr)
+    log = os.path.join(h, "log", "wpkd.log")
+    deadline, said = time.time() + wait_s, None
+    while time.time() < deadline:
+        st = restart.status(h, rid)
+        if st is not None:
+            if st["state"] == "done":
+                print("wpk: %s restarted (pid %d)" % (what, pid), file=sys.stderr)
+                return 0
+            if st["state"] == "failed":
+                return _err("%s did not restart: %s" % (what, st.get("msg")))
+            if st["state"] == "waiting" and st.get("msg") != said:
+                said = st.get("msg")
+                if not said.startswith("0 "):
+                    print("wpk: waiting for %s (--restart --force to restart now)" % said,
+                          file=sys.stderr)
+        if not _is_wpk(pid):
+            return _err("%s (pid %d) exited while restarting; see %s" % (what, pid, log))
+        time.sleep(0.2)
+    if said and not said.startswith("0 "):
+        print("wpk: %s is still waiting for its running steps; it restarts when they are "
+              "done. `wpk serve --restart --force` restarts it now" % what, file=sys.stderr)
+        return 0
+    return _err("%s (pid %d) has not restarted after %g s; see %s" % (what, pid, wait_s, log))
+
+
 def _stop_wpkd(h, held, wait_s):
     """``wpk serve --stop``: SIGTERM to this home's wpkd (what systemd sends), then
     wait for it to let go of the lease. Running steps are waited for (§4), so a
     wpkd with steps out may take longer than ``wait_s``; it is left to finish."""
     import signal
-    import socket
     import time
-    from .dash.server import read_state
-    from .sched import home_lease
-    what = "wpkd"
-    if held is None:                       # no wpkd: maybe a `wpk dash` board
-        st = read_state(h)
-        if not st:
-            return _err("wpkd is not running for %s" % h)
-        held, what = {"host": socket.gethostname(), "pid": st["pid"]}, "the board"
-    pid = int(held["pid"])
-    if held.get("host") != socket.gethostname():
-        return _err("%s for %s runs on host %s (pid %d); run `wpk serve --stop` there"
-                    % (what, h, held.get("host"), pid))
-    if not _is_wpk(pid):
-        return _err("pid %d (in %s's lease) is not wpk; not signalling it" % (pid, what))
+    pid, what = _wpkd_pid(h, held, "--stop")
+    if pid is None:
+        return what
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -2595,8 +2666,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="start in the background unless a wpkd already runs (for cron)")
     p.add_argument("--stop", action="store_true",
                    help="stop this home's wpkd (SIGTERM; running steps are waited for)")
+    p.add_argument("--restart", action="store_true",
+                   help="restart this home's wpkd in place (SIGUSR2): new code and config, "
+                   "web VS Code servers and their sessions kept; running steps are waited "
+                   "for first")
+    p.add_argument("--force", action="store_true",
+                   help="with --restart: do not wait for running steps; the new wpkd "
+                   "adopts them")
     p.add_argument("--wait", type=float, default=30, metavar="S",
-                   help="with --stop: seconds to wait for it to exit (default 30)")
+                   help="with --stop or --restart: seconds to wait (default 30)")
     p.add_argument("--port", type=int, help="port (default [server] port, 7878)")
     p.add_argument("-j", "--jobs", type=int, help="steps at once (default: the pool's jobs)")
     p.set_defaults(func=cmd_serve)

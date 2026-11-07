@@ -157,3 +157,15 @@ def test_other_transcript_forms():
     assert t.feed("  pyvsc(ivpm.yaml:3): broke")[0]["k"] == "detail"
     assert t.feed("note: done")[0]["k"] == "diag"
     assert progress.ROOT not in t.packages
+
+
+def test_build_heartbeat_lines():
+    """ivpm (after 2.42) names the build step and says "still running" during a
+    long compile: both become the running task's message."""
+    t = IvpmTranscript()
+    t.feed(">> [Installing Python packages]")
+    ev = t.feed("   Building pssparser: building Lexer.cpp (26/152)")
+    assert (ev[0]["at"], ev[0]["total"], ev[0]["msg"]) == (26, 152, "Building pssparser: building Lexer.cpp")
+    ev = t.feed("   Building pssparser: compiling ast.cpp (still running, 1m 16s)")
+    assert ev[0]["k"] == "task" and ev[0]["msg"].endswith("(still running, 1m 16s)")
+    assert t.feed("<< [Installing Python packages] (137.2s)")[0]["state"] == "ok"
