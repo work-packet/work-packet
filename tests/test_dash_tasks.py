@@ -472,7 +472,9 @@ def test_handoff_keeps_your_shells(tmp_path, fake, monkeypatch, guarded):
     with c.websocket_connect("ws://127.0.0.1:7878/p/hc/shell/new", headers=ORIGIN) as ws:
         ws.send_text(json.dumps({"token": token}))
         sid = json.loads(ws.receive_text())["sid"]
-    assert "while it is open, the runner waits" in c.get("/p/hc/compose").text
+    from work_packet.dash import vendored
+    if vendored.built("term"):                # the shell pane needs the vendored terminal
+        assert "while it is open, the runner waits" in c.get("/p/hc/compose").text
     r = c.post("/p/hc/compose", headers=ORIGIN, data={
         "csrf": token, "action": "handoff", "instruction": "Add one.\n", "force": "1"},
         follow_redirects=False)
