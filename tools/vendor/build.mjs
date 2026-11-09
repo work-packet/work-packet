@@ -33,9 +33,10 @@ const LIBS = {
   vega: ["vega"],
   draw: ["mermaid", "excalidraw", "mermaid-to-excalidraw"],
   codemirror: ["codemirror"],
+  novnc: ["novnc"],
   term: [],   // xterm.js: copied as built (UMD, loaded by a plain <script>)
 };
-export const BUDGET = { vega: 1_500_000, draw: 10_000_000, codemirror: 800_000, term: 600_000 };
+export const BUDGET = { vega: 1_500_000, draw: 10_000_000, codemirror: 800_000, novnc: 400_000, term: 600_000 };
 // term: [from (under node_modules), to (under vendor/term/)]
 const TERM = [["@xterm/xterm/lib/xterm.js", "xterm.js"], ["@xterm/xterm/css/xterm.css", "xterm.css"],
   ["@xterm/addon-fit/lib/addon-fit.js", "addon-fit.js"], ["@xterm/xterm/LICENSE", "LICENSE.txt"]];
@@ -95,7 +96,7 @@ async function bundle(lib) {
   await build({
     entryPoints: Object.fromEntries(LIBS[lib].map(e => [e, path.join(HERE, "entries", e + ".js")])),
     outdir, bundle: true, format: "esm", splitting: true, minify: true,
-    target: "es2020", platform: "browser", legalComments: "linked",
+    target: lib === "novnc" ? "es2022" : "es2020", platform: "browser", legalComments: "linked",
     chunkNames: "chunks/[name]-[hash]", assetNames: "assets/[name]-[hash]",
     loader: { ".woff2": "file", ".ttf": "file", ".png": "file", ".svg": "file" },
     define: { "process.env.NODE_ENV": '"production"', "process.env.IS_PREACT": '"false"' },
@@ -106,6 +107,8 @@ async function bundle(lib) {
     fs.copyFileSync(path.join(dist, "index.css"), path.join(outdir, "excalidraw.css"));
     copyDir(path.join(dist, "fonts"), path.join(outdir, "fonts"), SKIP_FONTS);
   }
+  if (lib === "novnc")
+    fs.copyFileSync(path.join(NODE_MODULES, "@novnc/novnc/LICENSE.txt"), path.join(outdir, "LICENSE.txt"));
 }
 
 function manifest() {

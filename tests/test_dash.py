@@ -203,6 +203,9 @@ def test_pages(tree, client):
     assert r.status_code == 200 and "<svg" in r.text and "hello" in r.text
     r = client.get("/p/done/" + root)
     assert r.status_code == 200 and "state/count.md" in r.text
+    # dash / board / packet: the crumbs lead back to the packet's board
+    crumbs = r.text[r.text.index('class="crumbs"'):r.text.index("</span>", r.text.index('class="crumbs"'))]
+    assert crumbs.index('href="/b/main"') < crumbs.index('href="/p/done"')
     r = client.get("/p/done/%s/0002" % root)
     assert r.status_code == 200 and "--fork-session" in r.text
     assert 'id="live"' not in r.text                   # a finished step does not refresh

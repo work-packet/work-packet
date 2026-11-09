@@ -27,6 +27,94 @@ log = logging.getLogger("wpk.dash")
 
 WAIT_S = 5          # poll for tailscaled while it is not up
 WATCH_S = 30        # poll for address changes once bound
+TLS_RECORD = 0x16   # a TLS handshake record: what a ClientHello starts with
+SNIFF_S = 10        # how long a new connection may take to send its first byte
+HEAD_MAX = 16384    # a plain-http request head we read to redirect it
+
+
+async def _redirect_plain(conn, host, port):
+    """A plain-http request on the https port: answer 308 to the same path
+    on ``https://<host>:<port>`` (the certificate's name, not the request's
+    Host: an address or another name would fail the certificate anyway)."""
+    reader, writer = await asyncio.open_connection(sock=conn)
+    try:
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), SNIFF_S)
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError,
+            ConnectionError, OSError):
+        writer.close()
+        return
+    parts = head.split(b"\r\n", 1)[0].split(b" ")
+    path = parts[1].decode("latin-1") if len(parts) == 3 else "/"
+    if not path.startswith("/") or path.startswith("//"):
+        path = "/"                  # an absolute-form or odd target: the board's root
+    loc = "https://%s%s%s" % (host, "" if port == 443 else ":%d" % port, path)
+    body = ("This board is https only: %s\n" % loc).encode()
+    writer.write(b"HTTP/1.1 308 Permanent Redirect\r\nlocation: %s\r\n"
+                 b"content-type: text/plain; charset=utf-8\r\ncontent-length: %d\r\n"
+                 b"connection: close\r\n\r\n%s" % (loc.encode("latin-1"), len(body), body))
+    with contextlib.suppress(ConnectionError, OSError):
+        await writer.drain()
+    writer.close()
+
+
+async def _first_byte(conn):
+    """The connection's first byte, left unread (b"" if it closed)."""
+    loop = asyncio.get_running_loop()
+    ready = loop.create_future()
+    loop.add_reader(conn.fileno(), lambda: ready.done() or ready.set_result(None))
+    try:
+        await asyncio.wait_for(ready, SNIFF_S)
+    finally:
+        loop.remove_reader(conn.fileno())
+    return conn.recv(1, socket.MSG_PEEK)
+
+
+async def _serve_https_or_redirect(srv, socks, host, port):
+    """Serve ``srv`` (a uvicorn server with TLS) on ``socks``, accepting the
+    connections here: TLS goes to uvicorn's own protocol, plain http gets a
+    redirect to https (uvicorn alone would just drop it)."""
+    import functools
+    loop = asyncio.get_running_loop()
+    conns = set()
+
+    async def one(conn):
+        try:
+            first = await _first_byte(conn)
+            if not first:
+                conn.close()
+            elif first[0] == TLS_RECORD:
+                c = srv.config
+                proto = functools.partial(c.http_protocol_class, config=c,
+                                          server_state=srv.server_state,
+                                          app_state=srv.lifespan.state)
+                await loop.connect_accepted_socket(proto, conn, ssl=c.ssl)
+            else:
+                await _redirect_plain(conn, host, port)
+        except (asyncio.TimeoutError, ConnectionError, OSError, ValueError):
+            conn.close()
+
+    async def accept(sock):
+        sock.setblocking(False)
+        while True:
+            conn, _ = await loop.sock_accept(sock)
+            t = asyncio.ensure_future(one(conn))
+            conns.add(t)
+            t.add_done_callback(conns.discard)
+
+    serving = asyncio.ensure_future(srv.serve(sockets=[]))
+    acceptors = []
+    try:
+        while not srv.started and not serving.done():       # its config, TLS and protocol
+            await asyncio.sleep(0.02)
+        if srv.started:
+            acceptors = [asyncio.ensure_future(accept(s)) for s in socks]
+        await serving
+    finally:
+        for t in acceptors + list(conns):
+            t.cancel()
+        await asyncio.gather(*acceptors, *conns, return_exceptions=True)
+        for s in socks:
+            s.close()
 
 
 class ServeError(Exception):
@@ -189,7 +277,7 @@ class Board:
         self.events = Collector(self.home)
         self.sock = None
         self.names = set()
-        self._stop = None
+        self._stop = self._close = None
         # An in-place restart asked for (docs/serve-restart-plan.md):
         # {"ids": request ids to answer, "force": do not wait for steps}.
         self.restart = None
@@ -202,8 +290,9 @@ class Board:
                      local_user=self.user, gate=self.gate if kind == "network" else None,
                      names=self.names if kind == "network" else ())
 
-    def _start(self, kind, socks, tls=None):
-        """``tls``: ``(cert, key)`` paths for an https listener."""
+    def _start(self, kind, socks, tls=None, redirect_to=None):
+        """``tls``: ``(cert, key)`` paths for an https listener. ``redirect_to``:
+        with ``tls``, the host name plain-http requests are sent to, on https."""
         kw = dict(ssl_certfile=tls[0], ssl_keyfile=tls[1]) if tls else {}
         srv = _Server(uvicorn.Config(self.guard(kind), log_level="warning",
                                      lifespan="off", proxy_headers=False,
@@ -211,6 +300,9 @@ class Board:
                                      # an idle TLS keep-alive (a browser tab) would
                                      # otherwise hold shutdown open for good
                                      timeout_graceful_shutdown=GRACE_S, **kw))
+        if tls and redirect_to:
+            return srv, asyncio.ensure_future(
+                _serve_https_or_redirect(srv, socks, redirect_to, self.port))
         return srv, asyncio.ensure_future(srv.serve(sockets=socks))
 
     def _start_render(self):
@@ -283,14 +375,14 @@ class Board:
                 raise ServeError("cannot listen on %s:%d: %s" % (ip, self.port, e))
         fqdn = socket.getfqdn()
         self.urls["network"] = [_url(self.host or fqdn, self.port, "https")]
-        return self._start("network", socks, tls)
+        return self._start("network", socks, tls, redirect_to=self.host or fqdn)
 
     async def _tailnet(self, ips_only=None):
         """Keep a server on this node's tailnet addresses (or ``ips_only``)."""
         bound, srv, task, waiting = None, None, None, False
         tls, tls_why = None, None
         try:
-            while not self._stop.is_set():
+            while not self._close.is_set():
                 if ips_only:
                     ips = ips_only
                 else:
@@ -319,7 +411,8 @@ class Board:
                         except OSError as e:
                             log.warning("cannot listen on %s:%d: %s", ip, self.port, e)
                     if socks:
-                        srv, task = self._start("tailnet", socks, tls[:2] if tls else None)
+                        srv, task = self._start("tailnet", socks, tls[:2] if tls else None,
+                                                redirect_to=tls[3] if tls else None)
                         bound, waiting = ips, False
                         if tls:         # only the certificate's name matches it
                             self.urls["tailnet"] = [_url(tls[3], self.port, "https")]
@@ -335,7 +428,7 @@ class Board:
                                     if not ips else "bind failed")
                         waiting = True
                 with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(self._stop.wait(), WATCH_S if srv else WAIT_S)
+                    await asyncio.wait_for(self._close.wait(), WATCH_S if srv else WAIT_S)
         finally:
             if srv:
                 srv.should_exit = True
@@ -344,6 +437,9 @@ class Board:
     async def run(self, ready=None):
         from . import ide_forward, restart
         self._stop = asyncio.Event()
+        # Set once the servers close: a restart waiting for its steps sets _stop
+        # first and still serves, on the tailnet too.
+        self._close = asyncio.Event()
         self.restarted = restart.restarted()
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -403,6 +499,7 @@ class Board:
             await self._wait_steps()
         finally:
             self._stop.set()
+            self._close.set()
             self._closing = True
             restarting = self.restart is not None
             self.shells.shutdown()

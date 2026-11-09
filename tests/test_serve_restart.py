@@ -256,3 +256,40 @@ def test_restart_keeps_vscode_and_the_pid_waits_for_steps_or_not(
     r = _serve("--stop")
     assert r.returncode == 0, r.stderr
     assert wait(lambda: not _alive(ide) and not _alive(kid), 10)
+
+
+def test_a_restart_waiting_for_steps_still_serves_on_the_tailnet():
+    """A restart sets _stop and waits for its steps, still serving: the
+    tailnet listener closed at once, leaving only loopback up."""
+    from work_packet.dash import server
+
+    class Srv:
+        should_exit = False
+
+    async def go():
+        b = object.__new__(server.Board)
+        b._stop, b._close = asyncio.Event(), asyncio.Event()
+        b.cfg, b.port, b.urls = {}, 0, {"tailnet": []}
+        b._write_state = lambda: None
+        started = []
+
+        def start(kind, socks, tls=None, redirect_to=None):
+            srv = Srv()
+
+            async def serve():
+                while not srv.should_exit:
+                    await asyncio.sleep(0.01)
+                for s in socks:
+                    s.close()
+            started.append(srv)
+            return srv, asyncio.ensure_future(serve())
+        b._start = start
+        t = asyncio.ensure_future(b._tailnet(["127.0.0.1"]))
+        await asyncio.sleep(0.1)
+        b._stop.set()                       # the restart: waiting for steps
+        await asyncio.sleep(0.1)
+        assert started and not started[0].should_exit and not t.done()
+        b._close.set()                      # now the servers close
+        await asyncio.wait_for(t, 5)
+        assert started[0].should_exit
+    asyncio.run(go())

@@ -47,6 +47,7 @@ FRAME_HEADERS = [
     (b"referrer-policy", b"same-origin"),
 ]
 IDE_PREFIX = "/ide/"
+DESK_PREFIX = "/desk/"           # the desktop tab (docs/desktop.md): owner only, like /ide/
 IDE_HEADERS = (b"x-content-type-options", b"referrer-policy")
 # Set by a proxy in front of us. On the loopback listener they mean the
 # request did not start on this machine (e.g. `tailscale serve` to 127.0.0.1).
@@ -184,7 +185,7 @@ class Guard:
         scope["state"]["owner"] = self.kind != "network" or user == self.gate.owner
         if self.kind == "network" and user != self.gate.owner:
             method = scope.get("method", "GET")
-            if ws or scope.get("path", "").startswith(IDE_PREFIX) or \
+            if ws or scope.get("path", "").startswith((IDE_PREFIX, DESK_PREFIX)) or \
                     (method not in SAFE_METHODS and scope.get("path") != "/logout"):
                 return await _refuse(send, 403, "read-only: this board is %s's"
                                      % self.gate.owner, scope)

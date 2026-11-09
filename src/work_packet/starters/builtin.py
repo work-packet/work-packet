@@ -1,6 +1,7 @@
-"""The built-in starters: folder, clone, issue (docs/starters-v1.md)."""
+"""The built-in starters: folder, clone, issue, ci (docs/starters-v1.md, docs/ci-watch.md)."""
 
 import os
+import re
 
 from .. import forges
 from . import Field, StartError, Starter, register
@@ -167,4 +168,121 @@ class IssueStarter(Starter):
         r["origin"] = {"kind": "issue", "forge": fname, "repo": repo, "number": n,
                        "title": i["title"], "url": i["url"], "branch": branch,
                        "base": info.get("default_branch") or ""}
+        return r
+
+
+# --- a CI breakage (docs/ci-watch.md) ----------------------------------------------
+
+CI_OBJECTIVE = """\
+CI is failing in {repo}: workflow "{workflow}" on {base}, from run #{number}
+at commit {sha7} ("{title}").
+{url}
+
+The failed jobs, their failed steps and the end of their logs are in
+state/{input}. This folder is a clone of {repo} at that commit, on branch
+`{branch}`.
+
+Find out why it fails; reproduce it here if you can. Say which it is: a
+regression (and which change caused it), a flaky test, or a problem with the
+CI setup or its machines. If the fix is small and clear, make it and commit it
+on `{branch}`; if not, say what the fix needs. Report what you found and how
+sure you are.
+"""
+
+LOG_LINES = 200
+LOG_JOBS = 4
+_STAMP = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ")
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def log_tail(text, n=LOG_LINES):
+    """The last ``n`` lines of a CI log, without timestamps or colour codes."""
+    lines = [_ANSI.sub("", _STAMP.sub("", ln)) for ln in text.splitlines()]
+    return "\n".join(lines[-n:])
+
+
+def run_markdown(repo, run, jobs, logs):
+    """The input a CI packet starts from: the run, then each failed job."""
+    out = ["# %s #%s on %s: %s" % (run["name"], run["number"], run["branch"],
+                                    run["conclusion"]), "",
+           "- repo: %s" % repo, "- run: %s" % run["url"],
+           "- commit: %s (%s)" % (run["sha"], run["title"]),
+           "- event: %s · %s" % (run["event"], run["created"]), ""]
+    bad = [j for j in jobs if j["conclusion"] in forges.RED]
+    if not bad:
+        out += ["(No failed job was listed.)", ""]
+    for j in bad:
+        out += ["## Job: %s (%s)" % (j["name"], j["conclusion"]), "", j["url"], ""]
+        if j["failed_steps"]:
+            out += ["Failed steps: " + ", ".join(j["failed_steps"]), ""]
+        if j["id"] in logs:
+            out += ["Last %d lines of its log:" % LOG_LINES, "", "```", logs[j["id"]], "```", ""]
+        elif len(logs) >= LOG_JOBS:
+            out += ["(Log not fetched: only the first %d failed jobs' logs are.)" % LOG_JOBS, ""]
+    return "\n".join(out)
+
+
+_RUN_URL = re.compile(r"^(.*/[\w.-]+/[\w.-]+)/actions/runs/(\d+)")
+
+
+@register
+class CIStarter(Starter):
+    name = "ci"
+    title = "From a CI run"
+    help = ("Pick a failed CI run: its repo is cloned at the failing commit, a branch made, "
+            "and the failed jobs' logs become an input to investigate.")
+    fields = (
+        Field("repo", "Repo", "repo", placeholder="search the forges",
+              help="Type to search; or paste a run URL below."),
+        Field("run", "Run", required=True, placeholder="run id, or a run URL"),
+    )
+
+    def search(self, key, query, values, h=None):
+        return _repo_choices(query, h) if key == "repo" else []
+
+    def _which(self, values, h):
+        text = (values.get("run") or "").strip()
+        m = _RUN_URL.match(text)
+        if m:
+            ref = forges.parse(m.group(1), h)
+            if ref is None:
+                raise StartError("Run: %s is not on a configured forge" % m.group(1))
+            return ref[0], ref[1], int(m.group(2))
+        r = forges.parse(values.get("repo") or "", h)
+        if r is None:
+            raise StartError("Run: give a run URL, or pick the repo first")
+        if not text.isdigit():
+            raise StartError("Run: a run id or a run URL")
+        return r[0], r[1], int(text)
+
+    def recipe(self, values, h=None):
+        fname, repo, rid = self._which(values, h)
+        f = forges.get(fname, h)
+        try:
+            run = f.run(repo, rid)
+            info = f.repo(repo)
+            jobs = f.run_jobs(repo, rid)
+        except forges.ForgeError as e:
+            raise StartError(str(e)) from None
+        logs = {}
+        for j in [j for j in jobs if j["conclusion"] in forges.RED][:LOG_JOBS]:
+            try:
+                logs[j["id"]] = log_tail(f.job_log(repo, j["id"]))
+            except forges.ForgeError as e:
+                logs[j["id"]] = "(could not fetch the log: %s)" % e
+        wf = forges.slug(os.path.splitext(run["file"])[0] or run["name"], 24)
+        sha7 = run["sha"][:7]
+        branch = "wpk/ci-%s-%s" % (wf, sha7)
+        inp = "ci-run-%d.md" % rid
+        r = self.base(values)
+        r.setdefault("name", "%s-ci-%s-%s" % (forges.slug(repo.split("/")[-1], 32), wf, sha7))
+        r["clone"] = {"url": info["clone_url"], "ref": run["sha"], "branch": branch}
+        r.setdefault("objective", CI_OBJECTIVE.format(
+            repo=repo, workflow=run["name"], base=run["branch"], number=run["number"],
+            sha7=sha7, title=run["title"], url=run["url"], input=inp, branch=branch))
+        r["inputs"] = [{"name": inp, "text": run_markdown(repo, run, jobs, logs)}]
+        r["origin"] = {"kind": "ci", "forge": fname, "repo": repo,
+                       "workflow": run["file"] or run["name"], "run": rid,
+                       "url": run["url"], "sha": run["sha"], "branch": branch,
+                       "base": run["branch"]}
         return r

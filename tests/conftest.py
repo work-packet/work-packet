@@ -32,6 +32,14 @@ def _no_user_skills(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _no_brief_model(monkeypatch):
+    """No test asks a model for the focus brief: the model "fails" and the scored
+    brief stands, unless a test passes its own ``ask``."""
+    from work_packet import briefagent
+    monkeypatch.setattr(briefagent, "ask", lambda prompt, **kw: ("", 0.0))
+
+
+@pytest.fixture(autouse=True)
 def _clone_with_git(monkeypatch):
     """New packets clone with git unless a test asks for ivpm: the host's ivpm
     (or none) must not decide what a test does."""

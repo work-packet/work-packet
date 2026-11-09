@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Docs · {{ e.name }}{% endblock %}
 {% block head %}{% if building %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
-{% block crumbs %}<a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / docs / {{ ds.entry }}/{{ ds.name }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / docs / {{ ds.entry }}/{{ ds.name }}{% endblock %}
 {% block main %}
 <h1>Docs in <code>{{ ds.entry }}</code></h1>
 {% if building %}

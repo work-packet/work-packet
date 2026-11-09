@@ -214,6 +214,28 @@ on a unix socket behind a TLS 1.3 relay that accepts only wpkd's pinned client
 certificate. A site that shares exec hosts between users should set it, and
 lock it (`[site] locked = ["sched.ide.transport"]`).
 
+## 3b. The desktop's environment
+
+`[desktop.env]` (desktop.md §5.3) holds the variables set alongside
+`DISPLAY` in every IDE server that has a desktop. A site sets them here so
+its tools behave under Xvnc, and can lock them:
+
+```toml
+[desktop]
+enabled = true
+
+[desktop.env]
+QT_X11_NO_MITSHM = "1"
+LIBGL_ALWAYS_SOFTWARE = "1"
+
+[site]
+locked = ["desktop.env.QT_X11_NO_MITSHM"]
+```
+
+wpk's own defaults (`SSH_ASKPASS_REQUIRE = "never"`, `NO_AT_BRIDGE = "1"`) sit
+under the site's values. The environment actually applied is written to
+`desktop.env.json` in the server's directory.
+
 ## 4. Job sizes
 
 A size in `[sched.sizes.<name>]` (scheduler.md §5.2) may carry, beyond

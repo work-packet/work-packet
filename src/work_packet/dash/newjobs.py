@@ -32,7 +32,7 @@ class CreateJobs:
         """Make ``recipe`` in a thread; ``finish(plan)`` gives the page to go to
         once it is made. Returns the job id. Raises ValueError while another job
         makes the same folder."""
-        from .. import starters
+        from .. import progress, starters
         with self.lock:
             for j in self.jobs.values():
                 if j["state"] == "run" and j["folder"] == folder:
@@ -40,16 +40,20 @@ class CreateJobs:
             jid = "%s-%s" % (time.strftime("%Y%m%d-%H%M%S"), secrets.token_hex(3))
             job = {"id": jid, "name": recipe["name"], "folder": folder, "state": "run",
                    "t": time.time(), "events": [], "url": None, "error": None,
-                   "_git": {}}
+                   "_git": {}, "_cancel": progress.Canceller()}
             self.jobs[jid] = job
             self._prune()
         os.makedirs(journal_dir(self.home), exist_ok=True)
 
         def run():
             try:
-                plan = starters.make(recipe, h, progress=lambda ev: self.emit(jid, ev))
+                with job["_cancel"].on():
+                    plan = starters.make(recipe, h, progress=lambda ev: self.emit(jid, ev))
                 url = finish(plan)
                 self.emit(jid, {"k": "done", "ok": True, "url": url, "name": plan.name})
+            except progress.Cancelled:
+                self.emit(jid, {"k": "done", "ok": False, "cancelled": True,
+                                "error": "Cancelled: nothing was created."})
             except Exception as e:    # noqa: BLE001  shown on the page, not lost in a thread
                 msg = str(e) if isinstance(e, (starters.StartError, OSError, ValueError)) \
                     else "%s: %s" % (type(e).__name__, e)
@@ -57,6 +61,17 @@ class CreateJobs:
 
         threading.Thread(target=run, name="new-%s" % jid, daemon=True).start()
         return jid
+
+    def cancel(self, jid):
+        """Stop job ``jid``'s command and make nothing (``starters.make`` removes
+        its clone). False if there is no such job, or it has finished."""
+        with self.lock:
+            job = self.jobs.get(jid)
+            if job is None or job["state"] != "run":
+                return False
+        job["_cancel"].cancel()
+        self.emit(jid, {"k": "note", "text": "cancelling…"})
+        return True
 
     def _prune(self):
         done = sorted((j for j in self.jobs.values() if j["state"] != "run"),

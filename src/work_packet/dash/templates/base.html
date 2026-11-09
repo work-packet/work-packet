@@ -101,6 +101,7 @@ button:disabled, button:disabled:hover { opacity: .45; cursor: not-allowed; filt
 .md td, .md th { border: 1px solid var(--line); }
 .md code { background: var(--code); padding: 1px 4px; border-radius: 3px; }
 .md pre code { background: none; padding: 0; }
+.md img { max-width: 100%; height: auto; }
 .report .md > :first-child { margin-top: 0; } .report .md > :last-child { margin-bottom: 0; }
 .report ul.deliv { margin: 0; padding-left: 20px; } .report ul.deliv li { margin: 4px 0; }
 .report .path { font-size: 12px; overflow-wrap: anywhere; }
@@ -260,7 +261,7 @@ body.con-open main { padding-bottom: 46vh; }
 {% if not frame %}
 <header>
   <a class="brand" href="/">wpk dash</a>
-  <span class="crumbs">{% block crumbs %}{% endblock %}</span>
+  <span class="crumbs">{% if crumb_board %}/ <a href="/b/{{ crumb_board|urlencode }}" title="The board">{{ crumb_board }}</a> {% endif %}{% block crumbs %}{% endblock %}</span>
   {% if live %}<button id="live" type="button" data-refresh-ms="{{ refresh_ms or refresh_s * 1000 }}" title="Refresh every {{ ((refresh_ms or refresh_s * 1000) / 1000)|round(1) }} s">live</button>{% endif %}
   <button id="contoggle" type="button" data-console title="Console: ask about this page, or run slash commands (`)">console</button>
   <a class="newtask" href="/new{% if here and here.name %}?board={{ here.name|urlencode }}{% endif %}"{% if here and here.name %} title="A new packet on {{ here.name }}"{% endif %}>New packet</a>

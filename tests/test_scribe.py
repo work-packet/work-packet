@@ -77,7 +77,7 @@ def test_codex_tail(tmp_path):
 
 def test_parse():
     assert scribe.parse("sure:\n" + REPLY) == {"status": "Grammar done", "body": "Wrote the rules.",
-                                               "next": "Error recovery"}
+                                               "next": "Error recovery", "asked": ""}
     assert scribe.parse("no") is None and scribe.parse('{"status": ""}') is None
 
 
@@ -146,7 +146,7 @@ def test_draft_from_session_on_the_packet_page(tmp_path, fake, monkeypatch):
     assert 'id="cp-draft"' in c.get("/p/a/" + pkt.wpid).text
     r = c.post("/p/a/%s/checkpoint/draft" % pkt.wpid)
     assert r.json() == {"status": "Grammar done", "body": "Wrote the rules.",
-                        "next": "Error recovery"}
+                        "next": "Error recovery", "asked": ""}
     assert pkt.load_status()[0]["step"] == 1                 # nothing recorded
 
 
@@ -167,3 +167,24 @@ def test_the_boards_switch(tmp_path, fake):
     assert "<strong>on</strong>" in html
     c.post("/sessions/scribe", data={"on": "0"}, follow_redirects=False)
     assert not scribe.enabled(h, {"sessions_scribe": True})
+
+
+def test_a_question_left_open_in_a_session(fake):
+    """The scribe keeps the question a session ended on; the focus brief's bundle
+    carries it, and a later draft without one clears it."""
+    import json
+    from test_dash_tasks import _new
+    from work_packet import briefagent, executor, registry
+    e, pkt = _new("asks")
+    executor.admin(pkt, "pause")
+    assert scribe.parse('{"status": "s", "asked": "Ship it: yes or no?"}')["asked"] == \
+        "Ship it: yes or no?"
+    scribe.record_ask(pkt, "s1", "Ship it: yes or no?")
+    scribe.record_ask(pkt, "s2", "")                       # nothing to keep, nothing written
+    assert [a["q"] for a in scribe.open_asks(pkt)] == ["Ship it: yes or no?"]
+    b = briefagent.gather(registry.home(), 0, 2e9)
+    p = [x for x in b["packets"] if x["project"] == "asks"][0]
+    assert p["session_questions"][0]["q"] == "Ship it: yes or no?"
+    scribe.record_ask(pkt, "s1", "")                       # answered in the session
+    assert scribe.open_asks(pkt) == []
+    assert json.load(open(os.path.join(pkt.path, scribe.ASKS))) == {}

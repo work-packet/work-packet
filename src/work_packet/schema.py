@@ -102,6 +102,17 @@ IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
     "presence_ttl": 600,               # seconds a presence record counts (§4.2)
     "idle_escalate": 900,              # seconds before "Claude is waiting" needs you (§4.3)
 }
+DESKTOP_DEFAULTS = {                  # docs/desktop.md §0, §7.1
+    "enabled": False,                  # IDE servers get a DISPLAY (started on demand)
+    "wm": "auto",                      # auto | fvwm | xfwm4 | xfce | none
+    "idle_min": 20,                    # X stops after this long with nothing connected
+    "geometry": "1600x1000",           # the first size; the viewer resizes it
+    "xvnc": "Xvnc",                    # TigerVNC's X server
+    "env": {},                         # [desktop.env]: set wherever DISPLAY is (§5.3)
+    "unset": ["SSH_ASKPASS"],          # removed from the environment, after env
+    "apps": {},                        # [desktop.apps]: the tab's Apps menu (§7.1)
+}
+DESKTOP_WMS = ("auto", "fvwm", "xfwm4", "xfce", "none")
 CONSOLE_DEFAULTS = {                  # docs/console.md §3
     "model": "haiku",                  # the agent's model; /model changes one conversation's
     "budget_usd": 0.5,                 # the most one reply may spend
@@ -295,6 +306,13 @@ def parse_duration(v):
     if not m:
         raise ValueError("expected a duration like 90s, 20m or 2h, got %r" % (v,))
     return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600}[m.group(2)]
+
+
+def parse_age(v):
+    """A duration that may be in days too (``"7d"``), for how far back to look."""
+    if isinstance(v, str) and re.match(r"^\d+d$", v):
+        return int(v[:-1]) * 86400
+    return parse_duration(v)
 
 
 def is_zone(v):
@@ -859,6 +877,46 @@ def _validate_console(d):
     return out
 
 
+def _validate_desktop(d):
+    t = d.get("desktop")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("desktop", "must be a table")]
+    out = _unknown(t, tuple(DESKTOP_DEFAULTS), "desktop")
+    if "enabled" in t and not isinstance(t["enabled"], bool):
+        out.append(_err("desktop.enabled", "must be true or false"))
+    if t.get("wm", "auto") not in DESKTOP_WMS:
+        out.append(_err("desktop.wm", "must be one of %s" % ", ".join(DESKTOP_WMS)))
+    m = t.get("idle_min", 1)
+    if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
+        out.append(_err("desktop.idle_min", "must be a positive whole number"))
+    if not re.fullmatch(r"\d{3,5}x\d{3,5}", str(t.get("geometry", "1600x1000"))):
+        out.append(_err("desktop.geometry", "must be WIDTHxHEIGHT, e.g. 1600x1000"))
+    if not isinstance(t.get("xvnc", ""), str):
+        out.append(_err("desktop.xvnc", "must be a path or command name"))
+    env = t.get("env", {})
+    if not isinstance(env, dict) or not all(isinstance(v, (str, int, float)) and
+                                            not isinstance(v, bool) for v in env.values()):
+        out.append(_err("desktop.env", "must be a table of NAME = \"value\""))
+    u = t.get("unset", [])
+    if not (isinstance(u, list) and all(isinstance(x, str) for x in u)):
+        out.append(_err("desktop.unset", "must be a list of variable names"))
+    apps = t.get("apps", {})
+    if not isinstance(apps, dict):
+        out.append(_err("desktop.apps", "must be a table of name = \"command\" or "
+                                        "{ cmd = \"...\", label = \"...\" }"))
+    else:
+        for k, v in apps.items():
+            ok = isinstance(v, str) or (isinstance(v, dict) and isinstance(v.get("cmd", ""), str)
+                                        and isinstance(v.get("label", ""), str)
+                                        and set(v) <= {"cmd", "label"})
+            if not ok:
+                out.append(_err("desktop.apps." + k, "must be \"command\" or "
+                                                     "{ cmd = \"...\", label = \"...\" }"))
+    return out
+
+
 def _validate_studio(d):
     t = d.get("studio")
     if t is None:
@@ -980,15 +1038,20 @@ def _validate_focus(d):
         return []
     if not isinstance(t, dict):
         return [_err("focus", "must be a table")]
-    out = _unknown(t, ("time", "weekends", "off", "review", "review_day", "review_time"),
-                   "focus")
+    out = _unknown(t, ("time", "weekends", "off", "review", "review_day", "review_time",
+                       "agent", "model", "budget_usd", "sessions"), "focus")
+    if "model" in t and not (isinstance(t["model"], str) and t["model"].strip()):
+        out.append(_err("focus.model", "must be a model name"))
+    if "budget_usd" in t and (isinstance(t["budget_usd"], bool) or not isinstance(
+            t["budget_usd"], (int, float)) or t["budget_usd"] <= 0):
+        out.append(_err("focus.budget_usd", "must be a number above 0"))
     for k in ("time", "review_time"):
         if k in t and not (isinstance(t[k], str) and re.match(r"^\d{1,2}:\d{2}$", t[k])):
             out.append(_err("focus." + k, "must be HH:MM"))
     if "review_day" in t and not (isinstance(t["review_day"], str) and t["review_day"][:3].lower()
                                   in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")):
         out.append(_err("focus.review_day", "must be a day: mon, tue, ... sun"))
-    for k in ("weekends", "off", "review"):
+    for k in ("weekends", "off", "review", "agent", "sessions"):
         if k in t and not isinstance(t[k], bool):
             out.append(_err("focus." + k, "must be true or false"))
     return out
@@ -1010,11 +1073,13 @@ def _validate_calendar(d):
 def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
                                                 "console", "harnesses", "plugins", "site",
-                                                "studio", "plan", "focus", "notify", "calendar")) \
+                                                "studio", "plan", "focus", "notify", "calendar",
+                                                "desktop")) \
         + _validate_calendar(d) + _validate_limits(d) + _validate_profiles(d) \
         + _validate_server(d) + _validate_ide(d) \
         + _validate_plan(d) + _validate_focus(d) + _validate_notify(d) \
-        + _validate_console(d) + _validate_studio(d) + _validate_forges(d.get("forge")) \
+        + _validate_console(d) + _validate_studio(d) + _validate_desktop(d) \
+        + _validate_forges(d.get("forge")) \
         + _validate_harness(d) \
         + _validate_plugins(d) + _validate_site(d)
     v = d.get("max_step_budget_usd", 1)
@@ -1253,7 +1318,8 @@ def validate_board(d, stem=None):
 
 
 WATCH_KEYS = ("name", "repos", "dir", "labels", "query", "every", "hold", "from", "model",
-              "harness", "max_new", "enabled", "pr", "propose")   # docs/starters-v1.md, watchers
+              "harness", "max_new", "enabled", "pr", "propose",   # docs/starters-v1.md, watchers
+              "on", "branches", "workflows", "prompt", "since")    # docs/ci-watch.md
 WATCH_REPO_RX = re.compile(r"^[a-z0-9][a-z0-9_-]*:[\w.-]+/(\*|[\w.-]+)$")   # owner/*: all
 
 
@@ -1279,10 +1345,18 @@ def validate_watches(lst):
                             "forge:owner/* (all the owner's repos)"))
         if not isinstance(w.get("dir"), str) or not w["dir"]:
             out.append(_err(k + ".dir", "required; where the packet folders go"))
-        if "labels" in w and not (isinstance(w["labels"], list) and
-                                  all(isinstance(x, str) for x in w["labels"])):
-            out.append(_err(k + ".labels", "must be a list of strings"))
-        for x in ("query", "from", "model", "harness"):
+        for x in ("labels", "branches", "workflows"):
+            if x in w and not (isinstance(w[x], list) and all(isinstance(y, str) and y
+                                                               for y in w[x])):
+                out.append(_err(k + "." + x, "must be a list of strings"))
+        on = w.get("on", "issues")
+        if on not in ("issues", "ci"):
+            out.append(_err(k + ".on", "issues or ci (what the watcher makes packets for)"))
+        for x in (("labels", "query") if on == "ci" else ("branches", "workflows", "since")):
+            if x in w:
+                out.append(_err(k + "." + x, "applies to on = %r watchers only" % (
+                    "issues" if on == "ci" else "ci")))
+        for x in ("query", "from", "model", "harness", "prompt"):
             if x in w and not isinstance(w[x], str):
                 out.append(_err(k + "." + x, "must be a string"))
         for x in ("hold", "enabled", "propose"):
@@ -1297,6 +1371,11 @@ def validate_watches(lst):
                     out.append(_err(k + ".every", "at least 1m"))
             except ValueError as e:
                 out.append(_err(k + ".every", str(e)))
+        if "since" in w:
+            try:
+                parse_age(w["since"])
+            except ValueError as e:
+                out.append(_err(k + ".since", str(e)))
         if "max_new" in w and not (is_int(w["max_new"]) and w["max_new"] >= 1):
             out.append(_err(k + ".max_new", "must be an integer >= 1"))
     return out

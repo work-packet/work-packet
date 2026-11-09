@@ -210,7 +210,7 @@ def test_the_relay_forwards_an_owned_port_named_in_the_server_name(job, tmp_path
     port = int(open(str(tmp_path / "pids") + ".port").read())
     data = _tls_get(job, "p%d.fwd.wpk" % port, b"/s/")
     assert data.startswith(b"HTTP/1.0 200") and b'<pre id="host">localhost</pre>' in data
-    assert open(os.path.join(job.dir, "features")).read().split() == ["fwd-sni"]
+    assert open(os.path.join(job.dir, "features")).read().split() == ["fwd-sni", "vnc-sni"]
     data = _tls_get(job, "p%d.fwd.wpk" % job.port_, b"/")        # the relay's own port
     assert data.startswith(b"HTTP/1.1 403") and b"wpk's own" in data
     free = socket.socket()

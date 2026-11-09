@@ -111,9 +111,10 @@ ul.list button.x:hover { color: var(--FAILED); }
 <section class="panel todaybrief" style="margin:10px 0 0">
   <div class="row" style="margin:0;justify-content:space-between"><strong>Today</strong>
     <span class="muted" style="font-size:12.5px"><a href="/brief">the whole brief</a> · <a href="/standup">standup</a> · <a href="/review">weekly review</a>{% if ov.shutdown %} · <a href="/shutdown">end of the day</a>{% endif %}</span></div>
-  <ol style="margin:4px 0 0 18px;padding:0">{% for f in b.focus %}<li><a href="/p/{{ f.project|urlencode }}"><strong>{{ f.project }}</strong></a>
+  <ol style="margin:4px 0 0 18px;padding:0">{% for f in b.focus %}<li><a href="/p/{{ f.project|urlencode }}"><strong>{{ f.theme or f.project }}</strong></a>
     <span class="muted">{{ f.why|join(", ") or "next up" }}{% if f.next %} · Next: {{ f.next }}{% endif %}</span>
     <form class="act" method="post" action="/brief/feedback" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="project" value="{{ f.project }}"><input type="hidden" name="back" value="/"><button class="mini" name="kind" value="not today">not today</button><button class="mini" name="kind" value="done already">done already</button></form></li>{% endfor %}</ol>
+  {% if b.agent and (b.agent.decide or b.agent.close_out) %}<div style="font-size:12.5px;margin-top:4px">{% if b.agent.headline %}<em>{{ b.agent.headline }}</em> {% endif %}<a href="/brief">{{ b.agent.decide|length }} to decide · {{ b.agent.close_out|length }} to close out</a></div>{% endif %}
   {% if b.handoff %}<div class="muted" style="font-size:12.5px;margin-top:4px">Hand off before you start: {% for h in b.handoff %}<a href="/p/{{ h.project|urlencode }}/compose">{{ h.project }}</a>{{ ", " if not loop.last }}{% endfor %}</div>{% endif %}
 </section>
 {% elif ov.shutdown %}<p class="muted" style="margin:8px 0 0"><a href="/shutdown">End of the day</a>: checkpoint, load the night shift, pick tomorrow's first.</p>{% endif %}

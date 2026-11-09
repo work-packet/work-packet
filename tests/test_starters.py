@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import time
 import urllib.parse
 
 import pytest
@@ -286,7 +287,8 @@ def test_watch_an_org_and_the_board_page(forge, tmp_path):
     _watch_board(tmp_path, repos=["home:owner/*"])
     [w] = watch.watchers()
     assert watch.poll(w, dry_run=True) == {"made": [], "would": ["home:owner/dv-solve#7"],
-                                           "failed": {}, "errors": [], "proposed": [], "dates": []}
+                                           "failed": {}, "errors": [], "proposed": [], "dates": [],
+                                           "cleared": [], "old": []}
     c = _client()
     page = c.get("/b/solver").text
     assert 'id="watchers"' in page and "home:owner/*" in page and "polled never" in page
@@ -407,7 +409,8 @@ FAKE_IVPM = r"""#!%(python)s
 # Stand-in for ivpm. `update` records the branch it ran on, then fills packages/;
 # `clone` records its arguments, clones and checks out as ivpm does, prints the
 # transcript ivpm does, and updates when there is an ivpm.yaml. IVPM_FAIL fails
-# the dependencies.
+# the dependencies; IVPM_HANG hangs in them, in a child (as git's ssh, prompting)
+# whose pid it writes there.
 import os, subprocess, sys
 a, log = sys.argv[1:], %(log)r
 def git(*args, cwd=None):
@@ -417,6 +420,11 @@ def deps(where):
         f.write(subprocess.run(["git", "symbolic-ref", "--short", "HEAD"], cwd=where,
                                capture_output=True, text=True).stdout)
     print(">> dep (git)", flush=True)
+    if os.environ.get("IVPM_HANG"):
+        kid = subprocess.Popen(["sleep", "300"])
+        with open(os.environ["IVPM_HANG"], "w") as f:
+            f.write(str(kid.pid))
+        kid.wait()
     if os.environ.get("IVPM_FAIL"):
         print("fetch failed: no route to host", file=sys.stderr, flush=True)
         print("<< dep (ivpm.yaml:3:5) ERROR: no route to host", flush=True)
@@ -724,6 +732,37 @@ def test_dash_create_job_failure(home, source, tmp_path, fake_ivpm, monkeypatch)
                 s.receive_text()
             assert ex.value.code == 1008
     assert c.get("/new/job/nosuch/log").status_code == 404
+
+
+def test_dash_create_job_cancel(home, source, tmp_path, fake_ivpm, monkeypatch):
+    """A clone that hangs (ssh waiting on a prompt) is cancelled from the page:
+    its whole process group goes, and so does the clone."""
+    _ivpm_source(source)
+    hung = tmp_path / "hung.pid"
+    monkeypatch.setenv("IVPM_HANG", str(hung))
+    c, token, base = _guarded()
+    hdr = {"origin": base, "x-csrf-token": token, "accept": "application/json"}
+    with c:
+        r = c.post("/new", data={"starter": "clone", "clone": str(source), "clone_tool": "ivpm",
+                                 "dir": str(tmp_path / "t"), "action": "create",
+                                 "csrf": token}, headers=hdr)
+        job = r.json()
+        deadline = time.time() + 30
+        while not (hung.exists() and hung.read_text()) and time.time() < deadline:
+            time.sleep(0.05)
+        kid = int(hung.read_text())
+        url = "/new/job/%s/cancel" % job["job"]
+        assert c.post(url, headers={"origin": base}).status_code == 403    # no token
+        assert c.post(url, headers=hdr).json() == {"ok": True}
+        got = _job_events(c, token, base, job["ws"])
+        assert got[-1]["cancelled"] and not got[-1]["ok"]
+        assert ("deps", "fail") in _steps(got) and any(e["k"] == "undo" for e in got)
+        assert not (tmp_path / "t" / "dv-solve").exists()
+        assert c.post(url, headers=hdr).status_code == 404               # finished
+    deadline = time.time() + 10
+    while os.path.exists("/proc/%d" % kid) and time.time() < deadline:
+        time.sleep(0.05)
+    assert not os.path.exists("/proc/%d" % kid)
 
 
 def test_cli_shows_the_steps(home, source, tmp_path, fake_ivpm, capsys):

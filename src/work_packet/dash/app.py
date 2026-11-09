@@ -30,6 +30,10 @@ from ..sched.classes import CLASSES
 from .guard import split_host
 
 FILE_MAX = 4 * 1024 * 1024    # bytes of a deliverable the page serves
+# Images a file view serves as themselves, for <img> in a Markdown file it shows;
+# an SVG under a sandbox CSP, so one opened on its own runs no script.
+IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+          ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"}
 
 TEMPLATES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "live.js"), "rb") as _fp:
@@ -39,7 +43,7 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pane.js"), "
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Served from the package: compose.js, shell.js and the other scripts (no CDN, the CSP
 # is script-src 'self'); vendored libraries go through dash/vendored.py. Name -> media type.
-STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript", "studio_wait.js": "text/javascript", "studio_files.js": "text/javascript", "studio_edit.js": "text/javascript", "ide_forward.js": "text/javascript", "ide_presence.js": "text/javascript", "page.js": "text/javascript", "notify.js": "text/javascript"}
+STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript", "studio_wait.js": "text/javascript", "studio_files.js": "text/javascript", "studio_edit.js": "text/javascript", "ide_forward.js": "text/javascript", "ide_presence.js": "text/javascript", "desk.js": "text/javascript", "ide_desk.js": "text/javascript", "page.js": "text/javascript", "notify.js": "text/javascript"}
 REFRESH_S = 10
 STARTS = ("ide-web", "ide-desktop", "studio", "handoff", "none")   # collaboration.md W1
 LIVE_MS = 3000             # the live view refreshes faster
@@ -181,6 +185,13 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         except Exception:                 # noqa: BLE001: a banner never breaks a page
             ctx["sched_mode"] = None
         ctx.setdefault("ide", ide_config())
+        e = ctx.get("e")                  # a packet's pages lead with its board's crumb
+        if isinstance(e, dict) and e.get("name") and e.get("path") and "crumb_board" not in ctx:
+            try:
+                ctx["crumb_board"] = registry.board_of(
+                    e, [b["name"] for b in registry.boards(home)])
+            except Exception:             # noqa: BLE001: a crumb never breaks a page
+                ctx["crumb_board"] = None
         if "vsc" in ctx:                  # the sessions tables carry the scribe's switch
             from .. import scribe, sessionhooks
             ctx["scribe_on"] = scribe.enabled(home or registry.home(), ctx["ide"])
@@ -412,6 +423,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             else:
                 w = {"name": one("name"), "repos": words("repos"), "dir": one("dir"),
                      "labels": words("labels"), "every": one("every"),
+                     "on": one("on") if one("on") == "ci" else None,
+                     "branches": words("branches"),
                      "propose": one("propose") == "1", "hold": one("hold") == "1",
                      "enabled": one("enabled") == "1", "pr": one("pr")}
                 await run_in_threadpool(watch.save, name, w, one("was") or None, home)
@@ -1226,17 +1239,45 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         if b is None and "day" in request.path_params:
             return not_found(request, "a brief for %s" % day)
         cols, broken = data.board(home)
-        return render(request, "brief.html", b=b, day=day, days=brief.days(h),
-                      html=data.md(brief.render(b)) if b else None,
-                      side=data.side(home, cols, broken), here=None)
+        cards = [c for cs in cols.values() for c in cs]
+        rows = await run_in_threadpool(brief.live_rows, h, b, cards) if b else None
+        w = brief.writing() if day == time.strftime("%Y-%m-%d") else None
+        return render(request, "brief.html", b=b, day=day, days=brief.days(h), rows=rows,
+                      writing=w, now_s=time.time(),
+                      html=data.md(brief.render(b, ("head", "decide", "close_out", "runs") if rows else ()))
+                      if b else None, side=data.side(home, cols, broken), here=None)
 
     async def brief_build(request):
         """Build today's brief again now."""
         from .. import brief, executor
         f = await form(request)
-        await run_in_threadpool(brief.build, home or registry.home())
+        started = await run_in_threadpool(brief.build_soon, home or registry.home())
+        msg = ("today's brief rebuilt; the model is writing its version, which replaces it "
+               "in about 3 minutes" if started else "today's brief is already being rebuilt")
         return back(local((f.get("back") or [""])[0], "/brief"),
-                    executor.Outcome(executor.OK, "today's brief rebuilt"), poke_runner=False)
+                    executor.Outcome(executor.OK, msg), poke_runner=False)
+
+    async def brief_run(request):
+        """Go: hand the ticked proposed runs of a day's brief to the runner."""
+        from .. import brief, executor
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0]
+        day = one("day") or time.strftime("%Y-%m-%d")
+        picks = {}
+        for v in f.get("run") or ():
+            if v.isdigit():
+                picks[int(v)] = one("text.%s" % v)
+        if not picks:
+            return back("/brief/%s" % day, executor.Outcome(executor.USAGE,
+                                                            "tick the runs to start"),
+                        poke_runner=False)
+        got = await run_in_threadpool(brief.launch, home or registry.home(), day, picks,
+                                      who(request))
+        bad = ["%s: %s" % (p, o.msg) for p, o in got if o.code != executor.OK]
+        ok = [p for p, o in got if o.code == executor.OK]
+        msg = "; ".join((["handed off: " + ", ".join(ok)] if ok else []) + bad)
+        return back("/brief/%s" % day, executor.Outcome(
+            executor.USAGE if bad and not ok else executor.OK, msg))
 
     async def brief_feedback(request):
         """"Not today" or "done already" on a suggestion; the brief is rebuilt."""
@@ -1249,7 +1290,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         except ValueError:
             return back("/", executor.Outcome(executor.USAGE, "say not today or done already"),
                         poke_runner=False)
-        await run_in_threadpool(brief.build, h)
+        await run_in_threadpool(brief.apply_feedback, h)
         return back(local(one("back"), "/"), executor.Outcome(executor.OK, "%s: %s" % (
             one("project"), one("kind"))), poke_runner=False)
 
@@ -2030,6 +2071,12 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             return not_found(request, "job %s" % request.path_params["jid"])
         return PlainTextResponse(text)
 
+    async def new_job_cancel(request):
+        """Cancel a Create job: its clone is stopped and removed (JSON out)."""
+        if not jobs.cancel(request.path_params["jid"]):
+            return JSONResponse({"error": "no such job running"}, status_code=404)
+        return JSONResponse({"ok": True})
+
     async def compose(request):
         from .. import setup
         e = entry(request)
@@ -2309,12 +2356,18 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
 
     def file_page(request, e, p, rel, link, wpid=None, listing=None, editable=True):
         """A Markdown file formatted, with markup (docs/doc-markup.md); ?raw=1 for
-        its source; other text as it is; a binary file as a download."""
+        its source; an image as itself; other text as it is; a binary file as a
+        download."""
         if os.path.getsize(p) > FILE_MAX:
             return PlainTextResponse("%s: %d bytes, too large to show here; it is at %s\n"
                                      % (rel, os.path.getsize(p), p))
         with open(p, "rb") as fp:
             raw = fp.read()
+        image = IMAGES.get(os.path.splitext(p)[1].lower())
+        if image is not None:       # inline, so a Markdown file's ![](...) shows it
+            return Response(raw, media_type=image, headers={
+                "content-security-policy": "sandbox; default-src 'none'; "
+                                           "style-src 'unsafe-inline'"})
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
@@ -2507,12 +2560,63 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             return await websocket.close(1008)
         return await dide.proxy_ws(ide_backend, websocket)
 
+    # The desktop tab (docs/desktop.md): owner only, like /ide/ (the guard).
+    def desk_key(request):
+        from . import ide as dide
+        k = request.path_params["key"]
+        return k if dide.KEY.match(k) and ide_backend is not None and \
+            ide_backend.get(k) is not None else None
+
+    async def desk_page(request):
+        k = desk_key(request)
+        if k is None:
+            return not_found(request, "desktop %s" % request.path_params["key"])
+        from .. import desktop, ide_launch
+        h = ide_backend.home
+        last = (await run_in_threadpool(ide_launch.opens, h, k) or [{}])[-1]
+        back = None
+        if last.get("project"):
+            back = "/p/%s" % urllib.parse.quote(last["project"]) + \
+                ("/%s" % last["wpid"] if last.get("wpid") else "")
+        return render(request, "desk.html", key=k, back=back,
+                      title=desktop.label(h, k, ide_backend.target(k)))
+
+    async def desk_state(request):
+        from . import desk
+        k = desk_key(request)
+        if k is None:
+            return JSONResponse({"desktop": False, "why": "no such IDE server"}, status_code=404)
+        return JSONResponse(await run_in_threadpool(desk.state, ide_backend, k),
+                            headers={"cache-control": "no-store"})
+
+    async def desk_run(request):
+        """Start an app of the Apps menu on the desktop (the guard checked the token)."""
+        from . import desk
+        k = desk_key(request)
+        if k is None:
+            return JSONResponse({"ok": False, "why": "no such IDE server"}, status_code=404)
+        f = await form(request)
+        name = (f.get("app") or [""])[0].strip()
+        code, why = await run_in_threadpool(desk.run, ide_backend, k, name)
+        return JSONResponse({"ok": code == 202, "why": why}, status_code=code)
+
+    async def desk_ws(websocket):
+        from . import desk
+        k = desk_key(websocket)
+        if k is None:
+            return await websocket.close(1008)
+        return await desk.bridge(ide_backend, websocket, k, websocket.query_params.get("t"))
+
     from . import studio as studiomod
     studio_routes = studiomod.routes(home, agents, render, entry, who, not_found)
     return Starlette(middleware=[Middleware(ArchivedReadOnly, home=home)], routes=[
         Route("/ide/{rest:path}", ide_http,
               methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
         WebSocketRoute("/ide/{rest:path}", ide_ws),
+        Route("/desk/{key}/", desk_page),
+        Route("/desk/{key}/state", desk_state),
+        Route("/desk/{key}/run", desk_run, methods=["POST"]),
+        WebSocketRoute("/desk/{key}/ws", desk_ws),
         Route("/", overview),
         Route("/stats", stats_page),
         Route("/runs", runs_page),
@@ -2562,6 +2666,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/new/search", new_search),
         Route("/new", new_create, methods=["POST"]),
         Route("/new/job/{jid}/log", new_job_log),
+        Route("/new/job/{jid}/cancel", new_job_cancel, methods=["POST"]),
         WebSocketRoute("/new/job/{jid}/ws", new_job_ws),
         Route("/p/{project}/compose", compose),
         Route("/p/{project}/compose", compose_post, methods=["POST"]),
@@ -2592,6 +2697,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/brief", brief_page),
         Route("/brief/build", brief_build, methods=["POST"]),
         Route("/brief/feedback", brief_feedback, methods=["POST"]),
+        Route("/brief/run", brief_run, methods=["POST"]),
         Route("/brief/{day}", brief_page),
         Route("/shutdown", shutdown_page),
         Route("/shutdown/handoff", shutdown_handoff, methods=["POST"]),

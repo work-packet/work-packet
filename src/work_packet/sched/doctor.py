@@ -104,6 +104,16 @@ def credential_checks(h):
     return out
 
 
+def _node_tools(h):
+    """What a node needs: wpk and claude, and Xvnc when the desktop is on."""
+    from .. import desktop
+    try:
+        d = desktop.load_config(h)
+    except registry.ConfigError:
+        d = {}
+    return ["wpk", "claude"] + ([d.get("xvnc") or "Xvnc"] if d.get("enabled") else [])
+
+
 def _probe(h, cfg):
     import shlex
     from .backends import DONE, LOST, Task
@@ -114,9 +124,9 @@ def _probe(h, cfg):
     script = "; ".join(["echo start $(date +%s)"] +
                        ["test -d %s && echo seen %s || echo unseen %s" % (
                            shlex.quote(p), shlex.quote(p), shlex.quote(p)) for p in paths] +
-                       ["command -v wpk >/dev/null && echo have wpk || echo lack wpk",
-                        "command -v claude >/dev/null && echo have claude || echo lack claude",
-                        "echo clock $(date +%s)"])
+                       ["command -v %s >/dev/null && echo have %s || echo lack %s" % (t, t, t)
+                        for t in _node_tools(h)] +
+                       ["echo clock $(date +%s)"])
     env = (cfg.get("node_env") or "").strip()
     jid = new_id()
     log = os.path.join(jobs_dir(h), "probe-%s.log" % jid)
@@ -166,8 +176,12 @@ def _probe(h, cfg):
     else:
         out.append(Check("ok", "the home and %d project%s are visible from a node" % (
             len(seen["seen"]) - 1, "" if len(seen["seen"]) == 2 else "s")))
-    for tool in ("wpk", "claude"):
-        if tool in seen["lack"]:
+    for tool in _node_tools(h):
+        if tool in seen["lack"] and tool not in ("wpk", "claude"):
+            out.append(Check("warn", "%s is not on the node's PATH" % tool,
+                             "[desktop] enabled: IDE jobs there run without a display "
+                             "(docs/desktop.md)"))
+        elif tool in seen["lack"]:
             out.append(Check("missing", "%s is not on the node's PATH" % tool, "",
                              ["set [sched] node_env to the line that puts it there "
                               "(a module load or a venv activate)"]))

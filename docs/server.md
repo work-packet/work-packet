@@ -131,6 +131,16 @@ shows that button disabled. Turn TLS on to use it.
   since the existing `serve :443` has one.
 - With TLS on, the Host check (§4) accepts the `ts.net` name, and the URL
   becomes `https://myhost.tailnet.example:7878/`.
+- **Plain `http://` on the https port is redirected** (added 2026-11-08). The
+  listener reads each connection's first byte without consuming it. A TLS
+  handshake (`0x16`) goes on to the board. Anything else gets
+  `308 Permanent Redirect` to the same path on
+  `https://<certificate name>:<port>`. The redirect uses the certificate's
+  name rather than the request's Host, because an address or another name
+  would fail the certificate anyway, and it never redirects off the board. A
+  connection that sends nothing for 10 s is closed. The network listener
+  (`auth = "unix"`, `listen = "network"`) does the same, with its own name.
+  Loopback stays plain `http://127.0.0.1:7878/`.
 
 ## 3. Other modes
 

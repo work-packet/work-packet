@@ -206,15 +206,17 @@
 
   function finish(d) {
     clearInterval(timer);
+    $(".nj-cancel").hidden = true;
     if (d.ok) {
       $(".nj-title").textContent = "Created " + (d.name || "");
       $(".nj-activity").textContent = "opening it…";
       setTimeout(function () { location.replace(d.url); }, 700);
       return;
     }
-    $(".nj-title").textContent = "Not created";
+    $(".nj-title").textContent = d.cancelled ? "Cancelled" : "Not created";
     var e = $(".nj-error");
-    e.textContent = d.error + (st.undo ? "\n\nThe clone was removed; nothing was left behind." : "");
+    e.textContent = d.error + (st.undo && !d.cancelled ?
+      "\n\nThe clone was removed; nothing was left behind." : "");
     e.hidden = false;
     $(".nj-raw").open = true;
     enable(true);
@@ -250,8 +252,19 @@
     $(".nj-loglink").href = "/new/job/" + encodeURIComponent(id) + "/log";
     clearInterval(timer);
     timer = setInterval(render, 250);
+    var cb = $(".nj-cancel");
+    cb.hidden = false; cb.disabled = false;
     connect();
   }
+
+  $(".nj-cancel").addEventListener("click", function () {
+    var cb = this;
+    cb.disabled = true;
+    fetch("/new/job/" + encodeURIComponent(jid) + "/cancel", {method: "POST",
+      credentials: "same-origin", headers: {"x-csrf-token": panel.dataset.csrf}})
+      .then(function (r) { if (!r.ok) cb.disabled = false; })
+      .catch(function () { cb.disabled = false; });
+  });
 
   if (form) {
     // Web or desktop VS Code: as you chose last time on this board.

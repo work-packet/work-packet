@@ -445,13 +445,21 @@ def cmd_watch(args) -> int:
             print("%s/%s: would make a packet for %s" % (w["board"], w["name"], k))
         for k, name in r["made"]:
             print("%s/%s: made %s for %s" % (w["board"], w["name"], name, k))
+        for k in r["proposed"]:
+            print("%s/%s: put %s in the Inbox" % (w["board"], w["name"], k))
+        for k in r["cleared"]:
+            print("%s/%s: %s passes again; its packet has a note" % (w["board"], w["name"], k))
+        for k in r["old"] if args.dry_run else ():
+            print("%s/%s: %s last failed before `since` (%s); left" % (
+                w["board"], w["name"], k, w.get("since") or watch.SINCE))
         for k, e in r["failed"].items():
             print("%s/%s: %s: %s" % (w["board"], w["name"], k, e))
             rc = 1
         for e in r["errors"]:
             print("%s/%s: %s" % (w["board"], w["name"], e))
             rc = 1
-        if not (r["would"] or r["made"] or r["failed"] or r["errors"]):
+        if not (r["would"] or r["made"] or r["proposed"] or r["cleared"] or r["failed"]
+                or r["errors"]):
             print("%s/%s: nothing new" % (w["board"], w["name"]))
     return rc
 
@@ -699,7 +707,7 @@ def cmd_brief(args) -> int:
     day = args.day or _time.strftime("%Y-%m-%d")
     b = brief.load(h, day)
     if args.rebuild or (b is None and not args.day):
-        b = brief.build(h)
+        b = brief.build(h, agent=False if args.no_agent else None)
     if b is None:
         return _err("no brief for %s" % day)
     print(brief.render(b))
@@ -1765,6 +1773,37 @@ def cmd_dash(args) -> int:
     return 0
 
 
+def cmd_desktop(args) -> int:
+    """The desktop tab of the IDE server this terminal runs in (docs/desktop.md)."""
+    import json
+    from . import desktop, registry
+    from .dash.ide import KEY, server_dir
+    p = os.environ.get("WPK_DESKTOP", "")
+    key = p.strip("/").rpartition("/")[2]
+    if not KEY.match(key):
+        return _err("no desktop here: run this in a terminal of web VS Code opened from the "
+                    "board, with [desktop] enabled = true (docs/desktop.md)")
+    h = registry.home()
+    st = desktop.state(server_dir(h, key)) or {}
+    url = None
+    try:
+        from .dash.server import read_state
+        bs = read_state(h)
+    except ImportError:
+        bs = None
+    if bs and bs.get("urls"):
+        url = bs["urls"][0].rstrip("/") + desktop.path(key)
+    if args.json:
+        print(json.dumps({"key": key, "url": url, "path": desktop.path(key),
+                          "display": os.environ.get("DISPLAY"), "state": st}, indent=1))
+        return 0
+    print("desktop  %s" % (url or desktop.path(key) + "  (on the board)"))
+    print("display  %s, X %s" % (os.environ.get("DISPLAY", "?"), st.get("x", "?")))
+    if st.get("apps"):
+        print("windows  %s" % ", ".join(st["apps"]))
+    return 0
+
+
 def cmd_ide(args) -> int:
     import json
     from . import actions, ide, registry, setup
@@ -2321,9 +2360,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("brief", help="today's focus brief: overnight, what needs you, "
                        "where to focus and why",
                        description="Built each weekday morning by the board ([focus] time, "
-                       "default 08:30), from its own data; no model call "
-                       "(docs/collaboration.md §9.4). Prints today's, building it if needed.")
+                       "default 08:30): a model writes it from the board, your sessions and "
+                       "your repos ([focus] agent, model), with the scored brief as the "
+                       "fallback (docs/focus-brief-review.md). Prints today's, building it "
+                       "if needed.")
     p.add_argument("--rebuild", action="store_true", help="build it again now")
+    p.add_argument("--no-agent", action="store_true",
+                   help="with --rebuild: the scored brief only, no model call")
     p.add_argument("--day", help="an earlier day's, YYYY-MM-DD")
     p.set_defaults(func=cmd_brief)
 
@@ -2696,6 +2739,13 @@ def build_parser() -> argparse.ArgumentParser:
                    "it makes it yours until you hand it back)")
     p.add_argument("--json", action="store_true", help="print JSON")
     p.set_defaults(func=cmd_ide)
+
+    p = sub.add_parser("desktop", help="the desktop tab of this VS Code's server",
+                       description="In a terminal of web VS Code with [desktop] enabled: "
+                       "print the URL of the desktop tab, where windows of GUI programs "
+                       "started here appear, and what is on it. See docs/desktop.md.")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p.set_defaults(func=cmd_desktop)
 
     p = sub.add_parser("url", help="print the running board's URLs",
                        description="Print the URLs the running `wpk dash` listens on.")

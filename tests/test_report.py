@@ -193,6 +193,15 @@ def test_report_links_go_to_the_file_view():
     assert 'href="https://x.org/y"' in html and 'href="#top"' in html
 
 
+def test_report_images_go_to_the_file_view():
+    pytest.importorskip("markdown_it")
+    from work_packet.dash import data
+    link = data.file_link({"name": "demo"}, "w1", "work/r")
+    html = data.md("![a](a.png) ![b](https://x.org/b.png)", link)
+    assert 'src="/p/demo/w1/file?path=work/r/a.png"' in html
+    assert 'src="https://x.org/b.png"' in html
+
+
 def test_done_with_open_outline_items_is_rejected(proj, monkeypatch):
     # dv-solve-simbench step 1: a design, an outline whose next item is the
     # owner's review, and resume: done. It should have asked.
@@ -274,3 +283,9 @@ def test_task_page_opens_deliverables_as_they_were(fake, tmp_path, monkeypatch):
         assert r.status_code == 404, bad
     assert c.get("/p/rp/%s/file" % root.wpid, params={
         "path": "state/../status.md", "step": "0001"}).status_code == 404
+    # An image the plan shows: the file view serves it as an image, not a download.
+    with open(os.path.join(root.state_dir, "chart.png"), "wb") as fp:
+        fp.write(b"\x89PNG\r\n\x1a\n\0\0")
+    img = c.get("/p/rp/%s/file?path=state/chart.png" % root.wpid)
+    assert img.status_code == 200 and img.headers["content-type"] == "image/png"
+    assert "attachment" not in img.headers.get("content-disposition", "")

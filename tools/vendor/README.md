@@ -26,7 +26,8 @@ node tools/vendor/build.mjs  # or: node tools/vendor/build.mjs codemirror
 It writes `dash/vendor/<lib>/` and `dash/vendor/manifest.json` (every file
 with its sha256 and size, the versions, the size budget):
 
-- ESM bundles by esbuild for `vega`, `draw` and `codemirror`;
+- ESM bundles by esbuild for `vega`, `draw`, `codemirror` and `novnc`
+  (`novnc` for es2022: noVNC uses top-level await);
 - `term`: xterm.js and its fit addon copied as they are built (UMD,
   loaded by a plain `<script>`).
 
@@ -55,6 +56,7 @@ dependency's dependency. How releases get reproducible bundles is open
 | `draw/excalidraw.js`, `draw/excalidraw.css`, `draw/fonts/` | `entries/excalidraw.js` | @excalidraw/excalidraw 0.18.1, react 18.3.1, react-dom 18.3.1 | MIT |
 | `draw/mermaid-to-excalidraw.js` | `entries/mermaid-to-excalidraw.js` | @excalidraw/mermaid-to-excalidraw 2.2.2 | MIT |
 | `codemirror/codemirror.js` | `entries/codemirror.js` | codemirror 6.0.2, @codemirror/state 6.7.6, view 6.43.15, language 6.13.1, lang-markdown 6.5.2, lang-python 6.2.1, lang-json 6.0.2, lang-yaml 6.1.3, legacy-modes 6.5.5 (shell, TOML, Verilog/SV, C/C++, diff, CMake), merge 6.12.3 | MIT |
+| `novnc/novnc.js` | `entries/novnc.js` | @novnc/novnc 1.7.0 (the desktop tab, docs/desktop.md) | MPL-2.0 (`novnc/LICENSE.txt`) |
 | `term/xterm.js`, `term/xterm.css`, `term/addon-fit.js` | copied | @xterm/xterm 6.0.0, @xterm/addon-fit 0.11.0 | MIT (`term/LICENSE.txt`) |
 
 Third-party licence comments are collected in `*.LEGAL.txt` next to each
@@ -88,6 +90,7 @@ Built 2026-10-31 (budget in `build.mjs`, `BUDGET`; the build and
 | vega | 0.84 MB (2 files) | 1.5 MB |
 | draw | 8.93 MB (219 files: 7.61 MB chunks, 0.88 MB entries and CSS, 0.44 MB fonts) | 10 MB |
 | codemirror | 0.74 MB (1 file) | 0.8 MB |
+| novnc | 0.19 MB (2 files) | 0.4 MB |
 | term | 0.50 MB (4 files) | 0.6 MB |
 
 A page loads only what it uses: a chart page `vega.js` (0.84 MB); Mermaid

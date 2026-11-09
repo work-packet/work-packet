@@ -163,6 +163,7 @@ def test_allowed_colleague_is_read_only(tmp_path):
     r = c.post("/act", headers={"origin": BASE, "x-csrf-token": gate.csrf("bob")})
     assert r.status_code == 403 and "read-only" in r.text
     assert c.get("/ide/x/").status_code == 403
+    assert c.get("/desk/x/").status_code == 403           # the desktop too (docs/desktop.md)
 
 
 def test_names_not_allowed_are_signed_out(tmp_path):

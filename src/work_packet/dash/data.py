@@ -987,7 +987,7 @@ def packet(entry, wpid, now=None):
 def md(text, link=None, lines=False):
     """Markdown to HTML, raw HTML in it escaped; None without markdown-it-py
     (the page then shows the text as it is). `link` maps each relative link
-    target (no scheme, not absolute, not an anchor) to the href to use. With
+    or image target (no scheme, not absolute, not an anchor) to the URL to use. With
     `lines`, blocks carry their source lines, for marking up (docs/doc-markup.md)."""
     try:
         from markdown_it import MarkdownIt
@@ -999,9 +999,10 @@ def md(text, link=None, lines=False):
         def core(state):
             for tok in state.tokens:
                 for t in tok.children or ():
-                    href = t.attrGet("href") if t.type == "link_open" else None
+                    attr = {"link_open": "href", "image": "src"}.get(t.type)
+                    href = t.attrGet(attr) if attr else None
                     if href and not href.startswith(("/", "#")) and ":" not in href.split("/")[0]:
-                        t.attrSet("href", link(href))
+                        t.attrSet(attr, link(href))
         m.core.ruler.push("relative_links", core)
     return m.render(text or "")
 
@@ -1840,7 +1841,8 @@ def origin(entry):
 
 def watchers(h, board):
     """A board's watchers (docs/starters-v1.md) with what they have done:
-    [{name, repos, labels, every, enabled, polled, made, failed, errors, problems}]."""
+    [{name, repos, labels, on, branches, workflows, every, enabled, polled, made, failed,
+    errors, problems}]."""
     from .. import watch
     out = []
     for w in watch.watchers(h):
@@ -1851,6 +1853,8 @@ def watchers(h, board):
             continue
         s = watch.load_state(w, h)
         out.append({"name": w["name"], "repos": w["repos"], "labels": w.get("labels") or [],
+                    "on": w.get("on", "issues"), "branches": w.get("branches") or [],
+                    "workflows": w.get("workflows") or [],
                     "every": w.get("every", "15m"), "enabled": w.get("enabled", True),
                     "hold": w.get("hold", True), "dir": w["dir"],
                     "propose": w.get("propose", False), "pr": w.get("pr", "off"),

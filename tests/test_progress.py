@@ -169,3 +169,49 @@ def test_build_heartbeat_lines():
     ev = t.feed("   Building pssparser: compiling ast.cpp (still running, 1m 16s)")
     assert ev[0]["k"] == "task" and ev[0]["msg"].endswith("(still running, 1m 16s)")
     assert t.feed("<< [Installing Python packages] (137.2s)")[0]["state"] == "ok"
+
+
+def test_run_streamed_gives_the_command_no_terminal_input():
+    # wpkd run as a background job: a clone's ssh touching the terminal stopped
+    # wpkd's whole process group, the board with it. The command reads nothing.
+    rc, said = progress.run_streamed([sys.executable, "-c",
+                                      "import sys; print(repr(sys.stdin.read()))"])
+    assert rc == 0 and said == "''"
+
+
+def test_run_streamed_leaves_out_another_projects_ivpm_settings(monkeypatch):
+    monkeypatch.setenv("IVPM_PROJECT", "/elsewhere")
+    monkeypatch.setenv("IVPM_PACKAGES", "/elsewhere/packages")
+    monkeypatch.setenv("IVPM_CACHE", "/cache")
+    rc, said = run_streamed([sys.executable, "-c", "import os; print(sorted(k for k in "
+                             "os.environ if k.startswith('IVPM_')))"])
+    assert rc == 0 and said == "['IVPM_CACHE']"
+
+
+def test_a_cancel_kills_the_command_and_its_children():
+    import threading
+    import time
+    c = progress.Canceller()
+    out = {}
+
+    def run():
+        with c.on():
+            try:
+                run_streamed(["sh", "-c", "sleep 300 & echo $!; wait"],
+                             lambda t, f: out.setdefault("kid", int(t)))
+            except progress.Cancelled as e:
+                out["e"] = e
+    t = threading.Thread(target=run)
+    t.start()
+    deadline = time.time() + 10
+    while "kid" not in out and time.time() < deadline:
+        time.sleep(0.02)
+    c.cancel()
+    t.join(10)
+    assert not t.is_alive() and isinstance(out.get("e"), progress.Cancelled)
+    deadline = time.time() + 5
+    while os.path.exists("/proc/%d" % out["kid"]) and time.time() < deadline:
+        time.sleep(0.02)
+    assert not os.path.exists("/proc/%d" % out["kid"])
+    with c.on(), pytest.raises(progress.Cancelled):     # and nothing more starts
+        run_streamed(["true"])

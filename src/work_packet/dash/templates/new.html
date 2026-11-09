@@ -89,7 +89,7 @@
 </form>
 {% endif %}
 <div id="new-job" class="panel" style="max-width:640px" hidden{% if job %} data-job="{{ job.id }}"{% endif %} data-csrf="{{ csrf or '' }}">
-  <div class="nj-head"><b class="nj-title">Creating {{ job.name if job else values.name }}</b><span class="nj-clock muted"></span></div>
+  <div class="nj-head"><b class="nj-title">Creating {{ job.name if job else values.name }}</b><span class="nj-clock muted"></span><button type="button" class="nj-cancel" hidden title="Stop the clone and remove what it made">Cancel</button></div>
   <ol class="nj-steps"></ol>
   <p class="nj-activity muted"></p>
   <div class="nj-error flash bad" hidden></div>
@@ -100,6 +100,7 @@
 #new-job { margin-top: 12px; }
 #new-job .nj-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; }
 #new-job .nj-clock { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 12px; }
+#new-job .nj-cancel { font-size: 12px; padding: 1px 8px; }
 #new-job ol { list-style: none; padding: 0; margin: 0; max-height: 22em; overflow-y: auto; overscroll-behavior: contain; }
 #new-job .nj-step { display: grid; grid-template-columns: 1.2em 1fr auto; gap: 2px 6px; padding: 3px 0; }
 #new-job .nj-step .ic { text-align: center; }

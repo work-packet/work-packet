@@ -19,14 +19,14 @@ def _cwd(tmp_path, monkeypatch):
 @needs_build
 def test_the_manifest_matches_the_files():
     m = vendored.manifest()
-    assert set(vendored.libs(m)) == {"vega", "draw", "codemirror", "term"}
+    assert set(vendored.libs(m)) == {"vega", "draw", "codemirror", "novnc", "term"}
     assert {"vega", "vega-lite", "vega-embed", "vega-interpreter", "mermaid", "react",
             "@excalidraw/excalidraw"} <= set(m["versions"])
     assert [p for p in vendored.check(m) if p[0] == "error"] == []
-    assert {"codemirror", "@codemirror/view", "@xterm/xterm"} <= set(m["versions"])
+    assert {"codemirror", "@codemirror/view", "@xterm/xterm", "@novnc/novnc"} <= set(m["versions"])
     for want in ("codemirror/codemirror.js", "term/xterm.js", "term/xterm.css", "term/addon-fit.js",
                  "vega/vega.js", "draw/mermaid.js", "draw/excalidraw.js",
-                 "draw/excalidraw.css", "draw/mermaid-to-excalidraw.js"):
+                 "draw/excalidraw.css", "draw/mermaid-to-excalidraw.js", "novnc/novnc.js"):
         assert want in m["files"], want
     assert any(p.startswith("draw/fonts/") and p.endswith(".woff2") for p in m["files"])
 

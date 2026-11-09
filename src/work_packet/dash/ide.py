@@ -26,7 +26,7 @@ import socket
 import subprocess
 import time
 
-from .. import ide_launch, ide_ports
+from .. import ide_launch, ide_ports, registry
 
 log = logging.getLogger("wpk.dash")
 
@@ -43,6 +43,8 @@ TRUST = (b"&quot;enableWorkspaceTrust&quot;:true", b"&quot;enableWorkspaceTrust&
 SHIM = b'<script src="/static/ide_forward.js"></script>'
 # Which tabs are open and seen (docs/collaboration.md §7.4): the presence beacon.
 PRESENCE_SHIM = b'<script src="/static/ide_presence.js"></script>'
+# The way to the desktop, and its "a window opened" toast (docs/desktop.md §6).
+DESK_SHIM = b'<script src="/static/ide_desk.js"></script>'
 OPEN = "/__wpk/open"
 VIS = "/__wpk/vis"
 FORWARD_HOLD_S = 300        # a server whose forwarded page was used this recently is not evicted
@@ -210,7 +212,8 @@ class Backend:
         out = open(self.log_path, "ab")
         lid = ide_launch.start(self.home, self.key, self._target(), "local")
         try:
-            self.proc = subprocess.Popen(self.argv(), stdin=subprocess.DEVNULL, stdout=out,
+            self.proc = subprocess.Popen(self.with_desktop(self.argv()), stdin=subprocess.DEVNULL,
+                                         stdout=out,
                                          stderr=subprocess.STDOUT, start_new_session=True,
                                          env=dict(os.environ, **ide_launch.env(lid, self.key)))
         except OSError as e:
@@ -229,6 +232,38 @@ class Backend:
                 return fp.read()
         except OSError:
             return ""
+
+    # -- the desktop (docs/desktop.md) ---------------------------------------
+
+    desk_ok = True              # this kind of server can carry a desktop
+
+    def with_desktop(self, argv):
+        """``argv`` under xproxy when ``[desktop] enabled``: the server, and all
+        it starts, gets a DISPLAY. Its settings are read now, at each start."""
+        from .. import desktop
+        try:
+            cfg = desktop.load_config(self.home)
+        except registry.ConfigError:
+            return argv
+        with contextlib.suppress(OSError):
+            os.unlink(os.path.join(self.dir, desktop.STATE))
+        if not (cfg.get("enabled") and self.desk_ok):
+            return argv
+        desktop.write_conf(self.dir, cfg, title=desktop.label(self.home, self.key, self._target()),
+                           cwd=desktop.workdir(self._target()))
+        return desktop.wrap(self.dir, self.key, argv)
+
+    def desk_state(self):
+        """xproxy's report while it serves, else None."""
+        from .. import desktop
+        return desktop.live(self.dir) if self.desk_ok else None
+
+    async def desk_connect(self):
+        """A byte stream to the desktop's VNC (xproxy starts X on it)."""
+        st = self.desk_state()
+        if st is None:
+            raise IdeUnavailable("no desktop: the server isn't running with one")
+        return await asyncio.open_unix_connection(st["vnc"])
 
     def running(self):
         p = self.proc
@@ -426,6 +461,7 @@ class JobBackend(Backend):
             srv = [command(self.cfg)] + sub + self.listen_argv(False) + [
                 "--server-base-path", self.base, "--accept-server-license-terms",
                 "--server-data-dir", self.data]
+        srv = self.with_desktop(srv)
         opts = ["--transport", self.transport] if self.transport != "tcp-token" else []
         if launch_id:
             opts += ["--launch", launch_id]
@@ -531,6 +567,8 @@ class JobBackend(Backend):
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
         return self._http
+
+    desk_ok = False             # a plaintext port carries only VS Code (mtls carries both)
 
     def forward_identity(self):
         return None
@@ -662,6 +700,25 @@ class MtlsJobBackend(JobBackend):
     def url(self, path):
         host, port = self._ep or self.endpoint()
         return "https://%s:%d%s" % (host, port, path)
+
+    desk_ok = True
+
+    async def desk_connect(self):
+        """Through the relay, with ``vnc.wpk`` as the TLS server name."""
+        if self.desk_state() is None:
+            raise IdeUnavailable("no desktop: the job's server isn't running with one")
+        try:
+            with open(os.path.join(self.dir, "features")) as fp:
+                ok = "vnc-sni" in fp.read().split()
+        except OSError:
+            ok = False
+        if not ok:
+            raise IdeUnavailable("this IDE job's relay is older than the desktop; close the "
+                                 "IDE and open it again to restart its job")
+        ep, ctx = self._ep or self.endpoint(), self._context()
+        if ep is None or ctx is None:
+            raise IdeUnavailable("the IDE's job is not running")
+        return await asyncio.open_connection(ep[0], ep[1], ssl=ctx, server_hostname="vnc.wpk")
 
     def headers(self, headers):
         return upstream_headers(headers)
@@ -918,14 +975,15 @@ GONE = ("404 this VS Code page is not open on the board; open it again from "
         "the project's page\n")
 
 
-def rewrite_workbench(body, trust_off, shim, presence=False):
+def rewrite_workbench(body, trust_off, shim, presence=False, desk=False):
     """VS Code's HTML: the workspace-trust prompt off (V0 finding 4), and on the
     workbench page the localhost-link shim ahead of its first script, so it wraps
     ``window.open`` before ``workbench.js`` loads (port-forward plan §3.1), and
     the presence beacon (docs/collaboration.md §7.4)."""
     if trust_off:
         body = body.replace(*TRUST)
-    add = (SHIM if shim else b"") + (PRESENCE_SHIM if presence else b"")
+    add = (SHIM if shim else b"") + (PRESENCE_SHIM if presence else b"") + \
+        (DESK_SHIM if desk else b"")
     if add:
         i = body.find(b"<script")
         if i >= 0:
@@ -976,9 +1034,10 @@ async def proxy_http(backends, request):
     shim = page and backend.cfg.get("forward", True)
     from .. import sessionhooks
     beacon = page and sessionhooks.enabled(backend.cfg, backend.home)
+    desk = page and backend.desk_state() is not None
     if r.headers.get("content-type", "").startswith("text/html") and (
-            trust_off or shim or beacon):
-        body = rewrite_workbench(await r.aread(), trust_off, shim, beacon)
+            trust_off or shim or beacon or desk):
+        body = rewrite_workbench(await r.aread(), trust_off, shim, beacon, desk)
         await r.aclose()
         resp = Response(body, status_code=r.status_code)
         # aread() decoded the body: it goes out as it is now

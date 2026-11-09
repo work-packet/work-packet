@@ -10,12 +10,62 @@
   <h1 style="margin:0">Focus brief</h1>
   <form class="act" method="post" action="/brief/build"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="/brief"><button class="mini" title="Build today's again from what the board knows now">Rebuild today's</button></form>
 </div>
-{% if html %}<div class="md panel">{{ html|safe }}</div>
+{% if writing %}{% set el = (now_s - writing)|int %}<div class="panel" id="brief-writing" data-started="{{ writing|int }}" style="padding:6px 10px;margin:8px 0">
+  <div class="row" style="gap:10px;align-items:center"><strong>The model is writing today's brief</strong>
+    <progress max="180" value="{{ [el, 175]|min }}" style="flex:1"></progress>
+    <span class="muted"><span class="el">{{ el // 60 }}:{{ "%02d"|format(el % 60) }}</span> of about 3:00</span></div>
+  <p class="muted" style="margin:4px 0 0">Started {{ writing|epoch }}. The page refreshes itself; below is the scored brief until the model's replaces it.</p>
+</div>
+<script>(function(){   // tick the bar; reload once the model's brief is in (works with live paused too)
+var t0=+document.getElementById("brief-writing").dataset.started,n=0;
+setInterval(function(){var d=document.getElementById("brief-writing");if(!d)return;
+  var s=Math.max(0,Math.floor(Date.now()/1000-t0));d.querySelector("progress").value=Math.min(s,175);
+  d.querySelector(".el").textContent=Math.floor(s/60)+":"+("0"+s%60).slice(-2);
+  if(++n%10)return;
+  fetch(location.href,{cache:"no-store"}).then(function(r){return r.text();}).then(function(h){
+    if(h.indexOf('id="brief-writing"')<0)location.reload();}).catch(function(){});},1000);})();</script>
+{% endif %}
+{% if rows %}{% set a = b.agent %}
+<div class="md panel briefrows">
+<h1 style="margin-top:0">{{ day }} · Focus</h1>
+{% if a.headline %}<p><em>{{ a.headline }}</em></p>{% endif %}
+{% if rows.decide %}<h2>Decide</h2>
+{% for r in rows.decide %}<div class="decide" style="margin:0 0 12px">
+  {% for x in r["items"] %}<p style="margin:2px 0"><a href="/p/{{ r.project|urlencode }}"><strong>{{ r.project }}</strong></a>{% if x.from_session %} <span class="muted">(asked in a session)</span>{% endif %}{% if x.waiting %} <span class="muted">· waiting {{ x.waiting }}</span>{% endif %}: {{ x.question }}{% if x.options %} <span class="muted">Options: {{ x.options|join(" / ") }}.</span>{% endif %}{% if x.recommend %} <span class="muted">Recommend: {{ x.recommend }}</span>{% endif %}</p>{% endfor %}
+  {% if r.questions and r.wpid %}<form class="act" method="post" action="/p/{{ r.project|urlencode }}/{{ r.wpid }}/act" style="margin:4px 0 0 12px">
+    <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="/brief">
+    {% for q in r.questions %}<label style="display:block;margin:2px 0" title="{{ q.q }}"><code>{{ q.id }}</code>
+      {% if q.choices %}<select name="a.{{ q.id }}"><option value="">(no answer)</option>{% for c in q.choices %}<option{% if c == q.recommend %} selected{% endif %}>{{ c }}</option>{% endfor %}</select>
+      {% else %}<input type="text" name="a.{{ q.id }}" value="{{ q.recommend }}" placeholder="your answer" style="font:inherit;min-width:24em">{% endif %}</label>{% endfor %}
+    <button class="mini" name="action" value="answer">Answer and hand off</button>{% if r.questions|selectattr("recommend")|list %} <button class="mini" name="action" value="recommend" title="Every unanswered question gets its recommendation">Take the recommendations</button>{% endif %}
+  </form>{% elif r.wpid %}<p class="muted" style="margin:2px 0 0 12px">{% if r["items"]|selectattr("from_session")|list %}Asked in a session: answer it there.{% else %}No open question on the board now (answered already?).{% endif %}</p>{% endif %}
+</div>{% endfor %}{% endif %}
+{% if rows.close_out %}<h2>Close out</h2>
+<ul>{% for x in rows.close_out %}<li><a href="/p/{{ x.project|urlencode }}"><strong>{{ x.project }}</strong></a>: {{ x.action }}
+  {% if x.done %} <span class="muted">(done)</span>{% elif x.wpid %}<form class="act" method="post" action="/p/{{ x.project|urlencode }}/{{ x.wpid }}/act" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="back" value="/brief"><button class="mini" name="action" value="done" title="Mark it done: it leaves the active views">done</button></form>{% endif %}</li>{% endfor %}</ul>{% endif %}
+{% if rows.runs %}<h2>Proposed runs</h2>
+<p class="muted" style="margin:0 0 6px">Tick the ones to start and press Go: each packet gets its instruction (edit it first if you like) and goes to the runner. <strong>⇡</strong> marks a run that pushes, merges or sends something outside.</p>
+<form class="act" method="post" action="/brief/run">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}"><input type="hidden" name="day" value="{{ day }}">
+  {% for x in rows.runs %}<div class="run" style="margin:0 0 8px">
+    <label><input type="checkbox" name="run" value="{{ x.i }}"{% if not x.can %} disabled{% endif %}>
+      <a href="/p/{{ x.project|urlencode }}"><strong>{{ x.project }}</strong></a>: {{ x.title }}{% if x.outward %} <strong title="pushes, merges or sends outside">⇡</strong>{% endif %}</label>
+    {% if x.launched %}<span class="muted"> · handed off {{ x.launched.t|epoch }}{% if x.launched.edited %} (edited){% endif %} by {{ x.launched.by }}: {{ x.launched.outcome }}</span>
+    {% elif not x.can %}<span class="muted"> · not now: it is {{ x.state or "not readable" }}</span>{% endif %}
+    {% if x.why %}<div class="muted" style="margin-left:22px">{{ x.why }}</div>{% endif %}
+    <details style="margin-left:22px"><summary class="muted">instruction</summary>
+      <textarea name="text.{{ x.i }}" rows="6" style="font:inherit;width:100%"{% if not x.can %} readonly{% endif %}>{{ x.launched.instruction if x.launched else x.instruction }}</textarea></details>
+  </div>{% endfor %}
+  {% if rows.runs|selectattr("can")|list %}<button class="mini" title="Hand the ticked packets to the runner">Go</button>{% endif %}
+</form>{% endif %}
+{{ html|safe }}
+</div>
+{% elif html %}<div class="md panel">{{ html|safe }}</div>
 {% else %}<p class="muted">No brief for {{ day }} yet. The board writes one each weekday morning ([focus] time, 08:30 unless set); Rebuild makes today's now.</p>{% endif %}
 <p class="muted" style="font-size:12.5px">Also: <a href="/standup">standup</a> · <a href="/review">weekly review</a> · status per board, from each board's page or <a href="/status/main">main</a>.</p>
 {% if days %}<h2>Earlier</h2>
 <p>{% for d in days %}<a href="/brief/{{ d }}"{% if d == day %} style="font-weight:700"{% endif %}>{{ d }}</a>{{ " · " if not loop.last }}{% endfor %}</p>{% endif %}
-<p class="muted" style="font-size:12.5px">Every line comes from the board's own data, with no model call. Focus is scored by your priority, then deadlines, then what unblocks the runner, then how long it has waited; each suggestion says why.</p>
+<p class="muted" style="font-size:12.5px">{% if b and b.agent %}A model wrote this from what the board, your sessions and your repos said since the last brief; every project it names is checked against the board.{% else %}This one is scored from the board's own data, with no model call: your priority, then deadlines, then what unblocks the runner, then how long it has waited.{% endif %} Set <code>[focus] agent</code>, <code>model</code> and <code>sessions</code> in config.toml.</p>
 </div>
 </div>
 {% endblock %}

@@ -5,7 +5,8 @@
 token is found. Tokens are read from the environment (or ``gh auth token``)
 when used, never stored.
 
-Every request goes through ``_get`` or ``_post`` so tests can replace them.
+Every request goes through ``_get``, ``_get_text`` or ``_post`` so tests can
+replace them.
 """
 
 import json
@@ -33,6 +34,30 @@ def _get(url, headers, timeout=20):
     except urllib.error.HTTPError as e:
         raise ForgeError("%s: HTTP %d %s" % (url.split("?")[0], e.code, e.reason)) from None
     except (urllib.error.URLError, OSError, ValueError) as e:
+        raise ForgeError("%s: %s" % (url.split("?")[0], e)) from None
+
+
+class _NoAuthOnHop(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect to another host (a CI log in blob storage) without the
+    forge's token: it must not leak, and signed URLs refuse a second credential."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlparse(newurl).netloc != \
+                urllib.parse.urlparse(req.full_url).netloc:
+            new.remove_header("Authorization")
+        return new
+
+
+def _get_text(url, headers, timeout=60):
+    """GET ``url``: the body as text (a CI log). Raises ForgeError."""
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.build_opener(_NoAuthOnHop).open(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        raise ForgeError("%s: HTTP %d %s" % (url.split("?")[0], e.code, e.reason)) from None
+    except (urllib.error.URLError, OSError) as e:
         raise ForgeError("%s: %s" % (url.split("?")[0], e)) from None
 
 
@@ -98,18 +123,36 @@ class Forge:
         """Open a pull request from ``branch`` into ``base``: {number, url, state, draft}."""
         raise NotImplementedError
 
+    # -- CI runs (docs/ci-watch.md) ---------------------------------------------------
+    def runs(self, repo, branch, limit=50):
+        """Completed CI runs on ``branch``, newest first (``_run`` rows)."""
+        raise ForgeError("CI runs: not supported on %s yet" % self.kind)
+
+    def run(self, repo, run_id):
+        raise ForgeError("CI runs: not supported on %s yet" % self.kind)
+
+    def run_jobs(self, repo, run_id):
+        """The run's jobs: [{id, name, conclusion, url, failed_steps}]."""
+        raise ForgeError("CI runs: not supported on %s yet" % self.kind)
+
+    def job_log(self, repo, job_id):
+        raise ForgeError("CI runs: not supported on %s yet" % self.kind)
+
     # -- helpers --------------------------------------------------------------------
+    def _headers(self):
+        h = {"Accept": "application/json", "User-Agent": "work-packet"}
+        t = self.token()
+        if t:
+            h["Authorization"] = "token %s" % t
+        return h
+
     def token(self):
         return os.environ.get(self.token_env) if self.token_env else None
 
     def _json(self, path, **q):
         q = {k: v for k, v in q.items() if v not in (None, "")}
         url = self.api + path + ("?" + urllib.parse.urlencode(q) if q else "")
-        h = {"Accept": "application/json", "User-Agent": "work-packet"}
-        t = self.token()
-        if t:
-            h["Authorization"] = "token %s" % t
-        return _get(url, h)
+        return _get(url, self._headers())
 
     def _send(self, path, body):
         h = {"Accept": "application/json", "User-Agent": "work-packet"}
@@ -209,6 +252,26 @@ class GitHub(Forge):
             if i.get("comments") else []
         return _issue_out(i, cs)
 
+    def runs(self, repo, branch, limit=50):
+        got = self._json("/repos/%s/actions/runs" % repo, branch=branch, status="completed",
+                         per_page=limit)
+        return [_run(r) for r in got.get("workflow_runs") or []]
+
+    def run(self, repo, run_id):
+        return _run(self._json("/repos/%s/actions/runs/%d" % (repo, run_id)))
+
+    def run_jobs(self, repo, run_id):
+        got = self._json("/repos/%s/actions/runs/%d/jobs" % (repo, run_id), per_page=100)
+        return [{"id": j["id"], "name": j.get("name") or "", "conclusion": j.get("conclusion"),
+                 "url": j.get("html_url") or "",
+                 "failed_steps": [s.get("name") or "" for s in j.get("steps") or []
+                                  if s.get("conclusion") in RED]}
+                for j in got.get("jobs") or []]
+
+    def job_log(self, repo, job_id):
+        return _get_text(self.api + "/repos/%s/actions/jobs/%d/logs" % (repo, job_id),
+                         self._headers())
+
 
 class Forgejo(Forge):
     kind = "forgejo"
@@ -266,6 +329,19 @@ def _pull(p):
     return {"number": p["number"], "url": p["html_url"],
             "state": "merged" if p.get("merged") or p.get("merged_at") else p["state"],
             "draft": bool(p.get("draft")) or p.get("title", "").startswith("WIP:")}
+
+
+RED = ("failure", "timed_out", "startup_failure")      # a CI run that failed
+
+
+def _run(r):
+    path = r.get("path") or ""
+    return {"id": r["id"], "number": r.get("run_number"), "name": r.get("name") or "",
+            "file": os.path.basename(path.split("@")[0]), "workflow_id": r.get("workflow_id"),
+            "conclusion": r.get("conclusion"), "url": r.get("html_url") or "",
+            "sha": r.get("head_sha") or "", "branch": r.get("head_branch") or "",
+            "event": r.get("event") or "", "title": r.get("display_title") or "",
+            "created": r.get("created_at") or ""}
 
 
 def _brief(i):

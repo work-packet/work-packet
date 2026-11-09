@@ -242,6 +242,55 @@ def _tools(need_git=False):
         out.append(Check("tools.git", "tools", "missing", "git is not on PATH",
                          "work/ holds git repositories; steps get a git worktree of each."))
     out.extend(_ide_tools())
+    out.extend(_desktop_tools())
+    return out
+
+
+def _desktop_tools(which=shutil.which):
+    """The desktop (docs/desktop.md): only when ``[desktop] enabled``. These
+    are this host's; a scheduler's nodes are probed by ``wpk sched doctor``."""
+    from . import desktop
+    try:
+        cfg = desktop.load_config()
+    except registry.ConfigError:
+        return []
+    if not cfg.get("enabled"):
+        return []
+    out = []
+    xvnc = cfg.get("xvnc") or "Xvnc"
+    if which(xvnc) is None:
+        out.append(Check("tools.desktop.xvnc", "tools", "warn", "%s is not on PATH" % xvnc,
+                         "[desktop] enabled: IDE servers here run without a display "
+                         "until TigerVNC's X server is installed.",
+                         ["sudo apt install tigervnc-standalone-server   "
+                          "# or: dnf install tigervnc-server-minimal"]))
+    else:
+        try:
+            r = subprocess.run([xvnc, "-version"], capture_output=True, text=True, timeout=10)
+            ver = ((r.stderr or r.stdout).strip().splitlines() or ["?"])[0]
+            h = subprocess.run([xvnc, "-help"], capture_output=True, text=True, timeout=10)
+            unix = "rfbunixpath" in (h.stderr + h.stdout)
+        except (OSError, subprocess.TimeoutExpired):
+            ver, unix = "?", False
+        if unix:
+            out.append(Check("tools.desktop.xvnc", "tools", "ok", "desktop: %s" % ver))
+        else:
+            out.append(Check("tools.desktop.xvnc", "tools", "warn",
+                             "%s has no -rfbunixpath (%s)" % (xvnc, ver),
+                             "The desktop needs TigerVNC 1.10 or later: VNC on a unix socket."))
+    from .sched import xproxy
+    wm = xproxy.pick_wm(cfg, which)
+    if wm == "none":
+        out.append(Check("tools.desktop.wm", "tools", "warn",
+                         "desktop: no window manager (%s)" % cfg.get("wm", "auto"),
+                         "Windows can't be moved or resized without one; install fvwm or "
+                         "xfwm4 ([desktop] wm).", ["sudo apt install xfwm4   # or fvwm"]))
+    else:
+        out.append(Check("tools.desktop.wm", "tools", "ok", "desktop window manager: %s" % wm))
+    from .dash import vendored
+    if "novnc/novnc.js" not in vendored.manifest().get("files", {}):
+        out.append(Check("tools.desktop.novnc", "tools", "warn", "desktop: noVNC is not built",
+                         vendored.NOT_BUILT, ["node tools/vendor/build.mjs novnc"]))
     return out
 
 

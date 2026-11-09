@@ -15,11 +15,90 @@ to a browser as they are:
 - ``{"k": "phase", "name"}``: resolving, fetching, installing, finishing
 """
 
+import contextlib
 import os
 import re
+import signal
 import subprocess
+import threading
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][0-9A-Za-z]")
+
+
+# Inherited from a shell in some IVPM project (wpk's own, say): IVPM sets
+# them itself for the project it works on, and these would point it elsewhere.
+IVPM_ENV = ("IVPM_PROJECT", "IVPM_PACKAGES")
+GRACE_S = 3                           # after SIGTERM, before SIGKILL, on a cancel
+
+
+class Cancelled(Exception):
+    def __init__(self):
+        super().__init__("cancelled")
+
+
+class Canceller:
+    """Cancels the ``run_streamed`` commands of the threads that run under it
+    (``with c.on():``): the one running is killed, process group and all
+    (git's ssh, ivpm's parallel clones), and the next ones raise Cancelled."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.procs = set()
+        self.cancelled = False
+
+    @contextlib.contextmanager
+    def on(self):
+        was = getattr(_local, "c", None)
+        _local.c = self
+        try:
+            yield self
+        finally:
+            _local.c = was
+
+    def cancel(self):
+        with self.lock:
+            self.cancelled = True
+            procs = list(self.procs)
+        for p in procs:
+            _killpg(p.pid, signal.SIGTERM)
+            threading.Timer(GRACE_S, _killpg, (p.pid, signal.SIGKILL)).start()
+
+    def _add(self, p):
+        with self.lock:
+            self.procs.add(p)
+            late = self.cancelled
+        if late:
+            _killpg(p.pid, signal.SIGTERM)
+
+    def _drop(self, p):
+        with self.lock:
+            self.procs.discard(p)
+
+
+_local = threading.local()
+
+
+def _killpg(pgid, sig):
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pgid, sig)
+
+
+def in_foreground():
+    """True if this process is in its terminal's foreground: someone is at
+    the terminal to answer a prompt (an ssh passphrase, say). wpkd run as a
+    background job is not, and a child of it in its process group that touches
+    the terminal stops the whole group, wpkd and the board with it; such a
+    child gets a session of its own, with no terminal to touch."""
+    try:
+        fd = os.open("/dev/tty", os.O_RDONLY | os.O_NOCTTY)
+    except OSError:
+        return False
+    try:
+        return os.tcgetpgrp(fd) == os.getpgrp()
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
 
 
 def run_streamed(cmd, on_line=None, cwd=None, env=None, tail=40):
@@ -39,8 +118,18 @@ def run_streamed(cmd, on_line=None, cwd=None, env=None, tail=40):
         if on_line is not None:
             on_line(text, final)
 
+    c = getattr(_local, "c", None)
+    if c is not None and c.cancelled:
+        raise Cancelled()
+    env = {k: v for k, v in (os.environ if env is None else env).items() if k not in IVPM_ENV}
+    # A session of its own when it can be cancelled (its group is what is
+    # killed) or no one is at the terminal to answer a prompt.
     p = subprocess.Popen(cmd, shell=isinstance(cmd, str), cwd=cwd, env=env,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT,
+                         start_new_session=c is not None or not in_foreground())
+    if c is not None:
+        c._add(p)
     buf = b""
     try:
         while True:
@@ -62,6 +151,12 @@ def run_streamed(cmd, on_line=None, cwd=None, env=None, tail=40):
             p.kill()
             p.wait()
         p.stdout.close()
+        if c is not None:
+            c._drop(p)
+            if c.cancelled:           # what is left of its group, before the clone is removed
+                _killpg(p.pid, signal.SIGKILL)
+    if c is not None and c.cancelled:
+        raise Cancelled()
     return rc, "\n".join(keep).strip()
 
 

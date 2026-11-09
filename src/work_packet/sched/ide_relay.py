@@ -12,8 +12,10 @@ to ``localhost:<port>`` on this host: a page an extension serves, forwarded to
 the browser (port-forward plan §3.4). Only a port this user listens on, and not
 the relay's own, is reached (``ide_ports.check``, before every connection);
 otherwise the relay answers the request itself with a 403 or 502 saying why.
+A connection named ``vnc.wpk`` goes to the desktop's viewer socket, which
+xproxy names in ``<publish dir>/desktop.json`` (docs/desktop.md D4).
 Any other server name goes to the unix socket, as before. ``features`` in the
-publish directory tells wpkd this relay knows the rule.
+publish directory tells wpkd which of these rules this relay knows.
 
 The job's key is made in ``--key-dir`` (local to the node, 0700) and never
 leaves it. ``--publish-dir`` (the shared server directory) gets only the public
@@ -34,7 +36,8 @@ from .. import ide_ports
 
 CHUNK = 65536
 FORWARD = re.compile(r"p(\d{1,5})\.fwd\.wpk\Z")
-FEATURES = "fwd-sni\n"
+FEATURES = "fwd-sni\nvnc-sni\n"
+VNC = "vnc.wpk"
 
 
 async def _pump(r, w):
@@ -91,11 +94,29 @@ async def _open_forward(reader, writer, port):
         return None
 
 
-async def _handle(sock_path, reader, writer):
-    so = writer.get_extra_info("ssl_object")
-    m = FORWARD.match(getattr(so, "wpk_name", None) or "")
+def _vnc_path(publish_dir):
+    """The desktop's viewer socket, from xproxy's report, or None."""
+    import json
     try:
-        if m:
+        with open(os.path.join(publish_dir, "desktop.json")) as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return st.get("vnc") if st.get("x") not in ("ended", "unavailable") else None
+
+
+async def _handle(sock_path, reader, writer, publish_dir=None):
+    so = writer.get_extra_info("ssl_object")
+    name = getattr(so, "wpk_name", None) or ""
+    m = FORWARD.match(name)
+    try:
+        if name == VNC:                 # an RFB stream, not HTTP: nothing to answer with
+            vnc = _vnc_path(publish_dir) if publish_dir else None
+            if vnc is None:
+                writer.close()
+                return
+            ur, uw = await asyncio.open_unix_connection(vnc)
+        elif m:
             up = await _open_forward(reader, writer, int(m.group(1)))
             if up is None:
                 return
@@ -144,7 +165,8 @@ async def serve(sock_path, client_crt, key_dir, publish_dir, host="0.0.0.0", por
     ctx = ide_tls.pinned_server_context(crt, key, client_crt)
     ctx.sni_callback = _sni
     stop = asyncio.Event()
-    srv = await asyncio.start_server(lambda r, w: _handle(sock_path, r, w), host, port, ssl=ctx)
+    srv = await asyncio.start_server(lambda r, w: _handle(sock_path, r, w, publish_dir), host, port,
+                                     ssl=ctx)
     port = srv.sockets[0].getsockname()[1]
     with open(crt) as f:
         _publish(os.path.join(publish_dir, "server.crt"), f.read())

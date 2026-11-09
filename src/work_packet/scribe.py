@@ -43,12 +43,15 @@ Claude or Codex session; below is the end of that session, the packet's plan
 (outline) and its status before the session.
 
 Reply with JSON only, no fence:
-{"status": "...", "body": "...", "next": "..."}
+{"status": "...", "body": "...", "next": "...", "asked": "..."}
 
 - status: where the work stands now, one line, at most 80 characters.
 - body: two to five short lines: what changed in this session, decisions made,
   open questions. Plain text.
 - next: the next action if the session makes it clear, one line; else "".
+- asked: if the session ends with the agent asking the person something they
+  have not answered yet (a decision, an approval, a choice), that question,
+  quoted closely with its options; else "".
 
 Say only what the session shows. Do not invent progress.
 
@@ -170,12 +173,13 @@ def tail(harness, paths, max_chars=TAIL_CHARS):
 
 # --- the draft ----------------------------------------------------------------------------
 
-def ask_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S):
-    """One small model call with no tools (the console's model): ``(text, cost)``;
+def ask_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S, model=None):
+    """One model call with no tools (``model``, else the console's): ``(text, cost)``;
     ``("", 0.0)`` when it fails."""
     from .dash import agent as agentmod
     exe = shlex.split(os.environ.get("WPK_CLAUDE") or "claude")
-    argv = exe + ["-p", "--output-format", "json", "--model", agentmod.config(home)["model"],
+    argv = exe + ["-p", "--output-format", "json", "--model",
+                  model or agentmod.config(home)["model"],
                   "--tools", "", "--strict-mcp-config", "--setting-sources", "",
                   "--disable-slash-commands", "--max-budget-usd", str(budget)]
     env = dict(os.environ)
@@ -204,7 +208,7 @@ def parse(text):
         return None
     if not isinstance(d, dict) or not str(d.get("status") or "").strip():
         return None
-    return {k: str(d.get(k) or "").strip() for k in ("status", "body", "next")}
+    return {k: str(d.get(k) or "").strip() for k in ("status", "body", "next", "asked")}
 
 
 def _read(path, n):
@@ -252,7 +256,63 @@ def scribe(home, rec, ask=None):
                                by="scribe", meta=meta, after=rec.get("last_work_t"))
     if out.code != 0:
         log.warning("%s %s: scribe: %s", rec["project"], rec["wpid"][:8], out.msg)
+    record_ask(pkt, rec["session_id"], got.get("asked"), rec.get("last_work_t"))
     return n
+
+
+# --- questions left open in a session ---------------------------------------------------
+#
+# A question a session's agent put to the person and that is still unanswered when
+# the session goes quiet is not one of the packet's questions (the scribe never
+# moves the memento, D1), but it is waiting on the person all the same. The scribe
+# keeps the latest one per session in ``session-asks.json`` in the packet's run
+# folder, and the focus brief shows them under Decide.
+
+ASKS = "session-asks.json"
+ASK_TTL_S = 7 * 86400
+
+
+def _asks_path(pkt):
+    return os.path.join(pkt.path, ASKS)
+
+
+def _load_asks(pkt):
+    try:
+        with open(_asks_path(pkt)) as fp:
+            d = json.load(fp)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def record_ask(pkt, session_id, asked, t=None):
+    """Keep (or, with no ``asked``, clear) the open question of one session."""
+    from . import fsutil
+    d = _load_asks(pkt)
+    if asked and asked.strip():
+        d[session_id] = {"q": asked.strip()[:1500], "t": t or time.time()}
+    elif session_id in d:
+        del d[session_id]
+    else:
+        return
+    now = time.time()
+    d = {k: v for k, v in d.items() if isinstance(v, dict) and now - (v.get("t") or 0)
+         < ASK_TTL_S}
+    try:
+        fsutil.atomic_write(_asks_path(pkt), json.dumps(d, indent=1) + "\n")
+    except OSError:
+        log.warning("%s: could not keep the session's question", pkt.path)
+
+
+def open_asks(pkt, now=None):
+    """``[{"session", "q", "t"}]``, newest first: questions sessions left open in
+    the last week, asked after the packet's last checkpoint by hand."""
+    now = time.time() if now is None else now
+    by_hand = checkpoint.last_by_hand(pkt) or 0
+    out = [{"session": k, "q": v.get("q"), "t": v.get("t")} for k, v in _load_asks(pkt).items()
+           if isinstance(v, dict) and v.get("q") and now - (v.get("t") or 0) < ASK_TTL_S
+           and (v.get("t") or 0) > by_hand]
+    return sorted(out, key=lambda x: -(x["t"] or 0))
 
 
 # --- which sessions, and when ---------------------------------------------------------

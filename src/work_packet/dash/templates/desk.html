@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>{{ title }} — Desktop</title>
+<style>
+:root { --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #667085; --line: #dde1e8;
+        --link: #2457c5; --ok: #2f855a; --warn: #b7791f; --bad: #c53030; --desk: #3a3f4b; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #12151b; --panel: #1b1f27; --ink: #e3e6ec; --muted: #949bab; --line: #2c323d;
+          --link: #7fa7ff; --ok: #5fc28f; --warn: #e0a84a; --bad: #f07373; --desk: #262a33; }
+}
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+             font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { display: flex; flex-direction: column; }
+#bar { display: flex; align-items: center; gap: 10px; padding: 4px 10px; flex: none;
+       background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#bar .name { font-weight: 600; }
+#bar .muted, .muted { color: var(--muted); }
+#bar .grow { flex: 1; }
+#bar .name a { color: inherit; text-decoration: none; }
+#bar .name a:hover { color: var(--link); text-decoration: underline; }
+#bar button, #bar select { font: inherit; color: var(--ink); background: var(--bg);
+       border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+#bar button:hover { border-color: var(--link); }
+#dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+#dot.ok { background: var(--ok); } #dot.warn { background: var(--warn); } #dot.bad { background: var(--bad); }
+#screen { flex: 1; min-height: 0; background: var(--desk); position: relative; overflow: hidden; }
+.menu { position: relative; }
+#appsmenu { position: absolute; left: 0; top: calc(100% + 4px); z-index: 10; min-width: 180px;
+       background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 0;
+       box-shadow: 0 4px 16px #0004; }
+#appsmenu[hidden] { display: none; }
+#appsmenu button { display: block; width: 100%; text-align: left; border: 0; border-radius: 0;
+       background: none; padding: 5px 12px; }
+#appsmenu button:hover { background: var(--bg); }
+#appsmenu .muted { padding: 5px 12px; }
+#msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+       text-align: center; color: #e3e6ec; padding: 24px; pointer-events: none; }
+#msg[hidden] { display: none; }
+#clip { position: absolute; right: 12px; top: 8px; width: 340px; z-index: 5; background: var(--panel);
+        border: 1px solid var(--line); border-radius: 6px; padding: 8px; box-shadow: 0 4px 16px #0004; }
+#clip[hidden] { display: none; }
+#clip textarea { width: 100%; box-sizing: border-box; height: 110px; font: 12px ui-monospace, monospace;
+        background: var(--bg); color: var(--ink); border: 1px solid var(--line); }
+#clip .row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+</style>
+</head>
+<body data-key="{{ key }}" data-csrf="{{ csrf }}">
+<div id="bar">
+  <span id="dot" title="connection"></span>
+  <span class="name">{% if back %}<a href="{{ back }}" title="The packet's page on the board">{{ title }}</a>{% else %}{{ title }}{% endif %}</span>
+  <span id="status" class="muted">connecting…</span>
+  <span id="apps" class="muted"></span>
+  <span class="menu"><button id="appsbtn" type="button" title="Start a program on this desktop, in the IDE's environment" disabled>Apps ▾</button>
+    <div id="appsmenu" hidden></div></span>
+  <span class="grow"></span>
+  <label class="muted" title="How the desktop fits the tab">Fit
+    <select id="fit"><option value="remote">resize desktop</option><option value="scale">scale</option><option value="none">none</option></select></label>
+  <label class="muted" title="JPEG quality: lower is faster on a slow link">Quality
+    <select id="quality">{% for q in range(0, 10) %}<option value="{{ q }}"{% if q == 6 %} selected{% endif %}>{{ q }}</option>{% endfor %}</select></label>
+  <button id="clipbtn" type="button" title="Copy text to or from the desktop">Clipboard</button>
+  <button id="full" type="button">Full screen</button>
+  <button id="again" type="button" hidden>Reconnect</button>
+</div>
+<div id="screen">
+  <div id="msg">Connecting to the desktop…</div>
+  <div id="clip" hidden>
+    <div class="muted">The desktop's clipboard. Edit it and Send to paste there.</div>
+    <textarea id="cliptext" spellcheck="false"></textarea>
+    <div class="row"><button id="clipsend" type="button">Send to desktop</button><button id="clipclose" type="button">Close</button></div>
+  </div>
+</div>
+<script type="module" src="/static/desk.js?v={{ asset_v }}"></script>
+</body>
+</html>

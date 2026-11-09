@@ -198,7 +198,9 @@
   <input type="hidden" name="was" value="{{ w.name if w else '' }}">
   <label>Name <input name="name" required pattern="[a-z0-9][a-z0-9_-]*" value="{{ w.name if w else '' }}" placeholder="dv-issues"></label>
   <label>Repositories <input name="repos" required value="{{ w.repos|join(' ') if w else '' }}" placeholder="github:owner/repo github:owner/*" size="34"></label>
-  <label>Labels <input name="labels" value="{{ w.labels|join(' ') if w else '' }}" placeholder="optional"></label>
+  <label>On <select name="on">{% for v, t in (("issues", "new issues"), ("ci", "CI failures")) %}<option value="{{ v }}"{{ " selected" if (w.on if w else "issues") == v }}>{{ t }}</option>{% endfor %}</select></label>
+  <label title="issues only">Labels <input name="labels" value="{{ w.labels|join(' ') if w else '' }}" placeholder="optional"></label>
+  <label title="CI only; empty: each repo's default branch">Branches <input name="branches" value="{{ w.branches|join(' ') if w else '' }}" placeholder="default branch" size="10"></label>
   <label>Packet folders in <input name="dir" required value="{{ w.dir if w else '' }}" placeholder="~/work/issues"></label>
   <label>Every <input name="every" value="{{ w.every if w else '15m' }}" size="5"></label>
   <label>Pull request <select name="pr">{% for v in ("off", "draft", "ready") %}<option{{ " selected" if (w.pr if w else "off") == v }}>{{ v }}</option>{% endfor %}</select></label>
@@ -209,7 +211,7 @@
 </form>
 {%- endmacro %}
 <h2 id="watchers">Watchers</h2>
-<p class="muted" style="font-size:12.5px;margin-top:-6px">A watcher polls issue trackers and makes a project (or an Inbox item) for each new issue. Saved in <code>boards/{{ here.name }}.toml</code>.</p>
+<p class="muted" style="font-size:12.5px;margin-top:-6px">A watcher polls issue trackers and makes a project (or an Inbox item) for each new issue, or polls CI and makes one for each breakage. Saved in <code>boards/{{ here.name }}.toml</code>.</p>
 {% if watchers %}
 <table class="watchers">
 {% for w in watchers %}
@@ -218,7 +220,8 @@
   {% else %}
   <tr><td><strong>{{ w.name }}</strong>{% if not w.enabled %} <span class="muted">(off)</span>{% endif %}</td>
     <td>{% for r in w.repos %}<code>{{ r }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
-      {% if w.labels %}<span class="muted">· labels {{ w.labels|join(", ") }}</span>{% endif %}
+      {% if w.on == "ci" %}<span class="muted">· CI failures on {{ w.branches|join(", ") or "the default branch" }}{% if w.workflows %} ({{ w.workflows|join(", ") }}){% endif %}</span>
+      {% elif w.labels %}<span class="muted">· labels {{ w.labels|join(", ") }}</span>{% endif %}
       <div class="muted">every {{ w.every }} · polled {{ w.polled }} · {{ w.made|length }} made · {{ "to the Inbox" if w.propose else "held for setup" if w.hold else "handed to the runner" }} · into <code>{{ w.dir }}</code></div>
       {% for k, e in w.failed %}<div class="err">{{ k }}: {{ e }}</div>{% endfor %}
       {% for e in w.errors %}<div class="err">{{ e }}</div>{% endfor %}

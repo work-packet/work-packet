@@ -252,6 +252,50 @@ New files: `<packet>/.wpk/packet.code-workspace` (per packet; `wpk
 check` ignores `.wpk/`), and `$WPK_HOME/ide/` (0700: `serve.sock`, `serve.log`,
 `data/`).
 
+### 7.1 The desktop: GUI programs from web VS Code
+
+With `[desktop] enabled = true`, each web VS Code server runs with a
+`DISPLAY`, and so does everything started in it. A GUI program started from
+its terminals, such as gtkwave or Verdi, appears in the **desktop tab** at
+`/desk/<key>/`. The tab uses noVNC in the browser and TigerVNC's `Xvnc` where
+the server runs.
+
+- The X server starts with the first window or viewer, and stops
+  `idle_min` after the last one closes.
+- In VS Code, a **Desktop** link sits above the status bar. A toast says when
+  a program opens a window that nobody is viewing.
+- `wpk desktop`, run in a VS Code terminal, prints the tab's URL.
+- The tab is named after the project and packet that opened the server
+  (`demo · 3cc062ac — Desktop`). Its **Apps** menu starts programs on the
+  desktop with the server's environment, in the project's folder: a terminal
+  by default, plus whatever `[desktop.apps]` lists. Only entries whose
+  program is installed on the server's host are shown.
+
+The board's own servers and `mtls` jobs get a desktop; `tcp-token` jobs
+don't. See desktop.md for the design.
+
+```toml
+[desktop]
+enabled  = true
+wm       = "auto"           # auto (fvwm, else xfwm4) | fvwm | xfwm4 | xfce | none
+idle_min = 20               # X stops after this long with nothing connected
+geometry = "1600x1000"      # the first size; the tab resizes it
+unset    = ["SSH_ASKPASS"]  # removed from the server's environment
+
+[desktop.env]               # set wherever DISPLAY is, over wpk's defaults
+LIBGL_ALWAYS_SOFTWARE = "1"
+
+[desktop.apps]              # the tab's Apps menu; run with sh -c
+gtkwave  = "gtkwave"
+verdi    = { cmd = "verdi -ssf novas.fsdb", label = "Verdi" }
+# terminal = ""             # removes the default terminal (xterm)
+```
+
+The setting is read each time a server starts. Close the IDE and open it
+again to pick up a change. `wpk doctor` checks for `Xvnc`, a window
+manager, and the noVNC bundle. `wpk sched doctor` checks for `Xvnc` on the
+nodes.
+
 ## 8. Build plan
 
 Order: I1 needs nothing new and can start now. I2 needs L1's `wpk take`.

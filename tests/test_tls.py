@@ -125,9 +125,27 @@ def test_wpk_dash_serves_https_on_the_tailnet(tmp_path, ts):
         body = r.read().decode()
         assert r.status == 200 and OWNER in body
         # conn stays open (keep-alive, as a browser tab does): shutdown must not wait on it
-        # plain http on the tailnet address is not served
-        with pytest.raises(Exception):
-            urllib.request.urlopen("http://127.0.0.2:%d/healthz" % port, timeout=3).read()
+        # plain http on the tailnet address is redirected to https, at the certificate's name
+        for target, where in (("/p/x?y=1", "/p/x?y=1"), ("http://evil.example/", "/"),
+                              ("//evil.example/", "/")):
+            plain = http.client.HTTPConnection("127.0.0.2", port, timeout=10)
+            plain.request("GET", target)
+            r = plain.getresponse()
+            assert r.status == 308 and b"https only" in r.read()
+            assert r.getheader("location") == "https://%s:%d%s" % (DOMAIN, port, where)
+            plain.close()
+        # and https still works after it
+        conn2 = http.client.HTTPSConnection("127.0.0.2", port, context=ctx, timeout=10)
+        conn2.sock = ctx.wrap_socket(__import__("socket").create_connection(("127.0.0.2", port)),
+                                     server_hostname=DOMAIN)
+        conn2.request("GET", "/healthz", headers={"host": "%s:%d" % (DOMAIN, port)})
+        assert conn2.getresponse().status == 200
+        # a client that connects and says nothing doesn't stop others being served
+        idle = __import__("socket").create_connection(("127.0.0.2", port))
+        conn3 = http.client.HTTPConnection("127.0.0.2", port, timeout=10)
+        conn3.request("GET", "/")
+        assert conn3.getresponse().status == 308
+        idle.close()
     finally:
         p.send_signal(signal.SIGTERM)
         try:
