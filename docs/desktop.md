@@ -136,15 +136,21 @@ started on demand.
 3. **First client, or first viewer attach** (wpkd tells xproxy through the server
    directory, or a control socket):
    - start `Xvnc -displayfd <fd> -rfbunixpath <priv>/vnc -auth <priv>/xauth
-     -SecurityTypes None -nolisten tcp -geometry 1600x1000` (an initial size;
-     the browser resizes it);
+     -SecurityTypes None -nolisten tcp -extension MIT-SHM -geometry 1600x1000`
+     (an initial size; the browser resizes it);
    - read `:M` from the `-displayfd` pipe;
    - start the WM and `vncconfig -nowin` (clipboard) connected **straight to
      `:M`**, so they don't count as clients;
    - then join the waiting client.
 4. **Join.** Each accepted connection is copied byte for byte to
-   `/tmp/.X11-unix/XM`. The client and server are on the same host, so the
-   shared-memory extension still works and performance is close to native.
+   `/tmp/.X11-unix/XM`. The splice carries bytes only, not ancillary data
+   (`SCM_RIGHTS`), so X extensions that pass fds can't work through it. MIT-SHM
+   1.2 returns its segments as fds: Qt 5.15's backing store
+   (`xcb_shm_create_segment`) then waits forever for an fd that never comes,
+   and its windows stay black. Xvnc therefore runs with `-extension MIT-SHM`,
+   and clients fall back to plain socket transfers; `QT_XCB_NO_MITSHM = "1"`
+   (a built-in `[desktop.env]` default) tells Qt5 the same. (`QT_X11_NO_MITSHM`
+   is the Qt4 name; Qt 5.15 doesn't read it.)
 5. **Idle stop.** When no client is connected through the proxy and no viewer
    has been attached for `[desktop] idle_min` (default 20), stop the WM, then
    Xvnc. Keep listening on `:N`. The next client starts it again from step 3.
@@ -199,7 +205,8 @@ env_file = "/etc/wpk/desktop.env"    # optional KEY=VALUE lines, after the table
 
 [desktop.env]                        # set where DISPLAY is set
 SSH_ASKPASS_REQUIRE = "never"        # built-in default
-QT_X11_NO_MITSHM = "1"               # e.g. Qt apps under Xvnc
+QT_XCB_NO_MITSHM = "1"               # built-in default: Qt5 without MIT-SHM (§4 step 4)
+QT_X11_NO_MITSHM = "1"               # e.g. Qt4 apps under Xvnc
 LIBGL_ALWAYS_SOFTWARE = "1"          # no GPU on farm nodes
 NO_AT_BRIDGE = "1"                   # built-in default: quiet GTK accessibility-bus warnings
 # GIT_ASKPASS is not a default (decided 2026-11-07): VS Code sets its own, for its git
@@ -346,6 +353,8 @@ xterm     = { cmd = "xterm" }
 - **Xpra's HTML5 client** as a second backend: one browser window per app
   instead of a whole desktop.
 - **A separate desktop job** (D2): a different queue or more memory.
+- **fd passing through the proxy:** splice with `recvmsg`/`sendmsg` and carry
+  `SCM_RIGHTS`, so MIT-SHM (and other fd-passing extensions) can be turned back on.
 - **Desktop for packets without an IDE job:** "Open desktop" by itself submits a
   job with only xproxy and the relay.
 

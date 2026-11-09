@@ -232,7 +232,8 @@ LIBGL_ALWAYS_SOFTWARE = "1"
 locked = ["desktop.env.QT_X11_NO_MITSHM"]
 ```
 
-wpk's own defaults (`SSH_ASKPASS_REQUIRE = "never"`, `NO_AT_BRIDGE = "1"`) sit
+wpk's own defaults (`SSH_ASKPASS_REQUIRE = "never"`, `NO_AT_BRIDGE = "1"`,
+`QT_XCB_NO_MITSHM = "1"`) sit
 under the site's values. The environment actually applied is written to
 `desktop.env.json` in the server's directory.
 

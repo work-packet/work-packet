@@ -18,6 +18,7 @@ from . import registry, schema
 ENV_DEFAULTS = {
     "SSH_ASKPASS_REQUIRE": "never",    # ssh with no terminal: fail, not a hidden prompt
     "NO_AT_BRIDGE": "1",               # quiet GTK's accessibility-bus warnings
+    "QT_XCB_NO_MITSHM": "1",           # Qt5: no MIT-SHM; xproxy can't pass its fds
 }
 # The Apps menu's own entries, under [desktop.apps]; `terminal = ""` removes one.
 APP_DEFAULTS = {"terminal": {"cmd": "xterm", "label": "Terminal"}}

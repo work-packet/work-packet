@@ -87,7 +87,8 @@ def test_config_layers_wpk_defaults_under_yours(tmp_path):
         '[desktop]\nenabled = true\nwm = "xfwm4"\n[desktop.env]\nNO_AT_BRIDGE = "0"\nFOO = "bar"\n')
     c = desktop.load_config(str(tmp_path))
     assert c["enabled"] and c["wm"] == "xfwm4" and c["idle_min"] == 20
-    assert c["env"] == {"SSH_ASKPASS_REQUIRE": "never", "NO_AT_BRIDGE": "0", "FOO": "bar"}
+    assert c["env"] == {"SSH_ASKPASS_REQUIRE": "never", "NO_AT_BRIDGE": "0",
+                        "QT_XCB_NO_MITSHM": "1", "FOO": "bar"}
     assert c["unset"] == ["SSH_ASKPASS"]
     assert c["apps"] == {"terminal": {"cmd": "xterm", "label": "Terminal"}}
 
@@ -172,6 +173,7 @@ def test_x_starts_on_the_first_client_and_stops_when_idle(xdirs):
     asyncio.run(go())
     argv = open(xdirs["x_dir"] + ".argv").read()
     assert "-SecurityTypes None" in argv and "-rfbport -1" in argv and "-nolisten tcp" in argv
+    assert "-extension MIT-SHM" in argv            # xproxy can't carry SCM_RIGHTS
 
 
 def test_the_apps_menu_starts_apps_in_the_servers_environment(xdirs, tmp_path):
@@ -242,6 +244,7 @@ def test_real_xvnc_through_the_proxy(xdirs, tmp_path):
     code = asyncio.run(xproxy.run(conf(xvnc="Xvnc"), xdirs["state"], "k", child))
     text = out.read_text()
     assert code == 0 and "rc=0" in text and "dimensions:    1600x1000" in text, text
+    assert "MIT-SHM" not in text, text             # off: its fds can't cross the splice
 
 
 # --- the IDE server under xproxy -------------------------------------------------------------

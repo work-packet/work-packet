@@ -7,7 +7,9 @@ sockets (the file and the abstract one), and starts the server with
 ``DISPLAY=:N``, ``XAUTHORITY`` and ``[desktop.env]`` (``--conf``, written by
 wpkd). No X server runs yet. The first X client, or the first viewer on
 ``<priv>/vnc``, starts Xvnc on a hidden display ``:M`` and the window
-manager; each connection is then spliced to it byte for byte. When nothing
+manager; each connection is then spliced to it byte for byte. Ancillary data
+(``SCM_RIGHTS``) does not cross the splice, so Xvnc runs without MIT-SHM, whose
+shared-memory segments come back as fds; clients fall back to the socket. When nothing
 has been connected through the proxy for ``idle_min``, Xvnc stops; the next
 client starts it again. When the server exits, so does the proxy.
 
@@ -302,6 +304,9 @@ class Proxy:
         argv = [xvnc, ":%d" % m, "-displayfd", str(w), "-rfbunixpath", self.rfb,
                 "-rfbunixmode", "0600", "-rfbport", "-1", "-auth", self.xauth,
                 "-SecurityTypes", "None", "-nolisten", "tcp",
+                # The proxy splices bytes, not SCM_RIGHTS: an fd-passing extension
+                # (MIT-SHM 1.2's segments) would leave the client waiting on an fd forever.
+                "-extension", "MIT-SHM",
                 "-geometry", str(self.conf.get("geometry") or "1600x1000"), "-depth", "24",
                 "-AlwaysShared", "-desktop", self.conf.get("title") or "wpk"]
         log = open(os.path.join(self.xdir, "xvnc.log"), "ab")
