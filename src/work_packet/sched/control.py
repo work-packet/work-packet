@@ -127,7 +127,7 @@ def _target(target, h):
         raise LookupError(str(ex)) from None
     pdir = os.path.dirname(path)
     for e in registry.entries(h):
-        if os.path.abspath(layout.runs_dir(e["path"])) == os.path.abspath(pdir):
+        if os.path.realpath(layout.runs_dir(e["path"])) == os.path.realpath(pdir):
             return e, os.path.basename(path)
     raise LookupError("%s is not in a registered project" % target)
 

@@ -717,8 +717,9 @@ def target_folders(target):
 def _under(path, roots):
     if not path:
         return False
-    path = os.path.abspath(path)
-    return any(path == r or path.startswith(r.rstrip("/") + "/") for r in roots)
+    path = os.path.realpath(path)          # a symlinked folder is the same folder
+    return any(path == r or path.startswith(r.rstrip("/") + "/")
+               for r in map(os.path.realpath, roots))
 
 
 class Collector:

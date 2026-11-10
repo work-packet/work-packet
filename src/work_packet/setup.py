@@ -349,7 +349,9 @@ def _project(tg, meta):
     from .check import check_project
     out = []
     e = registry.get(tg.name)
-    if e is None or os.path.abspath(e["path"]) != tg.proj:
+    # by the real path: a project reached through a symlink (~/nb -> /proj/...) is
+    # registered under one spelling and found from a folder under the other
+    if e is None or os.path.realpath(e["path"]) != os.path.realpath(tg.proj):
         out.append(Check("project.registered", "project", "missing",
                          "%s is not registered" % tg.name,
                          "The runner and the board only see registered projects.",

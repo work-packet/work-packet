@@ -116,6 +116,22 @@ def test_resume_and_handoff_refuse_until_set_up(home, capsys):
     assert tg.status()["state"] == "RUNNABLE"
 
 
+def test_handoff_from_a_folder_reached_through_a_symlink(home, tmp_path, monkeypatch, capsys):
+    """Registered under ~/nb/... (a link to /proj/...), handed off from inside the
+    folder, where getcwd() gives the real path: it is the same project."""
+    real = tmp_path / "proj" / "xyz"
+    real.mkdir(parents=True)
+    os.symlink(str(real), str(tmp_path / "nb"))
+    project.new("dvs", path=str(tmp_path / "nb" / "dvs"), packet=True)
+    tg = setup.target("dvs")
+    setup.instruct(tg, "Count to 3 in state/count.md.")
+    assert "project.registered" not in by_id(setup.readiness(tg, tools=False))
+    monkeypatch.chdir(str(real / "dvs"))
+    assert "project.registered" not in by_id(setup.readiness(setup.target("."), tools=False))
+    assert main(["handoff", ".", "-m", "go"]) == 0, capsys.readouterr().err
+    assert tg.status()["state"] == "RUNNABLE"
+
+
 def test_resume_force(home):
     tg = held()
     assert main(["resume", "dvs", "--force"]) == 0
