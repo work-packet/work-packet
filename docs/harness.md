@@ -78,6 +78,10 @@ must be mode 0600: if group or others can read it, wpk warns and skips the
 file (the `env` table still applies). Keys belong in the file, not in
 `config.toml`.
 
+A value the file cannot hold (several lines, or one a site keeps elsewhere) can
+come from a site plugin's launch hook. It runs after `env_file`, for steps and
+for the board's launches alike (sites.md §1.3b).
+
 Each step's `meta.json` records its route, never the key:
 `"route": {"account": "subscription", "host": "gateway.example"}`. The
 account comes from the transcript (Claude Code's `apiKeySource`: `none` is

@@ -823,6 +823,9 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
     env.update(WPK_STARTED_AT="%.0f" % t0, WPK_DEADLINE="%.0f" % (t0 + st.step_timeout_s),
                WPK_WARN_AT="%.0f" % (t0 + TIME_WARN * st.step_timeout_s))
     env.update(h.env(spec))
+    # the site's launch hooks (credentials, say), then the step hooks
+    hookmod.prepare_env(h.name, "step", env, wpid=meta["wpid"],
+                        project_dir=project_of(pkt.path), cwd=pkt.path)
     hooks = hookmod.Hooks(sd, meta["wpid"], n, a, h.name, meta["model"], env)
     hooks.start()       # after the harness env, so a hook can point the run elsewhere
     try:

@@ -21,6 +21,7 @@ The groups are `work_packet.plugins.GROUPS`:
 | `work_packet.cli` | a `wpk <group> <cmd>` command group | §1.1 |
 | `work_packet.credentials` | a credential kind (renew command) | §1.2 |
 | `work_packet.step_hooks` | code around each harness run | §1.3 |
+| `work_packet.launch_hooks` | a harness child's environment, for every launch | §1.3b |
 | `work_packet.cost` | a cost source for a step | §1.4 |
 | `work_packet.budget` | a budget provider for wpkd | §1.5 |
 | `work_packet.dash` | board panels and `/x/<name>/` routes | §1.6 |
@@ -90,6 +91,49 @@ class Proxy:
 `[plugins.<name>]` table). A nudged step runs twice:
 `finish` is called after each run. A hook that raises gets
 `ext[name] = {"error": ...}` and is not called again, except `stop`.
+
+### 1.3b Launch hooks (`work_packet.launch_hooks`)
+
+```python
+class Credentials:
+    def prepare(self, ctx):          # may change ctx.env; nothing else
+        with open(ctx.config["file"]) as fp:
+            ctx.env["ANTHROPIC_CUSTOM_HEADERS"] = fp.read()
+```
+
+Launch hooks run for **every** harness launch, so a value a site has to supply is
+there however the harness is started, also after a board restart:
+
+| `ctx.purpose` | the launch | runs in |
+|---|---|---|
+| `step` | a scheduled step | the executor (`wpk tick`, the runner, a job) |
+| `studio` | a Studio chat turn | the board |
+| `console` | a console chat turn | the board |
+| `model-call` | the scribe's and brief's drafts, a Studio session's summary | the board |
+
+`ctx` (`work_packet.hooks.LaunchContext`) has:
+- `harness` and `purpose`.
+- `env`: the environment of this one child, which the hook may change.
+- `wpid`, `project_dir` and `cwd`, where known (None on a `model-call` that has
+  no packet).
+- `config`: the plugin's `[plugins.<name>]` table.
+
+When it runs: after the parent's environment and the harness configuration
+(`[harnesses.<name>] env` and `env_file`) are in `env`, and just before the
+launch. On a step that is before the step hooks' `start` (§1.3), so they see
+what it added. There is no step number on the board's launches: keep step
+telemetry in a step hook.
+
+Each launch has its own copy of the environment. What a hook adds reaches that
+child only, never the board's or the executor's own environment.
+
+Use it for values `env_file` cannot hold, such as a header list with newlines.
+The site plugin owns the names, the storage format and the file's permissions.
+
+A hook that raises is skipped, and the launch goes ahead without what it would
+have added. stderr gets `wpk: launch hook <name>: <error type>`, without the
+error's message, which could hold a value. Hooks run in entry-point order. The
+entry point's value may be a class, an instance, or a plain function taking `ctx`.
 
 ### 1.4 Cost sources (`work_packet.cost`)
 
@@ -275,6 +319,9 @@ gateway = "acme_wpk.creds:GatewayToken"
 
 [project.entry-points."work_packet.step_hooks"]
 gateway = "acme_wpk.hooks:Proxy"
+
+[project.entry-points."work_packet.launch_hooks"]
+gateway = "acme_wpk.creds:Credentials"
 
 [project.entry-points."work_packet.cost"]
 gateway = "acme_wpk.cost:GatewayCost"

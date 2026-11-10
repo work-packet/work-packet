@@ -186,6 +186,8 @@ def ask_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S, model=Non
     env.pop("CLAUDECODE", None)
     for k in ("WPK_WPID", "WPK_PROJECT", "WPK_IDE_LAUNCH"):     # not one of the packet's sessions
         env.pop(k, None)
+    from . import hooks
+    hooks.prepare_env("claude", "model-call", env)
     try:
         p = subprocess.run(argv, input=prompt, capture_output=True, text=True,
                            timeout=timeout, env=env)

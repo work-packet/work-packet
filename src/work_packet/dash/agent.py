@@ -248,6 +248,10 @@ class Agents:
             env.pop("CLAUDECODE", None)
             if meta.get("mode") == "studio":
                 env.update(self._studio_env(meta))
+            from .. import hooks
+            hooks.prepare_env("claude", meta.get("mode") or "console", env,
+                              wpid=meta.get("wpid"), project_dir=meta.get("project_dir"),
+                              cwd=meta["cwd"])
             err = open(os.path.join(d, "stderr.log"), "a")
             p = subprocess.Popen(argv, cwd=meta["cwd"], env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=err, text=True,

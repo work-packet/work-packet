@@ -9,14 +9,23 @@ an instance) and may have any of::
 
 A hook that raises does not fail the step: the error goes in
 ``meta["ext"][name]["error"]`` and that hook is not called again, except stop.
+
+Launch hooks (``work_packet.launch_hooks``, ``prepare_env``) are called for
+every harness launch, a scheduled step's and the board's (Studio and console
+chat, the scribe's and brief's model calls). Each gets the environment prepared
+for that one child, after the harness configuration and before the launch (on
+a step, before the step hooks' ``start``)::
+
+    prepare(ctx)        # may change ctx.env; ctx is a LaunchContext
 """
 import dataclasses
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from . import plugins
 
 GROUP = "work_packet.step_hooks"
+LAUNCH_GROUP = "work_packet.launch_hooks"
 
 
 @dataclasses.dataclass
@@ -83,3 +92,31 @@ class Hooks:
                     h.stop(ctx)
                 except Exception as e:  # noqa: BLE001
                     print("wpk: step hook %s: stop: %s" % (name, _err(e)), file=sys.stderr)
+
+
+# --- launch hooks: the child's environment, for every harness launch ----------------------
+
+@dataclasses.dataclass
+class LaunchContext:
+    harness: str
+    purpose: str                                # "step", "studio", "console" or "model-call"
+    env: Dict[str, str]                         # this child's environment (mutable)
+    wpid: Optional[str] = None
+    project_dir: Optional[str] = None
+    cwd: Optional[str] = None
+    config: Dict[str, Any] = dataclasses.field(default_factory=dict)  # [plugins.<name>]
+
+
+def prepare_env(harness, purpose, env, **facts):
+    """Give each enabled launch hook ``env``, the environment of one child about to
+    start, to change in place; returns ``env``. A hook that raises is skipped with
+    a line on stderr naming it and the error's type, never a value of ``env``:
+    the launch goes ahead without what it would have added."""
+    for name, obj in plugins.loaded(LAUNCH_GROUP).items():
+        try:
+            h = obj() if isinstance(obj, type) else obj
+            fn = getattr(h, "prepare", None) or h
+            fn(LaunchContext(harness, purpose, env, config=plugins.table(name), **facts))
+        except Exception as e:          # noqa: BLE001  a hook must not stop the launch
+            print("wpk: launch hook %s: %s" % (name, type(e).__name__), file=sys.stderr)
+    return env

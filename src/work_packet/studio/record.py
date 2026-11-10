@@ -114,6 +114,8 @@ def draft_summary(entry, wpid, session, home=None, now=None):
                   "--max-budget-usd", "0.05"]
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
+    from .. import hooks
+    hooks.prepare_env("claude", "model-call", env, wpid=wpid, project_dir=entry.get("path"))
     try:
         p = subprocess.run(argv, input=prompt, capture_output=True, text=True,
                            timeout=DRAFT_TIMEOUT_S, env=env)

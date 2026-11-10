@@ -16,6 +16,7 @@ GROUPS = (
     "work_packet.cli",             # a command group (E2)
     "work_packet.credentials",     # a credential kind (E3)
     "work_packet.step_hooks",      # code around a harness run (E4)
+    "work_packet.launch_hooks",    # a harness child's environment, any launch
     "work_packet.cost",            # a cost source (E5)
     "work_packet.budget",          # a budget provider (E6)
     "work_packet.dash",            # panels and routes (E7)
