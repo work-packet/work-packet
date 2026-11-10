@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from work_packet import progress
+from work_packet.presence import _alive
 from work_packet.progress import IvpmTranscript, git_progress, run_streamed
 
 DATA = os.path.join(os.path.dirname(__file__), "data", "ivpm-transcript")
@@ -210,8 +211,8 @@ def test_a_cancel_kills_the_command_and_its_children():
     t.join(10)
     assert not t.is_alive() and isinstance(out.get("e"), progress.Cancelled)
     deadline = time.time() + 5
-    while os.path.exists("/proc/%d" % out["kid"]) and time.time() < deadline:
+    while _alive(out["kid"]) and time.time() < deadline:
         time.sleep(0.02)
-    assert not os.path.exists("/proc/%d" % out["kid"])
+    assert not _alive(out["kid"])          # a zombie counts as gone (no init in CI's container)
     with c.on(), pytest.raises(progress.Cancelled):     # and nothing more starts
         run_streamed(["true"])

@@ -9,6 +9,7 @@ import urllib.parse
 import pytest
 
 from work_packet import forges, layout, project, registry, schema, setup, starters
+from work_packet.presence import _alive
 from work_packet.packet import Packet
 
 from test_setup import git, home, source                       # noqa: F401
@@ -760,9 +761,9 @@ def test_dash_create_job_cancel(home, source, tmp_path, fake_ivpm, monkeypatch):
         assert not (tmp_path / "t" / "dv-solve").exists()
         assert c.post(url, headers=hdr).status_code == 404               # finished
     deadline = time.time() + 10
-    while os.path.exists("/proc/%d" % kid) and time.time() < deadline:
+    while _alive(kid) and time.time() < deadline:
         time.sleep(0.05)
-    assert not os.path.exists("/proc/%d" % kid)
+    assert not _alive(kid)          # a zombie counts as gone (no init in CI's container)
 
 
 def test_cli_shows_the_steps(home, source, tmp_path, fake_ivpm, capsys):
