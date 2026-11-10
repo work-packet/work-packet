@@ -146,15 +146,17 @@ def test_packet_page_timeline(fake):
 
 
 def test_session_spend(tmp_path, monkeypatch):
-    from work_packet import ide_sessions
+    """Only the tokens spent today count, not a session's whole life
+    (docs/session-cost-plan.md S4); priced by the model."""
+    from work_packet import session_usage
+    from work_packet.ide_sessions import hour_of
     now = time.time()
-    recs = [{"harness": "claude", "model": "m", "usage_reported": True, "last_activity_t": now,
-             "usage": {"input_tokens": 1000, "output_tokens": 500}},
-            {"harness": "claude", "model": "m", "usage_reported": True,
-             "last_activity_t": now - 3 * 86400, "usage": {"input_tokens": 9}}]
-    monkeypatch.setattr(ide_sessions, "cached_records", lambda h: recs)
+    session_usage.put(str(tmp_path), {"harness": "claude", "session_id": "s1-aaaaaaaa"}, {
+        hour_of(now): {"claude-sonnet-5": {"input_tokens": 1000, "output_tokens": 500}},
+        hour_of(now - 3 * 86400): {"claude-sonnet-5": {"input_tokens": 9}}})
     got = data.session_spend(str(tmp_path), now)
     assert got["tokens"] == 1500
+    assert got["usd"] == pytest.approx((1000 * 2.0 + 500 * 10.0) / 1e6)
 
 
 def test_columns_take_drops(fake):

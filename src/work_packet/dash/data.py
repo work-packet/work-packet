@@ -726,31 +726,17 @@ def attention_key(a):
 
 def session_spend(home, now=None):
     """Today's tokens in the Claude and Codex sessions people drive (docs/collaboration.md
-    §7.5), and their cost where a model profile has a price: ``{"tokens", "usd"}``.
+    §7.5), and their estimated cost where the model has a price: ``{"tokens", "usd"}``.
+    Only what was spent since local midnight counts (docs/session-cost-plan.md S4).
     Budgets stay on the runner's spend; this is shown beside it."""
     import time
-    from .. import cost, ide_sessions, profiles
+    from . import tokens as tokmod
     now = time.time() if now is None else now
     start = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0,
                                                 microsecond=0).timestamp()
-    tokens, usd, priced_any = 0, 0.0, False
-    try:
-        profs = profiles.load()
-    except Exception:                   # noqa: BLE001: a bad profile file: tokens only
-        profs = []
-    for r in ide_sessions.cached_records(home):
-        if (r.get("last_activity_t") or 0) < start or not r.get("usage_reported"):
-            continue
-        u = r.get("usage") or {}
-        tokens += ide_sessions.total(u)
-        try:
-            prof = profiles.select(profs, r.get("harness"), r.get("model"))
-        except Exception:               # noqa: BLE001: no profile for it
-            prof = None
-        got = cost.priced(u, getattr(prof, "price", None)) if prof else None
-        if got is not None:
-            usd, priced_any = usd + got, True
-    return {"tokens": tokens, "usd": usd if priced_any else None}
+    bs = tokmod.session_buckets(home, since=start)
+    usd = [b["usd"] for b in bs if b["usd"] is not None]
+    return {"tokens": sum(b["tokens"] for b in bs), "usd": sum(usd) if usd else None}
 
 
 def backlog(cols):

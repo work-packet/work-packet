@@ -39,12 +39,43 @@
 {%- endif %}
 {%- endmacro %}
 
-{% macro table(rows, first, link=None) -%}
+{#- Runner and the sessions people drove, side by side (tokens.spend_split,
+    docs/session-cost-plan.md S4). -#}
+{% macro spend(sp) -%}
+{%- set w, a = sp.window, sp.all %}
+<h2 id="spend">Spend: runner and your sessions</h2>
+<div class="wrap"><table class="spendsplit">
+  <tr><th></th><th class="num">Last {{ sp.days }} days</th><th class="num">All time</th></tr>
+  <tr><td>Runner</td><td class="num">{{ w.runner|money or "$0" }}</td><td class="num">{{ a.runner|money or "$0" }}</td></tr>
+  <tr><td>Your sessions <span class="muted" title="priced from the models' list prices (prices.toml, or [prices] in config.toml)">est.</span></td>
+    <td class="num">{{ w.sessions.usd|money or "$0" }}{% if w.sessions.unpriced %}<span title="{{ w.sessions.unpriced|tok }} tokens have no price">*</span>{% endif %}</td>
+    <td class="num">{{ a.sessions.usd|money or "$0" }}{% if a.sessions.unpriced %}<span title="{{ a.sessions.unpriced|tok }} tokens have no price">*</span>{% endif %}</td></tr>
+  <tr><td><strong>Total</strong></td><td class="num"><strong>{{ w.total|money or "$0" }}</strong></td><td class="num"><strong>{{ a.total|money or "$0" }}</strong></td></tr>
+</table></div>
+{% if w.chart %}{{ chart(w.chart, "Spend per day") }}{% endif %}
+<p class="muted" style="font-size:12px">Your sessions: Claude Code and Codex in the editors and terminals the board ties to a task ({{ a.sessions.sessions }} session{{ "s" if a.sessions.sessions != 1 }}, {{ a.sessions.tokens|tok }} tokens). The runner's cost is what the harness reported; sessions are priced from their tokens.</p>
+{%- endmacro %}
+
+{% macro sessions(rows, link=None) -%}
 <div class="wrap"><table>
-  <tr><th>{{ first }}</th><th class="num">Steps</th><th class="num">Cost</th><th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Cache write</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
+  <tr><th>Harness</th><th>Session</th><th>Task</th><th>Model</th><th class="num">Tokens</th><th class="num">Est. cost</th><th>Last active</th></tr>
+  {% for r in rows %}
+  <tr><td>{{ r.harness }}{% if r.client %} <span class="muted">({{ r.client }})</span>{% endif %}</td>
+    <td><code title="{{ r.session }}">{{ r.short }}</code></td>
+    <td>{% if link and r.wpid %}<a href="{{ link }}/{{ r.wpid }}">{{ r.task }}</a>{% else %}<span class="muted">not determined</span>{% endif %}</td>
+    <td>{{ r.models }}</td><td class="num">{{ r.tokens|tok }}</td>
+    <td class="num">{{ r.usd|money or ("-" if r.unpriced else "$0") }}{% if r.unpriced and r.usd %}<span title="part of it has no price">*</span>{% endif %}</td>
+    <td class="muted">{{ r.last|epoch }}</td></tr>
+  {% endfor %}
+</table></div>
+{%- endmacro %}
+
+{% macro table(rows, first, link=None, sess=None) -%}
+<div class="wrap"><table>
+  <tr><th>{{ first }}</th><th class="num">Steps</th><th class="num">Cost</th>{% if sess is not none %}<th class="num" title="your sessions on this task (est.)">Sessions</th><th class="num">Total</th>{% endif %}<th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Cache write</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
   {% for r in rows %}
   <tr><td>{% if link and r.wpid %}<a href="{{ link }}/{{ r.wpid }}">{{ r.label }}</a>{% else %}{{ r.label }}{% endif %}</td>
-    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td><td class="num">{{ r.quota_week|pct }}</td>
+    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}</td>{% if sess is not none %}{% set su = sess.get(r.wpid, 0) %}<td class="num">{{ su|money if su else "" }}</td><td class="num">{{ ((r.cost_usd or 0) + su)|money }}</td>{% endif %}<td class="num">{{ r.quota_week|pct }}</td>
     <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
     <td class="num">{{ r.cache_write|tok }}</td><td class="num">{{ r.output_tokens|tok }}</td>
     <td class="num">{{ r.thinking_share|pct }}</td><td class="num">{{ r.failed_share|pct }}</td></tr>

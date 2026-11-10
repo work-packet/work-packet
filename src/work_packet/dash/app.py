@@ -318,8 +318,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Overview showed at its foot (docs/overview-recent.md §3)."""
         cols, broken = data.board(home)
         side = data.side(home, cols, broken)
-        burn = tokens.board(archived.entries(home), days=days_of(request),
-                            on=[b["name"] for b in side])
+        burn = await run_in_threadpool(
+            lambda: tokens.board(archived.entries(home), days=days_of(request),
+                                 on=[b["name"] for b in side], home=home or registry.home(),
+                                 sessions=is_owner(request)))
         return render(request, "stats.html", burn=burn, side=side, here=None,
                       windows=tokens.WINDOWS)
 
@@ -909,7 +911,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                       pages=pages, steps=rows[(page - 1) * STEPS_PAGE:page * STEPS_PAGE], **kw)
 
     async def project_cost(request, e, now, kw):
-        return render(request, "project_cost.html", tk=tokens.project(e, now), **kw)
+        # the sessions people drove, as the VS Code sessions tables: the owner only
+        tk = await run_in_threadpool(tokens.project, e, now, 14, home or registry.home(),
+                                     is_owner(request))
+        return render(request, "project_cost.html", tk=tk, **kw)
 
     async def project_settings(request, e, now, kw):
         bs = registry.boards(home)

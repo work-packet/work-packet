@@ -26,21 +26,32 @@
 <div class="h2bar" id="tokens"><h2>Tokens, {{ span }}</h2>
   <span class="tabs">{% for d in windows %}<a class="{{ 'on' if d == burn.days }}" href="/stats?days={{ d }}">{{ "1 day" if d == 1 else "%d days" % d }}</a>{% endfor %}</span></div>
 {{ tkm.quota(burn.quota) }}
+{% set sp2 = burn.split %}
+{% if sp2 and (sp2.total or sp2.sessions.tokens) %}
+<div class="tkline" id="split">
+  <span>Runner <strong>{{ sp2.runner|money or "$0" }}</strong></span>
+  <span>+ your sessions <strong>{{ sp2.sessions.usd|money or "$0" }}</strong> <span class="muted" title="priced from the models' list prices (prices.toml, or [prices] in config.toml)">est.</span>{% if sp2.sessions.unpriced %}<span title="{{ sp2.sessions.unpriced|tok }} tokens have no price">*</span>{% endif %}</span>
+  <span>= <strong>{{ sp2.total|money or "$0" }}</strong> {{ span }}</span>
+  <span class="muted">{{ sp2.sessions.sessions }} session{{ "s" if sp2.sessions.sessions != 1 }}, {{ sp2.sessions.tokens|tok }} tokens</span>
+</div>
+{% if sp2.chart and side|length <= 1 %}{{ tkm.chart(sp2.chart, "Spend per day") }}{% endif %}
+{% endif %}
 {% if burn.total %}
 {{ tkm.summary(burn.total, burn.total.steps) }}
 {% if burn.total.chart %}{{ tkm.chart(burn.total.chart, "Context read per day") }}{% endif %}
-{% if burn.spend and burn.spend.chart and side|length <= 1 %}{{ tkm.chart(burn.spend.chart, "Spend per day", legend=False) }}<div class="tklegend">Spend per day</div>{% endif %}
+{% if burn.spend and burn.spend.chart and side|length <= 1 and not sp2 %}{{ tkm.chart(burn.spend.chart, "Spend per day", legend=False) }}<div class="tklegend">Spend per day</div>{% endif %}
 {% set top = 10 %}
 {% macro prow(r) -%}
   <tr><td><a href="/p/{{ r.name|urlencode }}/cost">{{ r.name }}</a></td>{% if side|length > 1 %}<td><a href="/b/{{ r.board|urlencode }}">{{ r.board }}</a></td>{% endif %}
     {% if burn.days > 1 %}<td style="width:150px">{{ tkm.chart(r.spark, "context per day", legend=False) }}</td>{% endif %}
-    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}{% if r.cost_bases and r.cost_bases|length > 1 %}<span title="mixed cost basis: {{ r.cost_bases|join(', ') }}">*</span>{% endif %}</td><td class="num">{{ r.quota_week|pct }}</td>
+    <td class="num">{{ r.steps }}</td><td class="num">{{ r.cost_usd|money }}{% if r.cost_bases and r.cost_bases|length > 1 %}<span title="mixed cost basis: {{ r.cost_bases|join(', ') }}">*</span>{% endif %}</td>
+    {% if sp2 %}<td class="num">{{ r.sess_usd|money if r.sess_usd else "" }}{% if r.sess_unpriced %}<span title="{{ r.sess_unpriced|tok }} tokens have no price">*</span>{% endif %}</td><td class="num">{{ r.total_usd|money if r.total_usd else "" }}</td>{% endif %}<td class="num">{{ r.quota_week|pct }}</td>
     <td class="num">{{ r.context_tokens|tok }}</td><td class="num">{{ r.cache_hit|pct }}</td>
     <td class="num">{{ r.output_tokens|tok }}</td><td class="num">{{ r.thinking_share|pct }}</td>
     <td class="num {{ 'err' if r.failed_share and r.failed_share > 0.1 }}">{{ r.failed_share|pct }}</td></tr>
 {%- endmacro %}
 {% macro phead() -%}
-  <tr><th>Project</th>{% if side|length > 1 %}<th>Board</th>{% endif %}{% if burn.days > 1 %}<th>Per day</th>{% endif %}<th class="num">Steps</th><th class="num">Cost</th><th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
+  <tr><th>Project</th>{% if side|length > 1 %}<th>Board</th>{% endif %}{% if burn.days > 1 %}<th>Per day</th>{% endif %}<th class="num">Steps</th><th class="num">Cost</th>{% if sp2 %}<th class="num" title="your sessions (est.)">Sessions</th><th class="num">Total</th>{% endif %}<th class="num" title="share of the weekly subscription quota">Week quota</th><th class="num">Context</th><th class="num">Cache hit</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">On failures</th></tr>
 {%- endmacro %}
 <div class="wrap"><table>
   {{ phead() }}
@@ -69,7 +80,7 @@
   <span class="fig">{{ b.cost|money }} <span class="muted">· {{ '%.0f'|format(b.share * 100) }}%</span></span>
   {% endfor %}
 </div>
-<p class="muted">{{ sp.total|money }} spent {{ span }}{% if sp.idle %}; nothing on {{ sp.idle|join(", ") }}{% endif %}.</p>
+<p class="muted">{{ sp.total|money }} spent {{ span }}{% if sp2 %}, runner and your sessions (est.){% endif %}{% if sp.idle %}; nothing on {{ sp.idle|join(", ") }}{% endif %}.</p>
 {% if sp.chart %}{{ tkm.chart(sp.chart, "Spend per day") }}{% endif %}
 {% endif %}
 <div class="wrap"><table>

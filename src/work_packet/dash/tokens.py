@@ -142,16 +142,115 @@ def _tools(attrs, kinds=12, n=10):
             "steps": len(attrs)}
 
 
-def project(entry, now=None, days=14):
+# --- the sessions people drive, beside the runner (docs/session-cost-plan.md S4) -------
+
+SOURCES = (("runner", "sp0", "runner"), ("sessions", "sp1", "your sessions (est.)"))
+TOKEN_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+              "output_tokens")
+
+
+def session_buckets(home, since=None, until=None, project=None):
+    """Session tokens by hour and model, priced: ``[{t, model, usage, rec, tokens,
+    usd}]`` (``usd`` None for a model with no price)."""
+    from .. import cost, registry, session_usage
+    home = home or registry.home()
+    tables, prices, out = cost.price_tables(home), {}, []
+    for t, m, u, r in session_usage.rows(home, since, until, project):
+        if m not in prices:
+            prices[m] = cost.model_price(m, tables=tables)
+        out.append({"t": t, "model": m, "usage": u, "rec": r,
+                    "tokens": sum(u.get(k, 0) for k in TOKEN_KEYS),
+                    "usd": cost.session_usd(u, prices[m])})
+    return out
+
+
+def _sess_sum(bs):
+    usd = [b["usd"] for b in bs if b["usd"] is not None]
+    return {"usd": sum(usd) if usd else (0.0 if not bs else None),
+            "tokens": sum(b["tokens"] for b in bs),
+            "unpriced": sum(b["tokens"] for b in bs if b["usd"] is None),
+            "sessions": len({(b["rec"]["harness"], b["rec"]["session_id"]) for b in bs})}
+
+
+def _day_of(t, tz):
+    from datetime import datetime
+    return datetime.fromtimestamp(t, tz).date()
+
+
+def spend_split(steps, buckets, dates, tz):
+    """Runner and sessions side by side over ``dates`` (local days): ``{runner,
+    sessions (``_sess_sum``), total, chart}``, the chart stacked by source."""
+    first = dates[0] if dates else None
+    st = [s for s in steps if first is None or (_local_day(s, tz) or first) >= first]
+    bs = [b for b in buckets if first is None or _day_of(b["t"], tz) >= first]
+    runner = sum(s.cost or 0 for s in st)
+    sess = _sess_sum(bs)
+    out = {"runner": runner, "sessions": sess, "total": runner + (sess["usd"] or 0),
+           "chart": None}
+    if len(dates) > 1:
+        cols = []
+        for d in dates:
+            v = {"runner": sum(s.cost or 0 for s in st if _local_day(s, tz) == d),
+                 "sessions": sum(b["usd"] or 0 for b in bs if _day_of(b["t"], tz) == d)}
+            day = v["runner"] + v["sessions"]
+            cols.append({"label": d.strftime("%m-%d"), "values": v,
+                         "title": "%s: %s (runner %s, your sessions %s est.)" % (
+                             d.isoformat(), _usd(day), _usd(v["runner"]), _usd(v["sessions"]))
+                         if day else "%s: none" % d})
+        out["chart"] = chart(cols, SOURCES, height=90, unit="usd")
+    return out
+
+
+def session_rows(buckets, names=None):
+    """One row per session, most recent first: harness, client, packet, models,
+    tokens, est. cost, last active."""
+    from .. import ide_sessions
+    by = {}
+    for b in buckets:
+        r = b["rec"]
+        k = (r["harness"], r["session_id"])
+        row = by.setdefault(k, {
+            "harness": ide_sessions.HARNESS_LABEL.get(r["harness"], r["harness"]),
+            "client": ide_sessions.CLIENT_LABEL.get(r.get("client") or "unknown", ""),
+            "session": r["session_id"], "short": r["session_id"][:8],
+            "wpid": r.get("wpid"), "task": (names or {}).get(r.get("wpid")) or
+            (r.get("wpid") or "")[:8], "models": set(), "tokens": 0, "usd": 0.0,
+            "unpriced": False, "last": 0})
+        row["models"].add(b["model"])
+        row["tokens"] += b["tokens"]
+        if b["usd"] is None:
+            row["unpriced"] = True
+        else:
+            row["usd"] += b["usd"]
+        row["last"] = max(row["last"], b["t"])
+    out = sorted(by.values(), key=lambda x: -x["last"])
+    for row in out:
+        row["models"] = ", ".join(sorted(row["models"]))
+    return out
+
+
+def project(entry, now=None, days=14, home=None, sessions=True):
     """The project page's Tokens panel: totals, a chart per day, and tables by
-    packet and by item. None when no step has token counts."""
+    packet and by item; with ``sessions``, the sessions people drove beside the
+    runner (``spend``, ``sessions``). None when there is neither."""
     now = now or clock.now()
     from .data import _zone
     tz = _zone(entry["path"])
     steps = [s for s in project_steps(entry) if s.context_tokens is not None]
-    if not steps:
-        return None
+    buckets = session_buckets(home, project=entry["name"]) if sessions else []
     today = now.astimezone(tz).date()
+    first = today - timedelta(days=days - 1)
+    split = None
+    if buckets:
+        split = {"window": spend_split(steps, buckets,
+                                       [first + timedelta(days=i) for i in range(days)], tz),
+                 "all": spend_split(steps, buckets, [], tz), "days": days}
+    if not steps:
+        if not buckets:
+            return None
+        return {"steps": 0, "spend": split, "packets": [], "by_item": [], "tools": None,
+                "sessions": session_rows(buckets, _names(entry)), "quota": [],
+                "sess_by_task": {}}
     by_day = {}
     for s in steps:
         by_day.setdefault(_local_day(s, tz), []).append(s)
@@ -168,11 +267,17 @@ def project(entry, now=None, days=14):
         d += timedelta(days=1)
     names = _names(entry)
     items = rows(steps, "item", names)
+    by_task = {}
+    for bk in buckets:
+        w = bk["rec"].get("wpid")
+        if w and bk["usd"] is not None:
+            by_task[w] = by_task.get(w, 0.0) + bk["usd"]
     return {"figures": stats.token_figures(steps), "steps": len(steps),
             "quota": quota(steps, now), "days": chart(cols, CONTEXT), "days_out": chart(cols, OUTPUT, height=70),
             "packets": rows(steps, "packet", names), "tools": tools(entry, steps),
             "by_item": items if any(not r["label"].startswith("(no item)") for r in items)
-            else []}
+            else [], "spend": split, "sessions": session_rows(buckets, names) if buckets else [],
+            "sess_by_task": by_task}
 
 
 def packet(entry, wpid):
@@ -232,7 +337,7 @@ def quota(steps, now=None):
 WINDOWS = (1, 7, 30)
 
 
-def board(entries, now=None, days=7, on=None):
+def board(entries, now=None, days=7, on=None, home=None, sessions=False):
     """The Overview's token use over the last ``days`` days: a row per project
     (biggest first, with a bar per day and its ``board``), a summary per board
     (``boards``), the whole (``total``, with a full chart per day), and the quota
@@ -242,6 +347,13 @@ def board(entries, now=None, days=7, on=None):
     from .data import _zone
     now = now or clock.now()
     out, every, by_board, days_all = [], [], {}, {}
+    # the sessions people drove (docs/session-cost-plan.md S4), from a day early so
+    # every project's local window is covered; each project keeps its own days
+    ltoday = now.astimezone().date()
+    lstart = ltoday - timedelta(days=days - 1)
+    sess_all = session_buckets(home, since=(now - timedelta(days=days + 1)).timestamp()) \
+        if sessions else []
+    sess_by_board, all_steps, all_bs = {}, [], []
     for e in entries:
         if not os.path.isdir(e["path"]):
             continue
@@ -252,9 +364,25 @@ def board(entries, now=None, days=7, on=None):
         every += ps
         steps = [s for s in ps if s.context_tokens is not None
                  and (_local_day(s, tz) or start) >= start]
-        if not steps:
+        bs = [x for x in sess_all if x["rec"].get("project") == e["name"]
+              and start <= _day_of(x["t"], tz) <= today]
+        all_steps += steps
+        all_bs += bs
+        if not steps and not bs:
             continue
         b = registry.board_of(e, on or [registry.DEFAULT_BOARD])
+        if bs:
+            sb = sess_by_board.setdefault(b, {"usd": 0.0, "days": {}})
+            for x in bs:
+                i = (_day_of(x["t"], tz) - start).days
+                sb["usd"] += x["usd"] or 0
+                sb["days"][i] = sb["days"].get(i, 0.0) + (x["usd"] or 0)
+        if not steps:
+            ss = _sess_sum(bs)
+            out.append(dict(stats.token_figures([]), name=e["name"], board=b, steps=0,
+                            spark=None, sess_usd=ss["usd"], sess_unpriced=ss["unpriced"],
+                            total_usd=ss["usd"] or 0))
+            continue
         bb = by_board.setdefault(b, {"steps": [], "days": {}})
         bb["steps"] += steps
         cols = []
@@ -265,10 +393,14 @@ def board(entries, now=None, days=7, on=None):
             days_all.setdefault(i, (d, []))[1].extend(ss)
             v = _sum_values(ss)
             cols.append({"values": v, "title": _title(d.isoformat(), v)})
-        out.append(dict(stats.token_figures(steps), name=e["name"], board=b, steps=len(steps),
+        ss = _sess_sum(bs)
+        f = stats.token_figures(steps)
+        out.append(dict(f, name=e["name"], board=b, steps=len(steps),
                         spark=chart(cols, CONTEXT, width=140, height=28, gap=1,
-                                    label_h=0, left=0)))
-    out.sort(key=lambda r: -(r["context_tokens"] or 0))
+                                    label_h=0, left=0), sess_usd=ss["usd"] if bs else None,
+                        sess_unpriced=ss["unpriced"],
+                        total_usd=(f["cost_usd"] or 0) + (ss["usd"] or 0)))
+    out.sort(key=lambda r: (-(r["context_tokens"] or 0), -(r["total_usd"] or 0)))
     boards = {}
     for b, bb in by_board.items():
         cols = []
@@ -279,7 +411,9 @@ def board(entries, now=None, days=7, on=None):
                          spark=chart(cols, CONTEXT, width=140, height=28, gap=1,
                                      label_h=0, left=0))
     total = None
-    if out:
+    if out and not by_board:            # sessions only: no runner figures
+        total = dict(stats.token_figures([]), steps=0, chart=None)
+    elif out:
         cols = []
         for i in sorted(days_all):
             d, ss = days_all[i]
@@ -290,9 +424,11 @@ def board(entries, now=None, days=7, on=None):
         total = dict(stats.token_figures([s for r in by_board.values() for s in r["steps"]]),
                      steps=sum(len(r["steps"]) for r in by_board.values()),
                      chart=chart(cols, CONTEXT, height=90) if days > 1 else None)
+    dates = [lstart + timedelta(days=i) for i in range(days)]
     return {"rows": out, "boards": boards, "total": total, "days": days,
             "quota": quota(every, now),
-            "spend": spend(by_board, [days_all[i][0] for i in sorted(days_all)], on)}
+            "spend": spend(by_board, dates, on, sess_by_board),
+            "split": spend_split(all_steps, all_bs, dates, None) if sessions else None}
 
 
 SPEND_COLOURS = 8  # --sp0 .. --sp7 in base.html; boards past that reuse them
@@ -302,14 +438,18 @@ def _usd(v):
     return "$%.2f" % v
 
 
-def spend(by_board, dates, on=None):
+def spend(by_board, dates, on=None, sess=None):
     """Spend by board (docs/stats-spend.md): a bar per board that spent
     anything, biggest first, with its ``share`` of the whole and ``w``, its
     length against the biggest (0..1); ``idle``, the boards in ``on`` that spent
     nothing; ``chart``, spend per day stacked by board (None for one day).
     ``by_board``: {board: {"steps", "days": {i: steps}}}; ``dates``: the day of
-    each index. None when nothing was spent."""
+    each index. ``sess``: {board: {"usd", "days": {i: usd}}}, the sessions people
+    drove, added in. None when nothing was spent."""
+    sess = sess or {}
     cost = {b: sum(s.cost or 0 for s in bb["steps"]) for b, bb in by_board.items()}
+    for b, sb in sess.items():
+        cost[b] = cost.get(b, 0.0) + sb["usd"]
     total = sum(cost.values())
     if total <= 0:
         return None
@@ -323,7 +463,8 @@ def spend(by_board, dates, on=None):
     if len(dates) > 1:
         cols = []
         for i, d in enumerate(dates):
-            v = {b: sum(s.cost or 0 for s in by_board[b]["days"].get(i, [])) for b in names}
+            v = {b: sum(s.cost or 0 for s in by_board.get(b, {}).get("days", {}).get(i, []))
+                 + sess.get(b, {}).get("days", {}).get(i, 0.0) for b in names}
             day = sum(v.values())
             parts = ", ".join("%s %s" % (b, _usd(v[b])) for b in names if v[b] > 0)
             title = "%s: %s%s" % (d.isoformat(), _usd(day), " (%s)" % parts

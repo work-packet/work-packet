@@ -74,7 +74,9 @@ TURN_STATE = {PROMPT: BUSY, READ: BUSY, SHELL: BUSY, EDIT: BUSY, WEB: BUSY, AGEN
               TURN_END: FINISHED, TURN_ABORT: INTERRUPTED}
 
 USAGE_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
-              "output_tokens", "thinking_tokens")
+              "output_tokens", "thinking_tokens",
+              # the part of cache_creation_input_tokens written for an hour (priced higher)
+              "cache_creation_1h_input_tokens")
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,79}\Z")
 SESSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{7,63}\Z")
 ENTRYPOINT = re.compile(r"[a-z0-9][a-z0-9_.-]{0,31}\Z")
@@ -107,6 +109,21 @@ def _ints(u, keys=USAGE_KEYS):
         if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
             out[k] = v
     return out
+
+
+def hour_of(t):
+    """The bucket a reply's tokens go in: its hour, as an epoch string ("0": no time)."""
+    return str(int(t // 3600 * 3600)) if isinstance(t, (int, float)) else "0"
+
+
+def add_hours(into, hours, sign=1):
+    """``hours`` (``{hour: {model: usage}}``) added to ``into``, in place."""
+    for h, models in hours.items():
+        for m, u in models.items():
+            b = into.setdefault(h, {}).setdefault(m, {})
+            for k, v in u.items():
+                b[k] = b.get(k, 0) + sign * v
+    return into
 
 
 def total(usage):
@@ -158,33 +175,40 @@ def new_state(harness):
             "counts": {}, "last_work_t": None, "edit_ts": [],
             # harness-specific; not shown
             "entrypoint": None, "source": None, "cwd": None, "_folded": {}, "_recent": [],
-            "_usage_src": None}
+            "_usage_src": None,
+            # when the tokens were spent (docs/session-cost-plan.md S1):
+            # {hour: {model: usage}}, summing to ``usage``
+            "hours": {}, "_folded_hours": {}}
 
 
 # -- Claude Code -------------------------------------------------------------
 
 def _claude_usage(st):
-    """The folded usage plus the recent ids' latest."""
+    """The folded usage plus the recent ids' latest, in total and by hour."""
     out = dict(st["_folded"])
-    for _, u in st["_recent"]:
+    hours = add_hours({}, st["_folded_hours"])
+    for _, u, h, m in st["_recent"]:
         for k, v in u.items():
             out[k] = out.get(k, 0) + v
-    st["usage"] = out
+        add_hours(hours, {h: {m: u}})
+    st["usage"], st["hours"] = out, hours
 
 
-def _claude_note_usage(st, mid, u):
-    """``mid``'s usage, replacing an earlier revision of it."""
+def _claude_note_usage(st, mid, u, t=None, model=None):
+    """``mid``'s usage, replacing an earlier revision of it; it stays in the hour
+    and model it was first seen with."""
     recent = st["_recent"]
-    for i, (rid, _) in enumerate(recent):
+    for i, (rid, _, h, m) in enumerate(recent):
         if rid == mid:
-            recent[i] = [mid, u]
+            recent[i] = [mid, u, h, m]
             break
     else:
-        recent.append([mid, u])
+        recent.append([mid, u, hour_of(t), model or st.get("model") or "unknown"])
         while len(recent) > RECENT_IDS:
-            _, old = recent.pop(0)
+            _, old, h, m = recent.pop(0)
             for k, v in old.items():
                 st["_folded"][k] = st["_folded"].get(k, 0) + v
+            add_hours(st["_folded_hours"], {h: {m: old}})
     st["usage_reported"] = True
     _claude_usage(st)
 
@@ -228,8 +252,13 @@ def claude_feed(st, d):
         st["model"] = model
     mid = msg.get("id")
     u = _ints(msg.get("usage"))
+    cc = (msg.get("usage") or {}).get("cache_creation") if u else None
+    if isinstance(cc, dict):
+        one_h = _ints(cc, ("ephemeral_1h_input_tokens",))
+        if one_h.get("ephemeral_1h_input_tokens"):
+            u["cache_creation_1h_input_tokens"] = one_h["ephemeral_1h_input_tokens"]
     if isinstance(mid, str) and u:
-        _claude_note_usage(st, mid, u)
+        _claude_note_usage(st, mid, u, t, model if model != "<synthetic>" else None)
     tools = [n for b, n in blocks if b == "tool_use"]
     if tools:
         _event(st, CLAUDE_TOOLS.get(tools[-1], TOOL), t)
@@ -258,11 +287,18 @@ def _codex_usage(u):
     return claude_names(got)
 
 
-def _codex_set_usage(st, u, src):
+def _codex_set_usage(st, u, src, t=None):
+    """A cumulative snapshot: the session's usage, and what it added since the last
+    one goes to this hour and the current model."""
     if u is None:
         return
     if src == "token_count" and st["_usage_src"] == "thread":
         return                      # the thread's own total is better: never both
+    prev = st["usage"] or {}
+    delta = {k: u.get(k, 0) - prev.get(k, 0) for k in set(u) | set(prev)}
+    delta = {k: v for k, v in delta.items() if v}
+    if delta:
+        add_hours(st["hours"], {hour_of(t): {st.get("model") or "unknown": delta}})
     st["usage"], st["usage_reported"], st["_usage_src"] = u, True, src
 
 
@@ -286,11 +322,11 @@ def codex_feed(st, d):
         st["model"] = _ok(MODEL, p.get("model")) or st["model"]
     elif kind == "token_usage_record" or kind == "event_msg" and \
             p.get("type") == "token_usage_record":
-        _codex_set_usage(st, _codex_usage(p.get("thread_token_usage")), "thread")
+        _codex_set_usage(st, _codex_usage(p.get("thread_token_usage")), "thread", t)
     elif kind == "event_msg":
         et = p.get("type")
         if et == "token_count":
-            _codex_set_usage(st, _codex_usage(p.get("info")), "token_count")
+            _codex_set_usage(st, _codex_usage(p.get("info")), "token_count", t)
         elif et in CODEX_EVENTS:
             _event(st, CODEX_EVENTS[et], t)
         elif isinstance(et, str) and et.endswith("approval_request"):
@@ -352,6 +388,8 @@ def read_new(path, cur, max_bytes=MAX_READ):
 
 def scan(path, harness, st=None, cur=None, max_bytes=MAX_READ):
     """Read what is new in one session file into its state: ``(state, cursor)``."""
+    if st is not None and "hours" not in st:
+        st, cur = None, None        # kept before tokens had times: read it again, once
     lines, cur, reset = read_new(path, cur, max_bytes)
     if reset or st is None:
         st = new_state(harness)
@@ -614,12 +652,16 @@ def _get(path):
 def write(home, rec):
     """Store one session's record (cleaned). Returns what was stored, or None
     when it has no harness or session id."""
+    hours = rec.get("hours")
     rec = clean(rec)
     if "harness" not in rec or "session_id" not in rec:
         return None
     d = sessions_dir(home)
     _private_dir(d)
     _put(os.path.join(d, _name(rec["harness"], rec["session_id"]) + ".json"), rec)
+    if isinstance(hours, dict):         # when its tokens were spent, kept for good
+        from . import session_usage
+        session_usage.put(home, rec, hours)
     return rec
 
 
@@ -812,6 +854,9 @@ class Collector:
             for kk, v in (s.get("usage") or {}).items():
                 usage[kk] = usage.get(kk, 0) + v
         out["usage"] = usage
+        out["hours"] = {}
+        for s in sts:
+            add_hours(out["hours"], s.get("hours") or {})
         out["usage_reported"] = any(s.get("usage_reported") for s in sts)
         out["model"] = next((s["model"] for s in reversed(sts) if s.get("model")), None)
         counts = {}
@@ -880,7 +925,7 @@ class Collector:
             "live": live, "usage": st.get("usage") or {},
             "counts": st.get("counts") or {}, "last_work_t": st.get("last_work_t"),
             "edit_ts": st.get("edit_ts") or [],
-            "usage_reported": bool(st.get("usage_reported"))})
+            "usage_reported": bool(st.get("usage_reported")), "hours": st.get("hours")})
         _save_cur(self.home, harness, sid, {"files": self.files.get((harness, sid)) or {}})
 
     # -- presence for harnesses with no hooks (docs/agent-state-plan.md A1)
@@ -1094,9 +1139,38 @@ def hook_pass(home, now=None):
                 "turn_state": st.get("turn_state"), "live": not ended,
                 "usage": st.get("usage") or {}, "counts": st.get("counts") or {},
                 "last_work_t": st.get("last_work_t"), "edit_ts": st.get("edit_ts") or [],
-                "usage_reported": bool(st.get("usage_reported"))})
+                "usage_reported": bool(st.get("usage_reported")), "hours": st.get("hours")})
             _save_cur(home, "claude", sid, {"files": cur})
             n += 1
+    return n
+
+
+def backfill_usage(home, stop=None):
+    """Give every recorded session without one a usage store entry, from its
+    transcripts read again from the start (docs/session-cost-plan.md S2): the
+    sessions that ended before tokens had times. The cursors are left alone.
+    ``stop()``: true to give up early. Returns how many it wrote."""
+    from . import session_usage
+    have = {(r["harness"], r["session_id"]) for r in session_usage.records(home)}
+    n = 0
+    for rec in records(home):
+        k = (rec.get("harness"), rec.get("session_id"))
+        if k in have or rec.get("harness") not in FEED:
+            continue
+        hours = {}
+        for path in (_load_cur(home, *k).get("files") or {}):
+            st = cur = None
+            while os.path.isfile(path) and not (stop and stop()):
+                was = (cur or {}).get("offset", -1)
+                st, cur = scan(path, k[0], st, cur)
+                if cur.get("offset", 0) in (was, os.path.getsize(path)):
+                    break               # at the end, or a line too long to read
+            if st:
+                add_hours(hours, st.get("hours") or {})
+        if stop and stop():
+            break
+        session_usage.put(home, rec, hours)
+        n += 1
     return n
 
 

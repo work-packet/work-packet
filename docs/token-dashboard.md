@@ -47,6 +47,30 @@ Input is about 100× output. So most of the cost is re-reading the context
 on every call: calls per step × context size. Cutting calls, or keeping
 context small, pays more than cutting output.
 
+### Your sessions beside the runner (2026-11-10)
+
+The Claude Code and Codex sessions the board ties to a task count too
+(`docs/session-cost-plan.md`). These are the sessions in web VS Code it opened,
+and, through the hooks, desktop VS Code and terminals in packet folders.
+
+- **Cost tab** (`/p/<project>/cost`): "Spend: runner and your sessions", with
+  runner, sessions and total over the last 14 days and all time, and spend per
+  day stacked by source. "By task" gains Sessions and Total. "Your sessions"
+  lists each session: harness, task, model, tokens, est. cost, last active.
+- **Statistics** (`/stats`): "Runner $X + your sessions $Y est. = $Z" for the
+  window, Sessions and Total per project, and the boards' spend includes sessions.
+- **Overview "Spend today"**: the sessions' part counts only today's tokens.
+- **Timing:** each reply's tokens are counted in the hour it was sent (a Codex
+  snapshot's increase, in the hour of the snapshot). The figures are kept in
+  `$WPK_HOME/usage/sessions/`, which isn't pruned with the session list.
+- **Prices:** sessions are priced from the models' list prices
+  (`src/work_packet/prices.toml`). 1-hour cache writes cost 2× input, 5-minute
+  ones 1.25×. Set `[prices."<model glob>"]` in config.toml for a gateway's rates
+  or for Codex models (which have no built-in price; their tokens show as unpriced,
+  `*`). The runner's cost is unchanged: what the harness reported, or a plugin's.
+- Only the board's owner sees the session figures, as with the VS Code sessions
+  tables.
+
 ## Trend views
 
 These are built on `stats.rollup()`, so the board and the CLI show the same

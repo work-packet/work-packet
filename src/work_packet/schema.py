@@ -972,6 +972,34 @@ def _validate_plugins(d):
     return out
 
 
+PRICE_KEYS = ("input", "output", "cache_write", "cache_write_1h", "cache_read")
+
+
+def _validate_prices(d):
+    """``[prices."<model glob>"]``: USD per million tokens for the sessions people
+    drive (docs/session-cost-plan.md S3)."""
+    t = d.get("prices")
+    if t is None:
+        return []
+    if not isinstance(t, dict):
+        return [_err("prices", 'must be a table of [prices."<model glob>"] tables')]
+    out = []
+    for glob, p in t.items():
+        if not isinstance(p, dict):
+            out.append(_err("prices." + glob, 'must be a [prices."%s"] table' % glob))
+            continue
+        for k, v in p.items():
+            if k not in PRICE_KEYS:
+                out.append(_err("prices.%s.%s" % (glob, k), "unknown key (one of %s)"
+                                % ", ".join(PRICE_KEYS)))
+            elif not (isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0):
+                out.append(_err("prices.%s.%s" % (glob, k), "must be a number >= 0"))
+        for k in ("input", "output"):
+            if k not in p:
+                out.append(_err("prices.%s.%s" % (glob, k), "is required"))
+    return out
+
+
 def _validate_site(d):
     """``[site]``: ``locked``, dotted keys of the site config a user's
     ``config.toml`` may not override (design E8.1)."""
@@ -1074,14 +1102,14 @@ def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
                                                 "console", "harnesses", "plugins", "site",
                                                 "studio", "plan", "focus", "notify", "calendar",
-                                                "desktop")) \
+                                                "desktop", "prices")) \
         + _validate_calendar(d) + _validate_limits(d) + _validate_profiles(d) \
         + _validate_server(d) + _validate_ide(d) \
         + _validate_plan(d) + _validate_focus(d) + _validate_notify(d) \
         + _validate_console(d) + _validate_studio(d) + _validate_desktop(d) \
         + _validate_forges(d.get("forge")) \
         + _validate_harness(d) \
-        + _validate_plugins(d) + _validate_site(d)
+        + _validate_plugins(d) + _validate_site(d) + _validate_prices(d)
     v = d.get("max_step_budget_usd", 1)
     if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
         out.append(_err("max_step_budget_usd", "must be a number > 0"))

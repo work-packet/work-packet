@@ -142,6 +142,12 @@ class Runner:
         import time
         from .. import ide, ide_sessions, scribe
         collectors, pruned = {}, 0.0
+        try:            # sessions recorded before tokens had times (session-cost-plan.md S2)
+            n = ide_sessions.backfill_usage(self.home, self._stopping.is_set)
+            if n:
+                log.info("session usage: backfilled %d session(s)", n)
+        except Exception:                      # noqa: BLE001  never stops the watch
+            log.exception("session usage backfill failed")
         while not self._stopping.is_set():
             try:
                 cfg = ide.load_config(self.home)

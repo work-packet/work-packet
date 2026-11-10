@@ -6,8 +6,10 @@
 {% block main %}
 {{ tabs.top(e, card, "cost", work) }}
 <p>{{ card.spend_total|money or "$0" }} total, {{ card.spend_today|money or "$0" }} today.</p>
+{% if tk and tk.spend %}{{ tkm.spend(tk.spend) }}{% endif %}
 <h2 id="tokens">Tokens</h2>
 {% if tk %}
+{% if tk.steps %}
 <div class="panel">
   {{ tkm.quota(tk.quota) }}
   {{ tkm.summary(tk.figures, tk.steps) }}
@@ -15,7 +17,9 @@
   {{ tkm.chart(tk.days_out, "Output per day") }}
 </div>
 <h3>By task</h3>
-{{ tkm.table(tk.packets, "Task", "/p/" ~ (e.name|urlencode)) }}
+{{ tkm.table(tk.packets, "Task", "/p/" ~ (e.name|urlencode), tk.sess_by_task if tk.spend else none) }}
+{% endif %}
+{% if tk.sessions %}<h3 id="sessions">Your sessions</h3>{{ tkm.sessions(tk.sessions, "/p/" ~ (e.name|urlencode)) }}{% endif %}
 {% if tk.by_item %}<h3>By plan item</h3>
 {{ tkm.table(tk.by_item, "Item") }}
 <p class="muted" style="font-size:12px">From the memento's <code>item</code>; a failed attempt counts toward its step's item.</p>{% endif %}

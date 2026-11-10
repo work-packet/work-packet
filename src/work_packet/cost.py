@@ -15,6 +15,7 @@ is the meta.json about to be written (``tokens``, ``model``, ``route``,
 a dict with ``usd`` and optionally ``basis`` and ``source``. Plugins are asked
 in entry-point order; the first answer wins. One that raises is skipped.
 """
+import os
 import sys
 
 from . import plugins
@@ -36,6 +37,54 @@ def priced(tokens, price):
     for key, names in _PRICED.items():
         total += sum(tokens.get(n) or 0 for n in names) * float(price.get(key, 0.0))
     return round(total / 1e6, 6)
+
+
+# --- the sessions people drive (docs/session-cost-plan.md S3) ------------------------
+
+PRICES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prices.toml")
+_builtin = []
+
+
+def price_tables(home=None):
+    """``[(glob, price)]``: config.toml's ``[prices]`` first, then the built-ins."""
+    from . import registry
+    from .tomlio import load_toml
+    if not _builtin:
+        try:
+            _builtin.append(list((load_toml(PRICES).get("prices") or {}).items()))
+        except (OSError, ValueError):
+            _builtin.append([])
+    try:
+        mine = registry.load_config_file(home).get("prices") or {}
+    except Exception:                   # noqa: BLE001  a bad config: the built-ins
+        mine = {}
+    return [(g, p) for g, p in mine.items() if isinstance(p, dict)] + _builtin[0]
+
+
+def model_price(model, home=None, tables=None):
+    """The price of ``model`` (the first glob that matches), or None."""
+    import fnmatch
+    if not model:
+        return None
+    for glob, p in tables if tables is not None else price_tables(home):
+        if fnmatch.fnmatchcase(model, glob):
+            return p
+    return None
+
+
+def session_usd(usage, price):
+    """USD for a session's ``usage`` at ``price``; None without a price. The part of
+    the cache writes made for an hour is priced at ``cache_write_1h``."""
+    if not price or not usage:
+        return None
+    one_h = usage.get("cache_creation_1h_input_tokens") or 0
+    five_m = max((usage.get("cache_creation_input_tokens") or 0) - one_h, 0)
+    w5 = float(price.get("cache_write", price.get("input", 0.0)))
+    usd = ((usage.get("input_tokens") or 0) * float(price.get("input", 0.0))
+           + (usage.get("output_tokens") or 0) * float(price.get("output", 0.0))
+           + five_m * w5 + one_h * float(price.get("cache_write_1h", w5))
+           + (usage.get("cache_read_input_tokens") or 0) * float(price.get("cache_read", 0.0)))
+    return round(usd / 1e6, 6)
 
 
 def _ask(meta, step_dir):
