@@ -165,3 +165,45 @@ def test_columns_take_drops(fake):
     for col in ("Done", "Parked", "Working: agent"):
         assert 'data-col="%s"' % col in page
     assert 'data-root="%s"' % pkt.wpid in page
+
+
+def test_codex_sessions_need_you_too(tmp_path):
+    """Codex's presence (written by the session collector) gives the same items
+    (docs/agent-state-plan.md A2)."""
+    proj = str(tmp_path)
+    presence.beat(proj, "codex-c", T, kind="codex", via="vscode", session="c", turn="waiting")
+    got = attention.session_items(proj, T + 1000)
+    assert [x["text"] for x in got] == ["Codex (VS Code) is waiting for you"]
+    assert attention.log_waits(proj, "W" * 26, T + 1000) in (0, 1)   # never raises
+
+
+def test_agents_chip(tmp_path):
+    """The card's and packet page's chip (docs/agent-state-plan.md A3): the most
+    urgent turn first, and a packet sees only its own sessions."""
+    e = {"path": str(tmp_path)}
+    assert data.agents(e, now=T) is None
+    presence.beat(e["path"], "codex-c", T, kind="codex", via="vscode", session="c",
+                  turn="working", wpid="W1")
+    got = data.agents(e, now=T + 120)
+    assert got["turn"] == "working" and got["text"] == "Codex · working"
+    assert got["title"] == "Codex (VS Code): working for 2m"
+    _claude(e["path"], "blocked", T + 60, tool="Bash", wpid="W2")
+    got = data.agents(e, now=T + 120)
+    assert got["turn"] == "blocked" and got["text"] == "2 agents · needs OK"
+    assert "Claude (VS Code): wants to run Bash for 1m" in got["title"]
+    assert data.agents(e, "W1", now=T + 120)["text"] == "Codex · working"
+    presence.end(e["path"], "codex-c", T + 130)
+    assert data.agents(e, "W1", now=T + 140) is None
+
+
+def test_the_board_and_packet_page_show_the_chip(fake, monkeypatch):
+    monkeypatch.delenv("WPK_NOW")                       # presence: wall-clock
+    e, pkt = _new("a")
+    now = time.time()
+    presence.beat(e["path"], "codex-c", now - 30, kind="codex", via="vscode", session="c",
+                  turn="working", wpid=pkt.wpid)
+    c = _client()
+    board = c.get("/b/main").text
+    assert '<span class="agent working"' in board and "Codex · working" in board
+    page = c.get("/p/a/%s" % pkt.wpid).text
+    assert '<span class="agent working"' in page and "Codex (VS Code): working for" in page

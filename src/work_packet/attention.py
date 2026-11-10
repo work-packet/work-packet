@@ -38,42 +38,43 @@ def _visible(recs):
 
 def session_items(proj, now=None, idle_escalate=IDLE_ESCALATE_S):
     """``[{"type", "since", "text", "source", "session", "tool"}]`` for ``proj``'s
-    Claude sessions, oldest first."""
+    Claude and Codex sessions, oldest first."""
     now = time.time() if now is None else now
     recs = presence.records(proj, now, ttl=None)
     if _visible(presence.live(proj, now)):
         return []
     out = []
     for r in recs:
-        if r.get("kind") != "claude":
+        if r.get("kind") not in presence.AGENTS:
             continue
         since = r.get("turn_since") or r.get("beat") or now
-        where = presence.WHERE.get(r.get("via"), "Claude")
+        name = presence.AGENTS[r["kind"]]
+        where = presence.WHERE.get(r.get("via"), name)
         base = {"since": since, "source": r.get("source"), "session": r.get("session"),
                 "tool": r.get("tool") or "", "via": r.get("via")}
         if r.get("turn") == "blocked" and now - since >= BLOCKED_AFTER_S:
-            out.append(dict(base, type="blocked", text="Claude (%s) wants to run %s" % (
-                where, r.get("tool") or "a tool")))
+            out.append(dict(base, type="blocked", text="%s (%s) wants to run %s" % (
+                name, where, r.get("tool") or "a tool")))
         elif r.get("turn") == "waiting" and now - since >= idle_escalate:
-            out.append(dict(base, type="your turn", text="Claude (%s) is waiting for you"
-                            % where))
+            out.append(dict(base, type="your turn", text="%s (%s) is waiting for you"
+                            % (name, where)))
         elif r.get("turn") == "working" and now - (r.get("beat") or now) >= STALE_S:
             out.append(dict(base, since=r.get("beat"), type="stale",
-                            text="Claude (%s) said it was working, and has been silent since"
-                            % where))
+                            text="%s (%s) said it was working, and has been silent since"
+                            % (name, where)))
     return sorted(out, key=lambda x: x["since"])
 
 
 def log_waits(proj, root, now=None, idle_escalate=IDLE_ESCALATE_S):
     """The journal's ``turn-waiting`` record (docs/collaboration.md §4.5): a Claude
-    session that has waited for you ``idle_escalate``, once per wait. Written by
+    or Codex session that has waited for you ``idle_escalate``, once per wait. Written by
     the board's loop, not by the hook. Returns how many it wrote."""
     from . import journal, layout
     now = time.time() if now is None else now
     n = 0
     for r in presence.records(proj, now, ttl=None):
         since = r.get("turn_since")
-        if r.get("kind") != "claude" or r.get("turn") != "waiting" or not since or \
+        if r.get("kind") not in presence.AGENTS or r.get("turn") != "waiting" or not since or \
                 now - since < idle_escalate or r.get("waited") == since:
             continue
         wpid = r.get("wpid") or root
@@ -84,7 +85,7 @@ def log_waits(proj, root, now=None, idle_escalate=IDLE_ESCALATE_S):
             journal.append(os.path.join(layout.run_dir(proj, wpid), "journal.jsonl"), {
                 "type": "turn-waiting", "t": ts(since + idle_escalate), "by": r.get("by"),
                 "session": r.get("session"), "since": ts(since),
-                "actor": {"kind": "claude", "via": r.get("via"), "session": r.get("session")}})
+                "actor": {"kind": r["kind"], "via": r.get("via"), "session": r.get("session")}})
         except OSError:
             continue
         presence.mark(proj, r["source"], waited=since)

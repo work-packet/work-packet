@@ -385,6 +385,13 @@ ENV_KEEP = ("WPK_IDE_LAUNCH", "WPK_IDE_KEY", "WPK_PROJECT", "WPK_WPID", "CLAUDE_
 VSCODE_MARKERS = {"claude": "claude-vscode", "codex": "vscode"}
 CLIENTS = {("claude", "claude-vscode"): "vscode-ext", ("claude", "cli"): "terminal",
            ("codex", "vscode"): "vscode-ext", ("codex", "cli"): "terminal"}
+# Harnesses whose presence the collector keeps (Claude's hooks keep Claude's,
+# and see what a transcript cannot: a permission prompt).
+PRESENCE_HARNESSES = ("codex",)
+PRESENCE_TURN = {BUSY: "working", WAITING: "waiting", FINISHED: "waiting",
+                 INTERRUPTED: "waiting"}
+CLIENT_VIA = {"vscode-ext": "vscode", "terminal": "terminal"}
+BEAT_S = 60
 ROLLOUT = re.compile(r"rollout-[^/]*\.jsonl\Z")
 PROC = "/proc"
 
@@ -735,6 +742,8 @@ class Collector:
         self.meta = {}          # (harness, sid) -> binding
         self._steps, self._steps_t = set(), None
         self._swept = None
+        self._said = {}         # (harness, sid) -> (turn, beat) last put in presence
+        self._dirs = {}         # project -> its folder (None: not registered)
 
     # -- packet and job of this launch
     def _packet(self, env):
@@ -823,7 +832,8 @@ class Collector:
             if not sid or sid in self._step_ids(now):
                 continue
             seen.add((s["harness"], sid))
-            self._store(s["harness"], sid, st, CONFIRMED, s["env"], s.get("status"), True)
+            self._store(s["harness"], sid, st, CONFIRMED, s["env"], s.get("status"), True,
+                        pid=s.get("pid"))
         if self._swept is None or now - self._swept >= self.SWEEP_S:
             self._swept = now
             self._sweep(now, seen)
@@ -839,7 +849,7 @@ class Collector:
                         None, False)
         return len(seen)
 
-    def _store(self, harness, sid, st, attribution, env, status, live):
+    def _store(self, harness, sid, st, attribution, env, status, live, pid=None):
         prev = read(self.home, harness, sid) or {}
         if prev.get("attribution") == CONFIRMED:
             attribution = CONFIRMED
@@ -851,6 +861,10 @@ class Collector:
         lids = list(prev.get("launch_ids") or [])
         if self.launch["launch_id"] not in lids:
             lids.append(self.launch["launch_id"])
+        if harness in PRESENCE_HARNESSES:
+            self._presence(harness, sid, project or prev.get("project"),
+                           wpid or prev.get("wpid"), st, live,
+                           CLIENTS.get((harness, marker), "unknown"), pid)
         write(self.home, {
             "harness": harness, "session_id": sid, "attribution": attribution,
             "project": project or prev.get("project"), "wpid": wpid or prev.get("wpid"),
@@ -867,6 +881,45 @@ class Collector:
             "edit_ts": st.get("edit_ts") or [],
             "usage_reported": bool(st.get("usage_reported"))})
         _save_cur(self.home, harness, sid, {"files": self.files.get((harness, sid)) or {}})
+
+    # -- presence for harnesses with no hooks (docs/agent-state-plan.md A1)
+    def _presence(self, harness, sid, project, wpid, st, live, client, pid=None):
+        """Keep the session's presence record from its ``turn_state``, as Claude's
+        hooks do for Claude: on a change of turn, every ``BEAT_S`` while it works,
+        and ended once when its process has gone. Never fails the pass."""
+        import socket
+        from . import presence
+        k = (harness, sid)
+        if not project or (not live and k not in self._said):
+            return
+        if project not in self._dirs:
+            from . import registry
+            try:
+                e = registry.get(project, self.home)
+            except Exception:           # noqa: BLE001: a broken entry: no presence
+                e = None
+            self._dirs[project] = e["path"] if e else None
+        proj = self._dirs[project]
+        if not proj:
+            return
+        src = "%s-%s" % (harness, sid)
+        now = self.clock()
+        try:
+            if not live:
+                if self._said.pop(k, None) is not None:
+                    presence.end(proj, src, now)
+                return
+            turn = PRESENCE_TURN.get(st.get("turn_state"), "waiting")
+            said = self._said.get(k)
+            if said and said[0] == turn and (turn != "working" or now - said[1] < BEAT_S):
+                return                  # waiting beats once, as Claude's hooks do
+            presence.beat(proj, src, now, kind=harness,
+                          via=CLIENT_VIA.get(client), session=sid, wpid=wpid,
+                          launch=self.launch.get("launch_id"), host=socket.gethostname(),
+                          pid=pid if isinstance(pid, int) else None, turn=turn, tool="")
+            self._said[k] = (turn, now)
+        except OSError:
+            pass
 
     # -- workspace matches
     def _window(self, now):
@@ -1052,6 +1105,7 @@ HARNESS_LABEL = {"claude": "Claude Code", "codex": "Codex"}
 CLIENT_LABEL = {"vscode-ext": "extension", "terminal": "terminal", "unknown": ""}
 TURN_LABEL = {WAITING: "waiting for you", BUSY: "working", FINISHED: "turn finished",
               INTERRUPTED: "interrupted"}
+TURN_KIND = {WAITING: "waiting", BUSY: "working"}
 # From the session's hooks (presence records, docs/collaboration.md §4.3): these win
 # over what the transcript says, which cannot see a permission prompt.
 PRESENCE_LABEL = {"blocked": "waiting for your permission", "waiting": "waiting for you",
@@ -1103,6 +1157,8 @@ def row(r, now):
         "activity_t": r.get("last_activity_t"),
         "activity_ago": ago(r.get("last_activity_t"), now),
         "turn": TURN_LABEL.get(r.get("turn_state"), ""),
+        # the chip's colour (docs/agent-state-plan.md): only while the session is open
+        "turn_kind": TURN_KIND.get(r.get("turn_state")) if r.get("live") else None,
         "process": proc,
         "tokens": total(u) if reported else None,
         "usage": ", ".join("%s %d" % (k.replace("_tokens", "").replace("_", " "), v)
@@ -1132,6 +1188,7 @@ def with_presence(home, rows, now=None):
         rec = turns.get(r.get("session"))
         if rec and r.get("process") != "ended":
             r["turn"] = PRESENCE_LABEL[rec["turn"]]
+            r["turn_kind"] = rec["turn"]
             if rec["turn"] == "blocked" and rec.get("tool"):
                 r["turn"] += " (%s)" % rec["tool"]
     return rows

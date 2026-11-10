@@ -66,6 +66,12 @@ a.state { text-decoration: none; } a.state:hover { filter: brightness(1.1); text
 .state.committed { background: var(--COMPLETED); } .state.failed { background: var(--FAILED); }
 .pulse { animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .45; } }
+/* Is the agent a person drives working? (docs/agent-state-plan.md) */
+.agent { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; white-space: nowrap;
+  border: 1px solid currentColor; border-radius: 8px; padding: 0 6px; line-height: 16px; }
+.agent::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.agent.working { color: var(--running); } .agent.working::before { animation: pulse 1.4s ease-in-out infinite; }
+.agent.waiting { color: var(--NEEDS_INPUT); } .agent.blocked { color: var(--FAILED); }
 details { margin: 6px 0; }
 summary { cursor: pointer; }
 .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }

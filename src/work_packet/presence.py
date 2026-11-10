@@ -171,23 +171,30 @@ def live(proj, now=None, ttl=TTL_S):
     return [r for r in recs if counts(r, recs, now)]
 
 
+# The agents a person drives whose turn presence records carry (Claude's hooks;
+# the session collector for Codex, docs/agent-state-plan.md).
+AGENTS = {"claude": "Claude", "codex": "Codex"}
 WHERE = {"ide-web": "VS Code (web)", "ide-desktop": "VS Code", "vscode": "VS Code",
          "terminal": "a terminal", "shell": "a board shell", "studio": "the studio"}
 
 
 def where(recs):
-    """Where the person is, for a card: "VS Code (web) · Claude ×2 (1 blocked)"."""
+    """Where the person is, for a card: "VS Code (web) · Claude ×2 (1 blocked) · Codex ×1"."""
     places = sorted({WHERE.get(r.get("via") or r.get("kind"), r.get("via") or "")
-                     for r in recs if r.get("kind") != "claude"} - {""})
-    cl = [r for r in recs if r.get("kind") == "claude"]
-    if cl:
-        if not places:
-            places = sorted({WHERE.get(r.get("via"), "Claude") for r in cl})
+                     for r in recs if r.get("kind") not in AGENTS} - {""})
+    if not places:
+        places = sorted({WHERE.get(r.get("via"), "") for r in recs
+                         if r.get("kind") in AGENTS} - {""})
+    for kind in AGENTS:
+        cl = [r for r in recs if r.get("kind") == kind]
+        if not cl:
+            continue
         blocked = sum(1 for r in cl if r.get("turn") == "blocked")
         waiting = sum(1 for r in cl if r.get("turn") == "waiting")
         bits = ["%d blocked" % blocked] if blocked else []
         bits += ["%d waiting" % waiting] if waiting else []
-        places.append("Claude ×%d%s" % (len(cl), " (%s)" % ", ".join(bits) if bits else ""))
+        places.append("%s ×%d%s" % (AGENTS[kind], len(cl),
+                                    " (%s)" % ", ".join(bits) if bits else ""))
     return " · ".join(places)
 
 

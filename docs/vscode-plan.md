@@ -280,6 +280,23 @@ users signed in on a network listener get neither the section nor the data.
 
 A model or usage the harness did not write shows as **unreported**.
 
+**Working or idle, at a glance** (`docs/agent-state-plan.md`):
+- While a session is open, its turn is a coloured chip in the row:
+  **working** (pulsing), **waiting for you**, or **waiting for your
+  permission** (Claude only).
+- The same chip is on the project's **board card** (always visible, also when
+  the card is folded) and in the **packet page** header: "Claude · working",
+  "Codex · your turn", "Claude · needs OK". With several sessions it reads
+  "2 agents · your turn", the most urgent state first; hover for each one.
+- **Claude**'s state comes from its hooks in the packet folder, so it is
+  immediate and sees permission prompts.
+- **Codex** has no hooks. The collector writes its state from the rollout
+  (`task_started` → working, `task_complete` → your turn). It can lag by up to
+  one poll (`sessions_poll_s`), it does not see an approval prompt, and it
+  covers only editors the board opened.
+- Codex sessions now also reach the attention list ("Codex (VS Code) is
+  waiting for you").
+
 **Last events:**
 - Prompt submitted.
 - Read requested, Shell command requested, Edit requested, Web request,

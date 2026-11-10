@@ -418,6 +418,45 @@ def present(entry, now=None):
         return []
 
 
+AGENT_RANK = {"blocked": 0, "waiting": 1, "working": 2}
+AGENT_LABEL = {"blocked": "needs OK", "waiting": "your turn", "working": "working"}
+
+
+def agents(entry, wpid=None, now=None):
+    """Whether the Claude and Codex sessions people drive here are working or idle
+    (docs/agent-state-plan.md A3): ``{"turn", "text", "title"}`` for a chip, the
+    most urgent first (blocked, waiting, working), or None with none open.
+    ``wpid``: only that packet's sessions (and those that name none)."""
+    import time
+    from .. import presence
+    now = time.time() if now is None else now
+    try:
+        recs = presence.records(entry["path"], now, ttl=None)
+    except OSError:
+        return None
+    ags = [r for r in recs if r.get("kind") in presence.AGENTS and r.get("turn") in AGENT_RANK
+           and (wpid is None or r.get("wpid") in (None, wpid))]
+    if not ags:
+        return None
+    ags.sort(key=lambda r: (AGENT_RANK[r["turn"]], r.get("turn_since") or 0))
+    top = ags[0]
+    if len(ags) == 1:
+        text = "%s · %s" % (presence.AGENTS[top["kind"]], AGENT_LABEL[top["turn"]])
+    else:
+        n = sum(1 for r in ags if r["turn"] == top["turn"])
+        text = "%d agents · %s%s" % (len(ags), "%d " % n if n > 1 else "",
+                                     AGENT_LABEL[top["turn"]])
+    lines = []
+    for r in ags:
+        what = {"blocked": "wants to run %s" % (r.get("tool") or "a tool"),
+                "waiting": "waiting for you", "working": "working"}[r["turn"]]
+        since = r.get("turn_since")
+        lines.append("%s (%s): %s%s" % (
+            presence.AGENTS[r["kind"]], presence.WHERE.get(r.get("via"), r.get("via") or "?"),
+            what, " for %s" % views.span(now - since) if since else ""))
+    return {"turn": top["turn"], "text": text, "title": "\n".join(lines)}
+
+
 def _milestones_of(entry):
     from .. import milestones
     try:
@@ -499,7 +538,7 @@ def card(entry, now=None, nodes=None):
         "css": COLUMN_CLASS[column] + (" Failed" if ball["kind"] == "failure" else ""),
         "ball": ball, "driver": views.driver(facts, lease, here), "present": here,
         "jobs": running_jobs, "job_items": job_items,
-        "sessions": sessions,
+        "sessions": sessions, "agents": agents(entry),
         # your planning fields (docs/collaboration.md §9.2)
         "plan": plan, "due": planning.due_text(plan),
         "rot": planning.rotting(plan, max((t.timestamp() for t in (last, (root or {}).get(
@@ -964,6 +1003,7 @@ def packet(entry, wpid, now=None):
         # whose move it is (docs/collaboration.md §4.1), for the Now line
         "ball": views.ball(meta or {"state": "?"}, live, here),
         "driver": views.driver(meta, live, here), "present": here,
+        "agents": agents(entry, wpid),
         "hooks": _hooks(entry) if wpid == entry.get("root") else None,
         "plan": planning.get(entry) if wpid == entry.get("root") else None,
         "actuals": _actuals(entry) if wpid == entry.get("root") else None,

@@ -107,7 +107,7 @@
     <details class="card {{ c.css }}" id="card-{{ c.name }}" draggable="true" data-project="{{ c.name }}"{% if c.root %} data-root="{{ c.root.wpid }}"{% endif %}>
     <summary>
       <div class="name"><a href="{{ href }}" title="{{ c.name }}">{{ c.name }}</a>
-        <span class="tags">{{ plm.chips(c.plan, c.due, c.at_risk, c.forecast) }}{% if c.autonomy != "handoff" %}<span class="auto" title="autonomy: {{ c.autonomy }}">{{ c.autonomy }}</span>{% endif %}{{ pz.badge(c) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</span></div>
+        <span class="tags">{% if c.agents %}<span class="agent {{ c.agents.turn }}" title="{{ c.agents.title }}">{{ c.agents.text }}</span>{% endif %}{{ plm.chips(c.plan, c.due, c.at_risk, c.forecast) }}{% if c.autonomy != "handoff" %}<span class="auto" title="autonomy: {{ c.autonomy }}">{{ c.autonomy }}</span>{% endif %}{{ pz.badge(c) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</span></div>
       {#- One line, cut to fit; the whole of it is in the body. -#}
       {% if c.running %}{% set brief = (c.running.name or c.running.short) ~ " step " ~ c.running.step ~ (", " ~ c.running.for if c.running.for else "") %}
       {% elif k == "queued" %}{% set why = waiting.get(c.root.wpid) if c.root and waiting else none %}{% set brief = "waiting on: " ~ why.why if why and why.waiting else "due now" %}

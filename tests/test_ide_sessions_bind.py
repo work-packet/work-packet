@@ -397,3 +397,35 @@ def test_the_runner_watches_only_with_web_and_sessions_on(tmp_path, monkeypatch)
         r._stopping.set()
         t.join(5)
         assert bool(calls) == want, text
+
+
+def test_codex_turns_reach_presence(world, monkeypatch):
+    """A Codex session's turn becomes its presence record, as Claude's hooks make
+    Claude's (docs/agent-state-plan.md A1): working, then waiting, then ended."""
+    from work_packet import presence, registry
+    w = world
+    proj = str(w.tmp / "proj")
+    monkeypatch.setattr(registry, "get", lambda name, h=None: {"name": name, "path": proj}
+                        if name == "p" else None)
+    srv = w.server([w.codex_child(CID)])
+    w.wait_ready(0, [CID])
+    lines = _fixture("codex_vscode.jsonl", cid=CID, cwd=w.folder)
+    done = next(i for i, ln in enumerate(lines) if "task_complete" in ln)
+    w.write(w.rollout(CID), lines[:done])
+    c = w.collector(srv)
+    c.pass_once()
+    rec = presence.records(proj, ttl=None)[0]
+    assert rec["source"] == "codex-" + CID and rec["kind"] == "codex"
+    assert rec["turn"] == "working" and rec["wpid"] == "W1" and rec["via"] == "vscode"
+    assert isinstance(rec["pid"], int)
+    w.write(w.rollout(CID), lines[done:])
+    c.pass_once()
+    rec = presence.records(proj, ttl=None)[0]
+    assert rec["turn"] == "waiting"
+    beat = rec["beat"]
+    c.pass_once()                               # waiting beats once
+    assert presence.records(proj, ttl=None)[0]["beat"] == beat
+    w.close()
+    c.pass_once()
+    assert presence.records(proj, ttl=None) == []
+    assert presence.every(proj)[0]["turn"] == "ended"

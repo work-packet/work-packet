@@ -84,6 +84,11 @@ def test_where():
     assert presence.where(recs) == "VS Code (web) · Claude ×2 (1 blocked)"
     assert presence.where([{"kind": "claude", "via": "terminal", "turn": "waiting"}]) == \
         "a terminal · Claude ×1 (1 waiting)"
+    # Codex, from the session collector (docs/agent-state-plan.md A2)
+    assert presence.where(recs + [{"kind": "codex", "via": "vscode", "turn": "waiting"}]) == \
+        "VS Code (web) · Claude ×2 (1 blocked) · Codex ×1 (1 waiting)"
+    assert presence.where([{"kind": "codex", "via": "vscode", "turn": "working"}]) == \
+        "VS Code · Codex ×1"
 
 
 def test_find_project(tmp_path):

@@ -15,7 +15,8 @@
   {% if p.running %}<span class="state running pulse">RUNNING</span>{% endif %}
   {% if p.meta.state == "NEEDS_INPUT" and p.questions and not p.running %}<a class="state NEEDS_INPUT" href="#answer" title="Answer its questions">NEEDS_INPUT</a>
   {% else %}<span class="state {{ p.meta.state }}">{{ p.meta.state or "?" }}</span>{% endif %}
-  {% if p.taken_by %}<span class="state PAUSED studio" title="taken for the studio: the runner leaves it alone">IN STUDIO</span>{% endif %}</h1>
+  {% if p.taken_by %}<span class="state PAUSED studio" title="taken for the studio: the runner leaves it alone">IN STUDIO</span>{% endif %}
+  {% if p.agents %}<span class="agent {{ p.agents.turn }}" title="{{ p.agents.title }}" style="vertical-align:middle">{{ p.agents.text }}</span>{% endif %}</h1>
 {#- Now (docs/collaboration.md §8.4): who is on it, whose move it is, how much the runner may do. -#}
 <div class="nowline row" id="now">
   <span><span class="muted">Now:</span> {{ {"runner": "the runner is on it", "you": "you have it", "you + runner": "you and the runner are both on it", "nobody": "nobody is on it"}[p.driver] }}
