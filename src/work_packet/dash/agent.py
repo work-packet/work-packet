@@ -246,9 +246,11 @@ class Agents:
                        PATH=os.path.dirname(sys.executable) + os.pathsep
                        + os.environ.get("PATH", ""))
             env.pop("CLAUDECODE", None)
+            from .. import harness, hooks
             if meta.get("mode") == "studio":
                 env.update(self._studio_env(meta))
-            from .. import hooks
+            else:       # [harnesses.claude] env and env_file, as a step and Studio get
+                env.update(harness.home_env("claude"))
             hooks.prepare_env("claude", meta.get("mode") or "console", env,
                               wpid=meta.get("wpid"), project_dir=meta.get("project_dir"),
                               cwd=meta["cwd"])

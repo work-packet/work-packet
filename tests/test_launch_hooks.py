@@ -142,3 +142,16 @@ def test_each_launch_gets_its_own_environment(site):
     assert a[VAR] == SENTINEL and VAR not in b and VAR not in os.environ
     plugins._cache[hooks.LAUNCH_GROUP] = []             # none enabled: nothing changes
     assert hooks.prepare_env("claude", "studio", b) == {"X": "2"}
+
+
+def test_console_chat_gets_the_harness_settings_too(site):
+    """Console chat applies [harnesses.claude] env_file, as a step and Studio do,
+    and then the launch hooks."""
+    from work_packet.dash.agent import Agents
+    tmp_path = site
+    ag = Agents(os.environ["WPK_HOME"])
+    meta = ag.new({"kind": "home"}, str(tmp_path), "matt")
+    ag.ask(meta["id"], "hello", "matt", "the primer")
+    ag.wait(meta["id"])
+    assert _gate(tmp_path) == ["pass"]
+    assert not STEP_CALLS and "ACME_SETTING" not in os.environ
