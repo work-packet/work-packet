@@ -1,6 +1,6 @@
 # Desktop: GUI tools on the farm node, in a browser tab, started on demand
 
-Status: **Desktop 1 built and checked live on a9550 (2026-11-07)**; scope in §0,
+Status: **Desktop 1 built and checked live on the dev host (2026-11-07)**; scope in §0,
 progress and what's left in §9. Not committed.
 Proposal written 2026-11-06. Roadmap: the "GUI apps on
 the node" gap in `roadmap-v2.md` §5 (M3-M4). Why: `positioning/competitive-position.md`
@@ -36,7 +36,7 @@ added behind the same `/desk/` route later without changing the transport.
 
 ### Desktop 1: what this round builds
 
-Built from the spike (§9, X0) on a9550, which has TigerVNC 1.13.1, xfce4 and
+Built from the spike (§9, X0) on the dev host, which has TigerVNC 1.13.1, xfce4 and
 `xfwm4`, but not fvwm.
 
 - **Both kinds of IDE server get a display:** the board's own local VS Code
@@ -95,7 +95,7 @@ a program or a viewer needs it.
 | D2 | Same job as the IDE, or its own? | **Same job** by default: same node, file system view, modules, licences and environment as the editor and sims. `[desktop] job = "separate"` is a later option for a different queue or more memory. |
 | D3 | Always on, or on demand? | **On demand**, through a `DISPLAY` proxy (§4). The X server starts on the first X client or the first viewer, and stops after it has been idle. |
 | D4 | Transport | Xvnc serves VNC on a **unix socket** in the job's private directory (`-rfbunixpath`), behind xproxy's own viewer socket `<priv>/vnc` (§0). The relay gains a route for the TLS server name `vnc.wpk`; a local board server is reached on the socket directly. wpkd converts the browser's WebSocket to the raw stream. No TCP port, no websockify on the node, no VNC password: mTLS and the board login do the authenticating. |
-| D5 | Window manager | **`auto`: fvwm, else xfwm4, else none** (revised 2026-11-07: a9550 has xfwm4 but no fvwm). fvwm and xfwm4 start in well under a second. **xfce optional** (`[desktop] wm = "xfce"`) for people who want a full desktop. `none` is allowed, but windows can't then be moved. |
+| D5 | Window manager | **`auto`: fvwm, else xfwm4, else none** (revised 2026-11-07: the dev host has xfwm4 but no fvwm). fvwm and xfwm4 start in well under a second. **xfce optional** (`[desktop] wm = "xfce"`) for people who want a full desktop. `none` is allowed, but windows can't then be moved. |
 | D6 | Viewer | **noVNC**, bundled in `dash/vendor/novnc/` like xterm and codemirror. |
 | D7 | Who gets `DISPLAY`? | **Every terminal and process in the IDE job, always**, once `[desktop] enabled`. That includes Claude and Codex sessions started in VS Code. Starting the server on demand keeps this cheap. Runner steps stay opt-in (`[desktop] steps`). (Decided 2026-11-06.) |
 | D8 | How do tools behave correctly with a display present? | **A `[desktop.env]` table** set wherever `DISPLAY` is set. It is part of the normal config layers, so a **site** sets it in `/etc/wpk/config.toml` and can lock keys (`sites.md` §3). wpk ships safe defaults (§5.3). (Decided 2026-11-06.) |
@@ -364,14 +364,14 @@ Keep this table up to date as steps land.
 
 | Step | What | State |
 |---|---|---|
-| X0 | Spike on a9550 (2026-11-07): Xvnc 1.13.1 with `-displayfd`, `-rfbunixpath` (0600), `-rfbport -1` and `-SecurityTypes None` is ready in 0.06 s; the MIT cookie is enforced; Xvnc binds the abstract socket too; xfwm4 runs standalone. **The `-rfbunixpath` limit is about 100 bytes** (a long scratch path failed): use `ide_job.local_dir`. Not yet tried on the LSF farm; fvwm isn't installed on a9550 | done (a9550) |
+| X0 | Spike on the dev host (2026-11-07): Xvnc 1.13.1 with `-displayfd`, `-rfbunixpath` (0600), `-rfbport -1` and `-SecurityTypes None` is ready in 0.06 s; the MIT cookie is enforced; Xvnc binds the abstract socket too; xfwm4 runs standalone. **The `-rfbunixpath` limit is about 100 bytes** (a long scratch path failed): use `ide_job.local_dir`. Not yet tried on the LSF farm; fvwm isn't installed on the dev host | done (the dev host) |
 | X1 | `sched/xproxy.py`: wraps the server; allocates `:N` from 20 (lock plus file and abstract sockets); Xvnc on a hidden `:M` started by the first X client **or viewer** (`<priv>/vnc`); byte splice; idle stop and restart; `SO_PEERCRED` check; one MIT cookie in a job-private `XAUTHORITY` (FamilyWild records, written directly; no `xauth` needed); `desktop.json`, `desktop.env.json`; runs the server without a display if Xvnc is missing. Tests use `tests/fake_xvnc.py`, plus one real-Xvnc test that skips where it isn't installed | done |
 | X2 | Relay route `vnc.wpk` → the `vnc` path in `desktop.json` (`features`: `vnc-sni`); wpkd `/desk/<key>/` (noVNC page, `desk.js`), `/desk/<key>/state`, `/desk/<key>/ws` (CSRF token in `?t=`, Origin by the guard; a viewer counts as an IDE client); owner only in the guard; noVNC 1.7.0 vendored (`novnc`, es2022) | done |
 | X3 | Wiring: the board's local `Backend` and `mtls` job argv run the server under xproxy when `[desktop] enabled` (read at each start); `[desktop]` schema and validation; `[desktop.env]` = wpk defaults < site < user (site locks work through the existing layering); `unset`; `wpk desktop`; doctor checks (`Xvnc` with `-rfbunixpath`, WM, noVNC built) and `Xvnc` in `wpk sched doctor`'s node probe. **Left:** board and packet layers of `[desktop.env]`, `env_file`, doctor listing each key's source | done (Desktop 1) |
-| X4 | WM: `auto` = fvwm (small generated config: click to focus, root menu with a terminal) else xfwm4 (`--compositor=off --sm-client-disable`) else none; `xfce` under `dbus-run-session`. **Left:** fvwm menu from `[desktop.apps]`; xfce locker and session saving off; fvwm untested (not on a9550) | partial |
+| X4 | WM: `auto` = fvwm (small generated config: click to focus, root menu with a terminal) else xfwm4 (`--compositor=off --sm-client-disable`) else none; `xfce` under `dbus-run-session`. **Left:** fvwm menu from `[desktop.apps]`; xfce locker and session saving off; fvwm untested (not on the dev host) | partial |
 | X5 | Apps and waveforms. **Done (2026-11-07):** `[desktop.apps]` (`name = "cmd"` or `{cmd, label}`; a default `terminal` = xterm; `""` removes one), the tab's **Apps** menu (only programs found on the server's host, from xproxy's `launchers`), `POST /desk/<key>/run` → a request file in `desktop.run/` → xproxy starts it with `sh -c` in the server's environment and the project's folder. The tab is titled by the project and packet of the last open (`demo · 3cc062ac — Desktop`) and links back to the packet. **Left:** `{file}` and file matching, waveform buttons on the packet page and Timeline | partial |
 | X6 | Noticing windows: `ide_desk.js` in the workbench (a Desktop link above the status bar, and a toast when a new app opens a window with no viewer); `apps` from the client's `comm`. **Left:** card notify, `gui-client` journal records, reaping warning, a Desktop link on the board's packet page (needs the card → server key without `ide.resolve`) | partial |
-| X7 | Docs: `ide.md` §7.1 and `sites.md` §3b done. Live check on a9550 (2026-11-07): a scratch board on :7891 with `serve-web` under xproxy; an xterm with the server's environment appears in headless Chrome's `/desk/` tab (xfwm4, resized to the tab); stopping the board leaves no processes, locks or sockets. **Left:** an `mtls` job on the SLURM pilot (p5810 has no Xvnc or WM yet); the LSF farm with Verdi | partial |
+| X7 | Docs: `ide.md` §7.1 and `sites.md` §3b done. Live check on the dev host (2026-11-07): a scratch board on :7891 with `serve-web` under xproxy; an xterm with the server's environment appears in headless Chrome's `/desk/` tab (xfwm4, resized to the tab); stopping the board leaves no processes, locks or sockets. **Left:** an `mtls` job on the SLURM pilot (p5810 has no Xvnc or WM yet); the LSF farm with Verdi | partial |
 
 ## 10. Open questions
 
