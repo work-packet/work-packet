@@ -236,7 +236,11 @@ Claude Code hooks**:
   - `Notification` (`permission_prompt`) → turn `blocked`. It is a backstop
     that arrives about 6 s later.
   - `Notification` (`idle_prompt`) → turn `waiting`, marked as confirmed idle.
-  - `Stop` → turn `waiting`, with `turn_since`.
+  - `Stop` → turn `waiting`, with `turn_since`. If its `background_tasks` still
+    has some running (background sub-agents or shells), the turn stays `working`
+    and the record's `background` says how many ("2 background agents"). Claude
+    takes a turn of its own when they finish, and that turn's `Stop` sets
+    `waiting`. Until then `idle_prompt` doesn't set `waiting` either.
   - `PreCompact`, `SessionEnd` → checkpoint prompt or scribe (§6.7); `ended`.
 - In `ide_sessions.py`, a session that is *interactive* (it has an entrypoint
   marker or a hook record) treats `end_turn` as **waiting**, not finished.

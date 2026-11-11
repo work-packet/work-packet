@@ -429,3 +429,55 @@ def test_codex_turns_reach_presence(world, monkeypatch):
     c.pass_once()
     assert presence.records(proj, ttl=None) == []
     assert presence.every(proj)[0]["turn"] == "ended"
+
+
+def test_codex_sub_agents_keep_it_working(world, monkeypatch):
+    """A Codex sub-agent writes a rollout of its own, which is part of its root's
+    session: its tokens count there, and while it is mid-turn after the root's
+    turn has ended the session is still working, not waiting for you (Codex does
+    not wake the root when it finishes, so then it is your move)."""
+    from work_packet import presence, registry
+    w = world
+    proj = str(w.tmp / "proj")
+    monkeypatch.setattr(registry, "get", lambda name, h=None: {"name": name, "path": proj}
+                        if name == "p" else None)
+    kid = "019a4f2e-1c2d-7e3f-8a9b-0c1d2e3f4a99"
+    srv = w.server([w.codex_child(CID), w.codex_child(kid)])
+    w.wait_ready(0, [CID, kid])
+    w.write(w.rollout(CID), _fixture("codex_vscode.jsonl", cid=CID, cwd=w.folder))
+
+    def ev(t, typ, **payload):
+        return json.dumps({"timestamp": "2026-11-04T11:00:%02d.000Z" % t, "type": typ,
+                           "payload": payload})
+    spawn = {"subagent": {"thread_spawn": {"parent_thread_id": CID, "depth": 1,
+                                           "agent_nickname": "SENTINEL-NICK"}}}
+    w.write(w.rollout(kid), [
+        ev(13, "session_meta", id=kid, session_id=CID, cwd=w.folder, originator="codex_vscode",
+           source=spawn),
+        ev(14, "event_msg", type="task_started"),
+        ev(15, "response_item", type="function_call", name="shell", arguments="{}"),
+        ev(16, "event_msg", type="token_count", info={"total_token_usage": {
+            "input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10,
+            "reasoning_output_tokens": 0, "total_tokens": 110}})])
+    now = s.epoch("2026-11-04T11:01:00Z")
+    c = s.Collector(w.home, w.launch(), root=srv.pid, env=w.env, clock=lambda: now)
+    c.pass_once()
+    recs = presence.records(proj, now, ttl=None)
+    assert [r["source"] for r in recs] == ["codex-" + CID]       # one session, not two
+    assert recs[0]["turn"] == "working" and recs[0]["background"] == "1 background agent"
+    store = s.read(w.home, "codex", CID)
+    assert store["turn_state"] == s.BUSY and store["client"] == "vscode-ext"
+    assert store["usage"]["input_tokens"] == 500 + 100             # uncached, both threads
+    assert s.read(w.home, "codex", kid) is None
+    w.write(w.rollout(kid), [ev(17, "event_msg", type="exec_approval_request")])
+    c.pass_once()
+    assert presence.records(proj, now, ttl=None)[0]["turn"] == "waiting"     # it asks you
+    w.write(w.rollout(kid), [ev(18, "response_item", type="function_call", name="shell",
+                                arguments="{}")])
+    c.pass_once()
+    assert presence.records(proj, now, ttl=None)[0]["turn"] == "working"
+    w.write(w.rollout(kid), [ev(20, "event_msg", type="task_complete")])
+    c.pass_once()
+    rec = presence.records(proj, now, ttl=None)[0]
+    assert rec["turn"] == "waiting" and rec["background"] == ""
+    assert "SENTINEL" not in open(presence.path(proj, "codex-" + CID)).read()

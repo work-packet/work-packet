@@ -450,6 +450,8 @@ def agents(entry, wpid=None, now=None):
     for r in ags:
         what = {"blocked": "wants to run %s" % (r.get("tool") or "a tool"),
                 "waiting": "waiting for you", "working": "working"}[r["turn"]]
+        if r["turn"] == "working" and r.get("background"):
+            what += " (%s)" % r["background"]
         since = r.get("turn_since")
         lines.append("%s (%s): %s%s" % (
             presence.AGENTS[r["kind"]], presence.WHERE.get(r.get("via"), r.get("via") or "?"),

@@ -28,6 +28,11 @@ fresh session can pick up from here alone.
   editors the board opened): it reads Claude transcripts and Codex rollouts and
   keeps a `turn_state` (`working`, `waiting`, `finished`, `interrupted`). Codex
   `task_started` maps to working and `task_complete` to waiting (a person drives it).
+  A sub-agent's rollout (`session_meta.source.subagent.thread_spawn`) is part of its
+  root's session: its tokens count there. While one is mid-turn after the root's
+  turn has ended, the session stays working (`background`: "1 background agent").
+  Codex doesn't wake the root when a sub-agent finishes, so after that it is your
+  move. A sub-agent asking for approval makes it waiting.
 - **Where it shows:**
   - The VS Code sessions table (packet, project and Overview pages) shows the turn
     as a small grey line under "Last event". It's easy to miss.

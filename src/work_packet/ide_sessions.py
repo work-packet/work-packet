@@ -175,6 +175,8 @@ def new_state(harness):
             "counts": {}, "last_work_t": None, "edit_ts": [],
             # harness-specific; not shown
             "entrypoint": None, "source": None, "cwd": None, "_folded": {}, "_recent": [],
+            # a Codex sub-agent's own thread id: its file is part of its root's session
+            "child": None,
             "_usage_src": None,
             # when the tokens were spent (docs/session-cost-plan.md S1):
             # {hour: {model: usage}}, summing to ``usage``
@@ -302,6 +304,20 @@ def _codex_set_usage(st, u, src, t=None):
     st["usage"], st["usage_reported"], st["_usage_src"] = u, True, src
 
 
+def codex_root(meta):
+    """The session a sub-agent's rollout belongs to (None: not a spawned
+    sub-agent): its ``session_meta`` names the root thread's ``session_id``, which
+    the whole tree shares; older ones name only their parent."""
+    src = meta.get("source")
+    sub = src.get("subagent") if isinstance(src, dict) else None
+    spawn = sub.get("thread_spawn") if isinstance(sub, dict) else None
+    if not isinstance(spawn, dict):
+        return None
+    own = meta.get("id")
+    root = meta.get("session_id")
+    return _ok(SESSION, root if root and root != own else spawn.get("parent_thread_id"))
+
+
 def codex_feed(st, d):
     """One record of a Codex rollout."""
     if not isinstance(d, dict):
@@ -311,8 +327,11 @@ def codex_feed(st, d):
     t = epoch(d.get("timestamp"))
     _touch(st, t)
     if kind == "session_meta":
-        st["session_id"] = st["session_id"] or _ok(SESSION, p.get("id") or p.get("session_id"))
         src = p.get("source")
+        root = codex_root(p)
+        if root and not st["session_id"]:
+            st["session_id"], st["child"] = root, _ok(SESSION, p.get("id"))
+        st["session_id"] = st["session_id"] or _ok(SESSION, p.get("id") or p.get("session_id"))
         st["source"] = _ok(ENTRYPOINT, src) if isinstance(src, str) else (
             "subagent" if isinstance(src, dict) else None)
         st["entrypoint"] = _ok(ENTRYPOINT, p.get("originator"))
@@ -430,6 +449,7 @@ PRESENCE_TURN = {BUSY: "working", WAITING: "waiting", FINISHED: "waiting",
                  INTERRUPTED: "waiting"}
 CLIENT_VIA = {"vscode-ext": "vscode", "terminal": "terminal"}
 BEAT_S = 60
+CHILD_SILENT_S = 3600       # a sub-agent mid-turn but silent this long no longer counts
 ROLLOUT = re.compile(r"rollout-[^/]*\.jsonl\Z")
 PROC = "/proc"
 
@@ -844,11 +864,27 @@ class Collector:
         return sid, self._combined(k)
 
     def _combined(self, k):
-        """One session over its files (a resumed Codex thread may start a new one):
-        the latest file's model and event, the usage summed over the files."""
+        """One session over its files (a resumed Codex thread may start a new one,
+        and each sub-agent writes its own): the latest main file's model and event,
+        the usage summed over all of them. Its turn: the main thread's, except
+        that a sub-agent asking you makes it yours, and one mid-turn while the
+        main thread's has ended keeps it working (``background``)."""
         sts = sorted((f["st"] for f in self.files[k].values()),
                      key=lambda s: s.get("last_activity_t") or 0)
-        out = dict(sts[-1])
+        mains = [s for s in sts if not s.get("child")] or sts
+        out = dict(mains[-1])
+        out["last_activity_t"] = sts[-1].get("last_activity_t")
+        out["background"] = ""
+        kids = [s for s in sts if s.get("child")]
+        now = self.clock()
+        if any(s.get("last_event") == ASK for s in kids):
+            out["turn_state"] = WAITING
+        elif out.get("turn_state") != BUSY:
+            n = sum(1 for s in kids if s.get("turn_state") == BUSY and
+                    now - (s.get("last_activity_t") or 0) < CHILD_SILENT_S)
+            if n:
+                out["turn_state"] = BUSY
+                out["background"] = "%d background agent%s" % (n, "s" if n > 1 else "")
         usage = {}
         for s in sts:
             for kk, v in (s.get("usage") or {}).items():
@@ -956,14 +992,16 @@ class Collector:
                     presence.end(proj, src, now)
                 return
             turn = PRESENCE_TURN.get(st.get("turn_state"), "waiting")
+            bg = st.get("background") or ""
             said = self._said.get(k)
-            if said and said[0] == turn and (turn != "working" or now - said[1] < BEAT_S):
+            if said and said[0] == (turn, bg) and (turn != "working" or now - said[1] < BEAT_S):
                 return                  # waiting beats once, as Claude's hooks do
             presence.beat(proj, src, now, kind=harness,
                           via=CLIENT_VIA.get(client), session=sid, wpid=wpid,
                           launch=self.launch.get("launch_id"), host=socket.gethostname(),
-                          pid=pid if isinstance(pid, int) else None, turn=turn, tool="")
-            self._said[k] = (turn, now)
+                          pid=pid if isinstance(pid, int) else None, turn=turn, tool="",
+                          background=bg)
+            self._said[k] = ((turn, bg), now)
         except OSError:
             pass
 
@@ -1266,6 +1304,8 @@ def with_presence(home, rows, now=None):
             r["turn_kind"] = rec["turn"]
             if rec["turn"] == "blocked" and rec.get("tool"):
                 r["turn"] += " (%s)" % rec["tool"]
+            elif rec["turn"] == "working" and rec.get("background"):
+                r["turn"] += " (%s)" % rec["background"]
     return rows
 
 

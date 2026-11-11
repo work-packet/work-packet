@@ -75,6 +75,39 @@ def test_a_session_from_start_to_end(pkt):
     assert check(proj).issues == []
 
 
+def test_background_agents_are_not_your_turn(pkt):
+    """A turn that ends with subagents still running (Claude's Stop names them in
+    ``background_tasks``) is still work: not "waiting for you", even when the
+    prompt has been idle a minute. The turn it takes when they finish ends in a
+    Stop with none left, and then it waits for you."""
+    folder, proj, _ = pkt
+    fire("SessionStart", folder)
+    fire("UserPromptSubmit", folder)
+    d = payload("Stop", folder)
+    d["background_tasks"] = [
+        {"id": "a1", "type": "subagent", "status": "running", "agent_type": "general-purpose",
+         "description": "SENTINEL-TASK do not store"},
+        {"id": "a2", "type": "subagent", "status": "running"},
+        {"id": "a3", "type": "subagent", "status": "completed"}]
+    env = {"CLAUDE_CODE_ENTRYPOINT": "claude-vscode"}
+    assert hookcmd.main(["Stop"], io.StringIO(json.dumps(d)), env) == 0
+    r = _rec(proj)
+    assert r["turn"] == "working" and r["background"] == "2 background agents"
+    assert "SENTINEL" not in open(presence.path(proj, "claude-" + SID)).read()
+    fire("PreToolUse", folder, event="PostToolUse")          # a subagent's tool
+    fire("Notification-idle_prompt", folder)
+    r = _rec(proj)
+    assert r["turn"] == "working" and not r.get("idle_since")
+    fire("Stop", folder)                                      # none left
+    r = _rec(proj)
+    assert r["turn"] == "waiting" and r["background"] == ""
+    fire("Notification-idle_prompt", folder)
+    assert _rec(proj)["turn"] == "waiting" and _rec(proj).get("idle_since")
+    assert hookcmd.background([{"type": "shell", "status": "running"},
+                               {"type": "subagent", "status": "running"}]) \
+        == "2 background tasks"
+
+
 def test_nothing_said_reaches_a_file(pkt, tmp_path):
     folder, proj, root = pkt
     for name in sorted(os.listdir(DATA)):

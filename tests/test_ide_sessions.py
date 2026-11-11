@@ -194,3 +194,16 @@ def test_a_scripted_session_finishes_one_driven_by_a_person_waits():
              "message": {"id": "m1", "model": "claude-sonnet-5", "stop_reason": "end_turn",
                          "content": [{"type": "text", "text": "done"}]}}])
         assert st["turn_state"] == want, ep
+
+
+def test_codex_sub_agent_rollout_joins_its_root():
+    root, kid = "r" * 12, "k" * 12
+    spawn = {"subagent": {"thread_spawn": {"parent_thread_id": "p" * 12}}}
+    assert s.codex_root({"id": kid, "session_id": root, "source": spawn}) == root
+    assert s.codex_root({"id": kid, "session_id": kid, "source": spawn}) == "p" * 12
+    assert s.codex_root({"id": kid, "source": spawn}) == "p" * 12
+    assert s.codex_root({"id": root, "session_id": root, "source": "vscode"}) is None
+    assert s.codex_root({"id": kid, "source": {"subagent": "review"}}) is None
+    st = _feed("codex", [{"type": "session_meta", "payload": {
+        "id": kid, "session_id": root, "source": spawn}}])
+    assert st["session_id"] == root and st["child"] == kid

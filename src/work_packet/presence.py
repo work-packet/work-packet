@@ -26,7 +26,7 @@ TURNS = ("working", "waiting", "blocked", "ended")
 # What a record may hold: identifiers, times and states; no prompt or reply text.
 FIELDS = ("source", "kind", "via", "host", "pid", "session", "launch", "wpid", "by",
           "since", "beat", "active", "turn", "turn_since", "tool", "attached", "visible",
-          "idle_since", "transcript", "waited")
+          "idle_since", "transcript", "waited", "background")
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
 
 

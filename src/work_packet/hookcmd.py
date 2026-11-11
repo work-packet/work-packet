@@ -101,6 +101,18 @@ def via(env):
     return VIA.get(ep, ep or "unknown")
 
 
+def background(tasks):
+    """What Claude still runs in the background (the ``background_tasks`` of a
+    Stop: subagents, shells), as the record's ``background``: "2 background agents";
+    "" when nothing runs. Its turn has ended, but it is not your move yet: it
+    takes a turn of its own when they finish."""
+    run = [t for t in tasks if isinstance(t, dict) and t.get("status") == "running"]
+    if not run:
+        return ""
+    what = "agent" if all(t.get("type") == "subagent" for t in run) else "task"
+    return "%d background %s%s" % (len(run), what, "s" if len(run) > 1 else "")
+
+
 def handle(event, ev, env, now=None):
     """Apply one hook event (``ev``: its JSON, already cut to ``KEEP``). Returns
     ``(presence record or None, text for the session or "")``: the briefing at
@@ -189,10 +201,14 @@ def _apply(event, ev, env, now=None):
         if kind == "permission_prompt":
             return presence.beat(proj, src, now, turn="blocked", **base)
         if kind == "idle_prompt":
+            if (presence.get(proj, src) or {}).get("background"):
+                return presence.beat(proj, src, now, **base)    # still its work
             return presence.beat(proj, src, now, turn="waiting", idle_since=now, **base)
         return presence.beat(proj, src, now, **base)
     if event == "Stop":
-        return presence.beat(proj, src, now, turn="waiting", tool="", **base)
+        bg = ev.get("background") or ""
+        return presence.beat(proj, src, now, turn="working" if bg else "waiting", tool="",
+                             background=bg, **base)
     return presence.beat(proj, src, now, **base)       # PreCompact: still here
 
 
@@ -213,6 +229,8 @@ def main(argv=None, stdin=None, env=None):
             return 0
         ev = {k: got[k] for k in KEEP if isinstance(got, dict) and isinstance(
             got.get(k), (str, int))}
+        if isinstance(got, dict) and isinstance(got.get("background_tasks"), list):
+            ev["background"] = background(got["background_tasks"])
         _, say = handle(event, ev, env)
         if say:
             from .briefing import hook_output
