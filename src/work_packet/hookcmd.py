@@ -125,8 +125,57 @@ def handle(event, ev, env, now=None):
     if event == "SessionStart":
         if ev.get("source") == "compact":
             return rec, compact_nudge(proj, wpid, rec)  # it keeps the briefing in the summary
-        return rec, briefing.briefing(proj, wpid)
+        return rec, "\n\n".join(x for x in (briefing.briefing(proj, wpid),
+                                             others_note(proj, rec, now)) if x)
     return rec, briefing.new_notes(proj, wpid, ev.get("session_id"), now)
+
+
+def others(proj, rec, now=None, alive=None):
+    """The other Claude sessions live on this packet: on this host, those whose
+    process is alive; elsewhere, those that beat in the last ``presence.TTL_S``."""
+    now = time.time() if now is None else now
+    alive = alive or presence._alive
+    out = []
+    for r in presence.records(proj, now, ttl=None):
+        if r.get("kind") != "claude" or r.get("session") == rec.get("session") or \
+                r.get("wpid") != rec.get("wpid"):
+            continue
+        pid = r.get("pid")
+        if r.get("host") == rec.get("host") and isinstance(pid, int):
+            if pid == rec.get("pid") or not alive(pid):     # itself before a /clear; gone
+                continue
+        elif now - (r.get("beat") or 0) > presence.TTL_S:
+            continue
+        out.append(r)
+    return out
+
+
+def others_note(proj, rec, now=None, alive=None):
+    """For the session at SessionStart: who else works on this packet now, so
+    two sessions don't edit and run over each other unawares
+    (docs/ide-split-desk-plan.md); "" when nobody."""
+    got = others(proj, rec, now, alive)
+    if not got:
+        return ""
+    lines = []
+    for r in got:
+        where = presence.WHERE.get(r.get("via"), r.get("via") or "somewhere")
+        bits = ["pid %s" % r["pid"] if r.get("pid") else None,
+                "on %s" % r["host"] if r.get("host") else None,
+                "in %s" % where,
+                "started %s" % time.strftime("%H:%M", time.localtime(r["since"]))
+                if r.get("since") else None,
+                "now %s" % r["turn"] if r.get("turn") else None]
+        line = "- session %s: %s" % ((r.get("session") or "?")[:8],
+                                     ", ".join(b for b in bits if b))
+        if r.get("launch") and r.get("launch") == rec.get("launch"):
+            line += (" (same VS Code launch as you: it may be in an editor window "
+                     "no browser tab shows)")
+        lines.append(line)
+    return ("Another Claude session is live on this work packet:\n" + "\n".join(lines) +
+            "\nTell the user before you edit files or start runs, and ask whether that "
+            "session is theirs and meant to be running, so you two don't work over each "
+            "other.")
 
 
 NUDGE = ("The conversation was just compacted, and nobody has recorded a checkpoint "

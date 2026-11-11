@@ -938,11 +938,15 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         vsc = await run_in_threadpool(ide_sessions.packet_view, home or registry.home(),
                                       e["name"], request.path_params["wpid"]) \
             if is_owner(request) else None
+        from .. import ide_stranded
+        strand = await run_in_threadpool(ide_stranded.for_packet, home or registry.home(),
+                                         request.path_params["wpid"]) \
+            if is_owner(request) else None
         auto = request.query_params.get("open")    # just made: open it (collaboration.md W1)
         rl = await run_in_threadpool(data.review_load, home) \
             if p["meta"].get("state") in ("PAUSED", "FAILED", "COMPLETED", "NEEDS_INPUT") else None
         return render(request, "packet.html", e=e, p=p, live=True, classes=CLASSES, dfm=dfm,
-                      convs=convs, docs_built=built, vsc=vsc, rl=rl,
+                      convs=convs, docs_built=built, vsc=vsc, rl=rl, strand=strand,
                       autoopen=auto if auto in ("ide-web", "ide-desktop", "studio") else None,
                       sch=dsched.packet_info(snap, e, request.path_params["wpid"]),
                       tk=tokens.packet(e, request.path_params["wpid"]))
@@ -1029,6 +1033,20 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             out = executor.Outcome(executor.USAGE if bad else executor.OK,
                                    "; ".join(bad) if bad else "Claude Code hooks: %s" % (
                                        ", ".join(sorted(set(got.values()))) or "nothing to do"))
+        elif op == "end-stranded" and is_owner(request):   # docs/ide-split-desk-plan.md
+            from .. import ide_stranded
+            key = one("key")
+            try:
+                pid = int(one("pid"))
+            except ValueError:
+                pid = 0
+            ok = any(s["pid"] == pid and s["key"] == key for s in await run_in_threadpool(
+                ide_stranded.for_packet, home or registry.home(), wpid))
+            if ok:
+                await run_in_threadpool(ide_stranded.end_server, key, pid)
+            out = executor.Outcome(executor.OK if ok else executor.USAGE,
+                                   "ended the stranded VS Code server %d" % pid if ok else
+                                   "%d is not a stranded VS Code server of this packet" % pid)
         elif op == "autonomy":                      # §4.4
             out = await run_in_threadpool(executor.mark, pkt, op, by, None,
                                           one("autonomy"), one("review") or None)

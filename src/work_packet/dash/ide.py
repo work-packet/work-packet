@@ -26,7 +26,7 @@ import socket
 import subprocess
 import time
 
-from .. import ide_launch, ide_ports, registry
+from .. import ide_launch, ide_ports, ide_stranded, registry
 
 log = logging.getLogger("wpk.dash")
 
@@ -55,6 +55,12 @@ COOKIE_ROOT = re.compile(r"(;\s*path=)/(?=\s*(;|$))", re.I)
 # one (403 "Request Forbidden"): it takes the host from a path that still starts
 # with "/", so the host is "" and never matches the gallery's. The proxy fetches
 # them itself, from the hosts the stock product.json files name.
+# A path segment naming the VS Code release a request is for. serve-web sends a
+# request without one to the newest release it knows of, so after an update a
+# page load, or an open tab's reconnect, starts a second server for the desk
+# and strands the first, with its terminals (docs/ide-split-desk-plan.md).
+RELEASE = re.compile(r"(?:stable|insider|exploration)-[0-9a-f]{40}\Z")
+PAGE_RELEASE = re.compile(rb"/((?:stable|insider|exploration)-[0-9a-f]{40})/static/")
 EXT_RESOURCE = re.compile(r"/ide/[0-9a-f]{12}/(?:[^/]+/)?web-extension-resource/([^/]+)/(.+)\Z")
 EXT_HOSTS = re.compile(r"([a-z0-9-]+\.vscode-unpkg\.net|open-vsx\.org)\Z")
 EXT_REQUEST_HEADERS = ("x-client-name", "x-client-version", "x-machine-id", "x-client-commit")
@@ -155,6 +161,8 @@ class Backend:
         self._http = None
         self._fwd_http = None
         self.forwarded = float("-inf")      # when a forwarded page was last used
+        self._pin = None            # (launch id, release) once read; None: read it
+        self.stranded = []          # servers of this desk no tab reaches (ide_stranded)
 
     # -- the process ---------------------------------------------------------
 
@@ -189,6 +197,7 @@ class Backend:
                          self.key, self.proc)
             else:
                 await asyncio.get_running_loop().run_in_executor(None, self._start)
+            self._pin = None            # a new launch: pinned to no release yet
             end = self._clock() + START_S
             while not self._connectable():
                 if not self.running():
@@ -299,12 +308,18 @@ class Backend:
         if isinstance(p, int) and not _alive(pid) or not isinstance(p, int) and \
                 p.poll() is not None:
             return
+        # The agents in its terminals are in sessions of their own, out of the
+        # group: found now, while their servers still are, ended after it.
+        left = ide_stranded.targets([s["pid"] for s in ide_stranded.servers(self.key)]) \
+            if self.pins() else []
         with contextlib.suppress(ProcessLookupError):
             os.killpg(pid, signal.SIGTERM)
         if not _wait(p, STOP_S):
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(pid, signal.SIGKILL)
             _wait(p, STOP_S)
+        if left:
+            ide_stranded.end(left)
         with contextlib.suppress(OSError):
             os.unlink(self.pid_path)
         cur = ide_launch.current(self.home, self.key)
@@ -363,8 +378,61 @@ class Backend:
         limit = 60.0 * float(self.cfg.get("idle_minutes") or 60)
         while self.proc is not None:
             await asyncio.sleep(min(30.0, limit / 4))
+            if self.pins():
+                await asyncio.get_running_loop().run_in_executor(None, self.check_split)
             if self.clients == 0 and self._clock() - self.last > limit:
                 await asyncio.get_running_loop().run_in_executor(None, self._stop_now)
+
+    # -- the release (docs/ide-split-desk-plan.md) ----------------------------
+
+    def pins(self):
+        """serve-web, run here: it picks a server by release, and ours are local."""
+        return (self.cfg.get("backend") or "serve-web") == "serve-web" and \
+            not isinstance(self, JobBackend)
+
+    def release(self):
+        """The release this launch serves (``stable-<commit>``), or None."""
+        if self._pin is None:
+            cur = ide_launch.current(self.home, self.key) or {}
+            self._pin = (cur.get("launch_id"), cur.get("release"))
+        return self._pin[1]
+
+    def pin(self, release):
+        """The first release a launch is seen to serve is the one it keeps."""
+        if not release or self.release() is not None or not self._pin[0]:
+            return
+        self._pin = (self._pin[0], release)
+        ide_launch.update(self.home, self.key, self._pin[0], release=release)
+        log.info("VS Code's server %s serves %s", self.key, release)
+
+    def route(self, path):
+        """``path`` as it goes to the server: under this launch's release when it
+        names none, so no client can start another server for the desk."""
+        if not self.pins():
+            return path
+        rest = path[len(self.base):]
+        seg = rest.lstrip("/").split("/", 1)[0]
+        if RELEASE.match(seg):
+            self.pin(seg)
+            return path
+        rel = self.release()
+        if rel is None or seg.startswith(("_vscode-cli", "__wpk")):
+            return path
+        return "%s/%s%s" % (self.base, rel, rest or "/")
+
+    def check_split(self):
+        """Look for servers of this desk no tab reaches (``self.stranded``)."""
+        try:
+            got = ide_stranded.stranded(self.key, self.release())
+        except OSError:
+            return
+        new = {s["pid"] for s in got} - {s["pid"] for s in self.stranded}
+        for s in got:
+            if s["pid"] in new:
+                log.warning("VS Code's server %s: server %d (%s) is stranded, with %d "
+                            "agent session(s) in it", self.key, s["pid"], s["commit"][:7],
+                            len(s["agents"]))
+        self.stranded = got
 
     # -- proxying ------------------------------------------------------------
 
@@ -1015,7 +1083,8 @@ async def proxy_http(backends, request):
     except IdeUnavailable as e:
         return PlainTextResponse("503 %s\n" % e, status_code=503)
     backend.last = backend._clock()
-    url = backend.url(request.url.path + ("?" + request.url.query if request.url.query else ""))
+    url = backend.url(backend.route(request.url.path) +
+                      ("?" + request.url.query if request.url.query else ""))
     hc = backend.client()
     req = hc.build_request(request.method, url, headers=backend.headers(request.headers),
                            content=request.stream())
@@ -1037,7 +1106,11 @@ async def proxy_http(backends, request):
     desk = page and backend.desk_state() is not None
     if r.headers.get("content-type", "").startswith("text/html") and (
             trust_off or shim or beacon or desk):
-        body = rewrite_workbench(await r.aread(), trust_off, shim, beacon, desk)
+        body = await r.aread()
+        if page and backend.pins():
+            m = PAGE_RELEASE.search(body)
+            backend.pin(m and m.group(1).decode())
+        body = rewrite_workbench(body, trust_off, shim, beacon, desk)
         await r.aclose()
         resp = Response(body, status_code=r.status_code)
         # aread() decoded the body: it goes out as it is now
@@ -1093,7 +1166,8 @@ async def proxy_ws(backends, websocket):
     except IdeUnavailable as e:
         log.warning("web VS Code: %s", e)
         return await websocket.close(1011)
-    path = websocket.url.path + ("?" + websocket.url.query if websocket.url.query else "")
+    path = backend.route(websocket.url.path) + \
+        ("?" + websocket.url.query if websocket.url.query else "")
     host = websocket.headers.get("host") or "localhost"
     hdrs = [(k, v) for k, v in upstream_headers(websocket.headers)
             if k.lower() in ("cookie", "origin", "user-agent", "accept-language")]

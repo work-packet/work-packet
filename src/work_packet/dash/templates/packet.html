@@ -114,6 +114,15 @@
 </form>
 {{ vsm.hooks_switch(hooks_on, "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid, csrf) }}
 {% endif %}
+{% for s in strand or [] %}
+<form class="act panel row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:12px">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="key" value="{{ s.key }}"><input type="hidden" name="pid" value="{{ s.pid }}">
+  <span title="VS Code updated, and the browser moved to a new server for this editor. The old one still runs its terminals, and nothing can reach them (docs/ide-split-desk-plan.md)"><strong>Stranded VS Code server</strong> {{ s.pid }} ({{ s.commit[:7] }}) still runs
+  {% if s.agents %}{{ s.agents|length }} agent session{{ "s" if s.agents|length > 1 }} no tab shows: {% for a in s.agents %}<code>{{ a.pid }} {{ a.argv }}</code>{{ ", " if not loop.last }}{% endfor %}{% else %}with no agent sessions in it{% endif %}.</span>
+  <button class="mini" name="action" value="end-stranded">End it</button>
+</form>
+{% endfor %}
 {% if vsc and (vsc[0] or vsc[1]) %}
 <h2 id="vscode-sessions">VS Code sessions</h2>
 {% if vsc[0] %}{{ vsm.table(vsc[0]) }}{% endif %}

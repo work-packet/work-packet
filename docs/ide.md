@@ -178,6 +178,14 @@ every request before forwarding it. The proxy must refuse to start
 - Its stdout and stderr go to `$WPK_HOME/ide/serve.log`.
 - `code` not on `PATH`, or too old for `serve-web`: the button is hidden
   and `wpk doctor` says why.
+- A launch keeps the VS Code release it first served. The proxy prefixes
+  every request that names no release with that launch's `stable-<commit>`.
+  Without this, serve-web sends a page load, or an open tab's reconnect,
+  after a VS Code update to a new server and strands the old one with its
+  terminals. A newer VS Code arrives with the next launch, after the desk
+  stops. Servers stranded anyway are flagged on the packet's page. When a
+  desk stops, the agents in its servers' terminals are ended with it.
+  See [ide-split-desk-plan.md](ide-split-desk-plan.md).
 
 ## 5. Ownership: who may edit
 
