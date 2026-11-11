@@ -15,8 +15,6 @@ back to a plain account of the facts when there is no model or it fails.
 
 import json
 import os
-import shlex
-import subprocess
 import time
 
 from .. import checkpoint, harness, model, registry, schema
@@ -106,23 +104,9 @@ def draft_summary(entry, wpid, session, home=None, now=None):
               "%s; changed %s; deleted %s.\n\nThe conversation (its start):\n\n%s\n" % (
                   ", ".join(f["created"]) or "none", ", ".join(f["modified"]) or "none",
                   ", ".join(f["deleted"]) or "none", text))
-    from ..dash import agent as agentmod
-    exe = shlex.split(os.environ.get("WPK_CLAUDE") or "claude")
-    argv = exe + ["-p", "--output-format", "json", "--model",
-                  agentmod.config(home)["model"], "--tools", "", "--strict-mcp-config",
-                  "--setting-sources", "", "--disable-slash-commands",
-                  "--max-budget-usd", "0.05"]
-    env = dict(os.environ)
-    env.pop("CLAUDECODE", None)
-    from .. import hooks
-    hooks.prepare_env("claude", "model-call", env, wpid=wpid, project_dir=entry.get("path"))
-    try:
-        p = subprocess.run(argv, input=prompt, capture_output=True, text=True,
-                           timeout=DRAFT_TIMEOUT_S, env=env)
-        out = json.loads(p.stdout.strip().splitlines()[-1]) if p.stdout.strip() else {}
-        got = (out.get("result") or "").strip() if isinstance(out, dict) else ""
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
-        got = ""
+    from .. import scribe
+    got, _, _ = scribe.call_model(prompt, home, budget=0.05, timeout=DRAFT_TIMEOUT_S,
+                                  wpid=wpid, project_dir=entry.get("path"))
     if not got:
         return plain, "facts"
     return got, "model"

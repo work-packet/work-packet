@@ -25,6 +25,10 @@ setInterval(function(){var d=document.getElementById("brief-writing");if(!d)retu
   fetch(location.href,{cache:"no-store"}).then(function(r){return r.text();}).then(function(h){
     if(h.indexOf('id="brief-writing"')<0)location.reload();}).catch(function(){});},1000);})();</script>
 {% endif %}
+{% if b and b.agent_error and not b.agent and not writing %}<div class="panel" style="padding:6px 10px;margin:8px 0;border-left:3px solid var(--FAILED)">
+  <strong>The model's brief failed</strong>: {{ b.agent_error }}
+  <p class="muted" style="margin:4px 0 0">Below is the scored brief. The model is run as <code>claude -p</code> with <code>[harnesses.claude] env</code> and <code>env_file</code> and the launch hooks; check those, then Rebuild.</p>
+</div>{% endif %}
 {% if rows %}{% set a = b.agent %}
 <div class="md panel briefrows">
 <h1 style="margin-top:0">{{ day }} · Focus</h1>

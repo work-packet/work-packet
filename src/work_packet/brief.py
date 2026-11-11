@@ -261,8 +261,15 @@ def build_soon(home, now=None):
         global _writing
         try:
             build(home, now)
-        except Exception:               # noqa: BLE001
+        except Exception as e:          # noqa: BLE001: the scored one stands, saying why
             log.exception("focus brief by the model failed")
+            try:
+                b = load(home, datetime.fromtimestamp(now or time.time()).date().isoformat())
+                if b and not b.get("agent"):
+                    b["agent_error"] = "%s: %s" % (type(e).__name__, e)
+                    _save(home, b)
+            except Exception:           # noqa: BLE001
+                log.exception("could not note the failure in the brief")
         finally:
             _writing = None
             _building.release()

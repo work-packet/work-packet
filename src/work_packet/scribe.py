@@ -176,6 +176,14 @@ def tail(harness, paths, max_chars=TAIL_CHARS):
 def ask_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S, model=None):
     """One model call with no tools (``model``, else the console's): ``(text, cost)``;
     ``("", 0.0)`` when it fails."""
+    text, cost, _ = call_model(prompt, home, budget, timeout, model)
+    return text, cost
+
+
+def call_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S, model=None, **facts):
+    """``ask_model`` that also says why it failed: ``(text, cost, error or None)``.
+    The child gets ``[harnesses.claude] env`` and ``env_file``, as a step does, then
+    the launch hooks (``facts``: ``wpid``, ``project_dir``)."""
     from .dash import agent as agentmod
     exe = shlex.split(os.environ.get("WPK_CLAUDE") or "claude")
     argv = exe + ["-p", "--output-format", "json", "--model",
@@ -186,17 +194,29 @@ def ask_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S, model=Non
     env.pop("CLAUDECODE", None)
     for k in ("WPK_WPID", "WPK_PROJECT", "WPK_IDE_LAUNCH"):     # not one of the packet's sessions
         env.pop(k, None)
-    from . import hooks
-    hooks.prepare_env("claude", "model-call", env)
+    from . import harness, hooks
+    env.update(harness.home_env("claude", home=home))
+    hooks.prepare_env("claude", "model-call", env, **facts)
     try:
         p = subprocess.run(argv, input=prompt, capture_output=True, text=True,
                            timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        return "", 0.0, "claude did not answer in %d s" % timeout
+    except (OSError, subprocess.SubprocessError) as e:
+        return "", 0.0, "claude could not start (%s)" % e
+    try:
         out = json.loads(p.stdout.strip().splitlines()[-1]) if p.stdout.strip() else {}
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
-        return "", 0.0
+    except (ValueError, IndexError):
+        out = None
     if not isinstance(out, dict):
-        return "", 0.0
-    return (out.get("result") or "").strip(), float(out.get("total_cost_usd") or 0.0)
+        out = {}
+    text = (out.get("result") or "").strip()
+    cost = float(out.get("total_cost_usd") or 0.0)
+    if p.returncode or out.get("is_error") or not text:
+        why = text if out.get("is_error") and text else (
+            p.stderr.strip().splitlines() or p.stdout.strip().splitlines() or [""])[-1]
+        return "", cost, "claude exited %d%s" % (p.returncode, ": " + why[:300] if why else "")
+    return text, cost, None
 
 
 def parse(text):

@@ -352,9 +352,9 @@ def gather(home, since, now, cards=None, cfg=None, claude_dir=None):
 # --- the model -------------------------------------------------------------------------
 
 def ask(prompt, home=None, model=MODEL, budget=BUDGET_USD, timeout=TIMEOUT_S):
-    """One model call with no tools: ``(text, cost)``; ``("", 0.0)`` when it fails."""
+    """One model call with no tools: ``(text, cost, error or None)``."""
     from . import scribe
-    return scribe.ask_model(prompt, home, budget=budget, timeout=timeout, model=model)
+    return scribe.call_model(prompt, home, budget=budget, timeout=timeout, model=model)
 
 
 def parse(text):
@@ -449,9 +449,10 @@ def write(home, bundle, cfg=None, ask_fn=None):
     with open(PROMPTS) as fp:
         prompt = fp.read() + json.dumps(bundle, indent=1, default=str) + "\n"
     fn = ask_fn or ask
-    text, cost = fn(prompt, home=home, model=cfg["model"], budget=cfg["budget_usd"])
+    got = fn(prompt, home=home, model=cfg["model"], budget=cfg["budget_usd"])
+    text, cost = got[:2]
     if not text:
-        return None, cost, "the model did not answer"
+        return None, cost, (got[2] if len(got) > 2 else None) or "the model did not answer"
     d = parse(text)
     if d is None:
         return None, cost, "the model's answer was not JSON"
