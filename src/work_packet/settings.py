@@ -18,6 +18,7 @@ from .tomlio import tomllib
 
 # (table, key, type, default, label). The Settings page shows these, in order.
 KEYS = [
+    ("ide", "desktop", bool, False, "Offer \"Open in VS Code\" on the desktop (vscode:// links)"),
     ("ide", "presence_ttl", int, 600, "Presence lasts (seconds without a beat)"),
     ("ide", "idle_escalate", int, 900, "\"Your turn\" needs you after (seconds)"),
     ("focus", "time", str, "08:30", "Daily brief at (HH:MM)"),

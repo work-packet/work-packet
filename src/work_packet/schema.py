@@ -83,7 +83,7 @@ SERVER_DEFAULTS = {                   # server.md §6
     "session_days": 30,                # auth = "unix": how long a sign-in lasts
 }
 IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
-    "desktop": True,                   # vscode:// buttons
+    "desktop": False,                  # vscode:// buttons (opt in)
     "web": False,                      # VS Code under the board's /ide/
     "backend": "serve-web",
     "code": "",                        # empty: `code` (serve-web) or `openvscode-server`

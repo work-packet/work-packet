@@ -229,6 +229,9 @@ def _board_client(kind, ts=None):
     from test_server import SECRET, _client
     from work_packet.dash.app import create_app
     from work_packet.dash.guard import csrf_token
+    cfg = os.path.join(os.environ["WPK_HOME"], "config.toml")
+    if not os.path.exists(cfg):         # desktop buttons are opt-in
+        open(cfg, "w").write("[ide]\ndesktop = true\n")
     host = "127.0.0.1:7878" if kind == "loopback" else "myhost:7878"
     peer = "127.0.0.1" if kind == "loopback" else "192.0.2.9"
     c = _client(create_app(), kind, ts, peer=peer, host=host)
@@ -294,6 +297,21 @@ def test_board_without_desktop_buttons(home, source, tmp_path):
     open(os.path.join(home, "config.toml"), "w").write("[ide]\ndesktop = false\n")
     c, origin, tok = _board_client("loopback")
     assert "on your desktop\">Desktop</button>" not in c.get("/p/dvs").text
+
+
+def test_desktop_off_keeps_the_browser_buttons(short_home, source, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    proj, pkt = setup_root(tmp_path, source)
+    c, be, origin, tok = _web_client(short_home, tmp_path)
+    try:
+        with open(os.path.join(short_home, "config.toml"), "a") as fp:
+            fp.write("desktop = false\n")
+        for page in ("/p/dvs", "/p/dvs/" + pkt.wpid):
+            t = c.get(page).text
+            assert 'value="desktop"' not in t and 'name="go" value="web"' in t, page
+    finally:
+        be.stop()
+        c.__exit__(None, None, None)
 
 
 # --- web VS Code (V3) ----------------------------------------------------------------

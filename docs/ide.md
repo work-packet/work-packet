@@ -235,7 +235,7 @@ In `$WPK_HOME/config.toml`:
 
 ```toml
 [ide]
-desktop       = true          # show "Open in VS Code" (vscode:// link)
+desktop       = false         # true: show "Open in VS Code" (vscode:// link)
 web           = false         # serve VS Code under /ide/ (opt in)
 ssh_host      = ""            # empty = this node's MagicDNS name
 code          = "code"        # VS Code CLI used for serve-web

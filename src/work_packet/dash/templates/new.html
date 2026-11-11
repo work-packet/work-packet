@@ -32,11 +32,11 @@
   {#- How do you want to start? (docs/collaboration.md W1): no choice is the default. -#}
   <h3 style="margin:12px 0 4px">How do you want to start?</h3>
   <div class="row startrow" style="margin-top:4px">
-    <span class="row" style="gap:4px;margin:0">
+    {% if ide.desktop or ide_web == "ok" %}<span class="row" style="gap:4px;margin:0">
       <button class="go" name="start" value="ide" title="Make it, then open it in VS Code: you work on it, the runner waits">Open in VS Code</button>
-      {% if ide_web == "ok" %}<select name="ide" id="start-ide" aria-label="which VS Code" style="font:inherit;padding:3px">
+      {% if ide_web == "ok" and ide.desktop %}<select name="ide" id="start-ide" aria-label="which VS Code" style="font:inherit;padding:3px">
         <option value="web">in the browser</option><option value="desktop">desktop</option></select>
-      {% else %}<input type="hidden" name="ide" value="desktop">{% endif %}</span>
+      {% else %}<input type="hidden" name="ide" value="{{ 'desktop' if ide.desktop else 'web' }}">{% endif %}</span>{% endif %}
     <button class="go" name="start" value="studio" title="Make it, then work on it live with an agent in the studio">Open studio</button>
     <button class="go" name="start" value="handoff" title="Make it and hand the objective to the runner now">Hand to runner</button>
     <button class="go" name="start" value="none" title="Make it and go to its page; nothing starts">Just make it</button>

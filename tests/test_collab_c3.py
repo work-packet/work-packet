@@ -33,9 +33,15 @@ def test_new_offers_ways_to_start(fake):
     page = c.get("/new").text
     assert "For the runner: harness and model" in page          # tucked away
     r = c.post("/new", data={"name": "pv", "action": "preview"})
-    for want in ('value="ide"', 'value="studio"', 'value="handoff"', 'value="none"'):
+    for want in ('value="studio"', 'value="handoff"', 'value="none"'):
         assert want in r.text, want
+    assert 'value="ide"' not in r.text                             # no VS Code set up
     assert "Hand it to the runner at once" not in r.text
+    os.makedirs(registry.home(), exist_ok=True)
+    with open(os.path.join(registry.home(), "config.toml"), "w") as fp:
+        fp.write("[ide]\ndesktop = true\n")
+    r = c.post("/new", data={"name": "pv", "action": "preview"})
+    assert 'value="ide"' in r.text and 'name="ide" value="desktop"' in r.text
 
 
 @pytest.mark.parametrize("start,how,action", [
