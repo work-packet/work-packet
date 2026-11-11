@@ -61,8 +61,9 @@ class CloneStarter(Starter):
     help = "Clone a repo as the packet folder: a path, a URL, or one picked on a forge."
     fields = (
         Field("clone", "Repo", "repo", required=True,
-              placeholder="path, URL, or search the forges",
-              help="Type to search the configured forges, or paste a URL or path."),
+              placeholder="path, URL, @name, or search the forges",
+              help="Type to search the configured forges, or paste a URL or path; "
+                   "@name is a repo from the settings ([[repo]], `wpk repos`)."),
         Field("ref", "Check out", placeholder="the default branch",
               help="A branch, tag or commit to start from."),
         Field("branch", "New branch", placeholder="none",
@@ -70,18 +71,48 @@ class CloneStarter(Starter):
     )
 
     def search(self, key, query, values, h=None):
-        return _repo_choices(query, h) if key == "clone" else []
+        if key != "clone":
+            return []
+        from .. import registry
+        q = query.strip().lower().lstrip("@")
+        mine = [{"value": "@" + x["name"], "label": "@" + x["name"],
+                 "detail": "%s · %s" % (x["scope"], x["url"])}
+                for x in registry.repos(values.get("board"), h)
+                if not q or q in x["name"] or any(q in a.lower() for a in x.get("aliases") or ())]
+        return mine + _repo_choices(query, h)
 
     def recipe(self, values, h=None):
-        url, ref = _resolve_repo(values["clone"], h)
+        text = values["clone"]
+        entry = None
+        if text.startswith("@"):            # a repo named in the settings (agent-dispatch.md §4)
+            from .. import registry
+            entry = registry.repo(text[1:], values.get("board"), h)
+            if entry is None:
+                names = [x["name"] for x in registry.repos(values.get("board"), h)]
+                raise StartError("Repo: no [[repo]] named %s%s" % (
+                    text[1:], "; there are: " + ", ".join(names) if names
+                    else " (add one to config.toml or the board's .toml)"))
+            text = entry["url"]
+        url, ref = _resolve_repo(text, h)
         r = self.base(values)
-        r.setdefault("name", _base_name(url))
+        r.setdefault("name", (entry or {}).get("name") or _base_name(url))
         r["clone"] = {"url": url}
         for k in ("ref", "branch"):
             if values.get(k):
                 r["clone"][k] = values[k]
+        if entry is not None:
+            if entry.get("ref"):
+                r["clone"].setdefault("ref", entry["ref"])
+            if entry.get("tool"):
+                r["clone"]["tool"] = entry["tool"]
+            if entry.get("share"):
+                r["clone"]["share"] = list(entry["share"])
+            if entry.get("branch_prefix") and "branch" not in r["clone"]:
+                r["clone"]["branch"] = entry["branch_prefix"] + r["name"]
         if ref:
             r["origin"] = {"kind": "repo", "forge": ref[0], "repo": ref[1]}
+        if entry is not None:
+            r.setdefault("origin", {"kind": "repo"})["registry"] = entry["name"]
         return r
 
 

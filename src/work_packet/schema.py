@@ -237,6 +237,8 @@ JOURNAL_TYPES = {
     "job-start": ("job", "cmd", "by"),
     "job-end": ("job", "exit"),
     "split": ("to", "by"),
+    "deliver": ("by", "do", "ok"),          # docs/agent-dispatch.md §5.4
+    "dispatched": ("by", "made"),           # §5.2
 }
 DECISION_FIELDS = ("state", "resume_expr", "wake_at", "reason", "model",
                    "summary", "spawn")
@@ -1102,14 +1104,16 @@ def validate_config(d):
     out = _unknown(d, tuple(CONFIG_DEFAULTS) + ("profiles", "server", "ide", "sched", "forge",
                                                 "console", "harnesses", "plugins", "site",
                                                 "studio", "plan", "focus", "notify", "calendar",
-                                                "desktop", "prices")) \
+                                                "desktop", "prices", "packets", "repo",
+                                                "skills", "dispatch")) \
         + _validate_calendar(d) + _validate_limits(d) + _validate_profiles(d) \
         + _validate_server(d) + _validate_ide(d) \
         + _validate_plan(d) + _validate_focus(d) + _validate_notify(d) \
         + _validate_console(d) + _validate_studio(d) + _validate_desktop(d) \
         + _validate_forges(d.get("forge")) \
         + _validate_harness(d) \
-        + _validate_plugins(d) + _validate_site(d) + _validate_prices(d)
+        + _validate_plugins(d) + _validate_site(d) + _validate_prices(d) \
+        + _validate_dispatch(d) + validate_repos(d.get("repo"))
     v = d.get("max_step_budget_usd", 1)
     if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0):
         out.append(_err("max_step_budget_usd", "must be a number > 0"))
@@ -1117,6 +1121,79 @@ def validate_config(d):
         out.append(_err("clone_tool", "must be ivpm or git"))
     if "sched" in d:
         out += validate_sched(d["sched"])
+    return out
+
+
+PACKET_LAYOUTS = ("board", "flat")
+DISPATCH_DEFAULTS = {"max_batch": 8, "steps": False}
+
+
+def _validate_dispatch(d):
+    """``[packets]``, ``[skills]`` and ``[dispatch]`` (docs/agent-dispatch.md)."""
+    out = []
+    p = d.get("packets")
+    if p is not None:
+        if not isinstance(p, dict):
+            out.append(_err("packets", "must be a table"))
+        else:
+            out += _unknown(p, ("root", "layout"), "packets")
+            if "root" in p and not (isinstance(p["root"], str)):
+                out.append(_err("packets.root", "must be a directory"))
+            if p.get("layout", "board") not in PACKET_LAYOUTS:
+                out.append(_err("packets.layout", "board (<root>/<board>/<name>) or flat "
+                                "(<root>/<name>)"))
+    sk = d.get("skills")
+    if sk is not None:
+        if not isinstance(sk, dict):
+            out.append(_err("skills", "must be a table"))
+        else:
+            out += _unknown(sk, ("install",), "skills")
+            if not isinstance(sk.get("install", True), bool):
+                out.append(_err("skills.install", "must be true or false"))
+    ds = d.get("dispatch")
+    if ds is not None:
+        if not isinstance(ds, dict):
+            out.append(_err("dispatch", "must be a table"))
+        else:
+            out += _unknown(ds, tuple(DISPATCH_DEFAULTS), "dispatch")
+            if not (is_int(ds.get("max_batch", 8)) and ds.get("max_batch", 8) >= 1):
+                out.append(_err("dispatch.max_batch", "must be a whole number >= 1"))
+            if not isinstance(ds.get("steps", False), bool):
+                out.append(_err("dispatch.steps", "must be true or false"))
+    return out
+
+
+REPO_KEYS = ("name", "url", "aliases", "upstream", "ref", "branch_prefix", "tool", "share",
+             "notes")
+
+
+def validate_repos(lst, where="repo"):
+    """``[[repo]]``: repos the agent may name (docs/agent-dispatch.md §4.1), in
+    config.toml and a board's .toml."""
+    if lst is None:
+        return []
+    if not (isinstance(lst, list) and all(isinstance(e, dict) for e in lst)):
+        return [_err(where, "must be a list of [[repo]] tables")]
+    out, seen = [], set()
+    for i, r in enumerate(lst):
+        k = "%s[%d]" % (where, i)
+        out += _unknown(r, REPO_KEYS, k)
+        if not is_name(r.get("name")):
+            out.append(_err(k + ".name", "required; must match [a-z0-9][a-z0-9_-]*"))
+        elif r["name"] in seen:
+            out.append(_err(k + ".name", "%s is named twice" % r["name"]))
+        seen.add(r.get("name"))
+        if not (isinstance(r.get("url"), str) and r["url"]):
+            out.append(_err(k + ".url", "required; what to clone"))
+        for x in ("upstream", "ref", "branch_prefix", "notes"):
+            if x in r and not isinstance(r[x], str):
+                out.append(_err(k + "." + x, "must be a string"))
+        for x in ("aliases", "share"):
+            if x in r and not (isinstance(r[x], list) and all(isinstance(y, str) and y
+                                                               for y in r[x])):
+                out.append(_err(k + "." + x, "must be a list of strings"))
+        if r.get("tool", "ivpm") not in ("ivpm", "git"):
+            out.append(_err(k + ".tool", "ivpm or git"))
     return out
 
 
@@ -1237,7 +1314,7 @@ def validate_project(d):
              "step_timeout", "max_attempts", "step_budget_usd", "step_context_tokens",
              "carry_session", "carry_ttl", "carry_factor", "permissions", "setup",
              "budget_usd_per_day", "budget_quota_per_week", "max_steps_per_hour",
-             "origin", "pr", "docs") + PROJECT_SCHED_KEYS
+             "origin", "pr", "docs", "deliver", "delivered") + PROJECT_SCHED_KEYS
     out = _unknown(d, known) + _validate_setup(d.get("setup")) + _validate_project_sched(d)
     if "origin" in d and not (isinstance(d["origin"], dict) and all(
             isinstance(v, (str, int)) for v in d["origin"].values())):
@@ -1245,6 +1322,20 @@ def validate_project(d):
     if "pr" in d and not (isinstance(d["pr"], dict) and all(
             isinstance(v, (str, int)) for v in d["pr"].values())):
         out.append(_err("pr", "must be a table of strings and numbers (docs/starters-v1.md)"))
+    if "delivered" in d and not (isinstance(d["delivered"], dict) and all(
+            isinstance(v, (str, int)) for v in d["delivered"].values())):
+        out.append(_err("delivered", "must be a table of strings and numbers"))
+    dl = d.get("deliver")
+    if dl is not None:                  # docs/agent-dispatch.md §5.4
+        if not isinstance(dl, dict):
+            out.append(_err("deliver", "must be a table"))
+        else:
+            out += _unknown(dl, ("do", "gate", "base"), "deliver")
+            if dl.get("do") not in ("push", "draft-pr", "pr"):
+                out.append(_err("deliver.do", "push, draft-pr or pr"))
+            for k in ("gate", "base"):
+                if k in dl and not (isinstance(dl[k], str) and dl[k].strip()):
+                    out.append(_err("deliver." + k, "must be a non-empty string"))
     out += _validate_docs(d.get("docs"))
     if not is_name(d.get("name")):
         out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
@@ -1333,7 +1424,7 @@ def validate_registry_entry(d, stem=None):
 
 def validate_board(d, stem=None):
     """``boards/<name>.toml`` (docs/boards.md)."""
-    out = _unknown(d, ("name", "created", "title", "watch"))    # watch: validate_watches
+    out = _unknown(d, ("name", "created", "title", "watch", "dir", "repo"))   # watch: validate_watches
     if not is_name(d.get("name")):
         out.append(_err("name", "required; must match [a-z0-9][a-z0-9_-]*"))
     elif stem is not None and d["name"] != stem:
@@ -1342,7 +1433,9 @@ def validate_board(d, stem=None):
         out.append(_err("created", "required; must be a UTC timestamp"))
     if "title" in d and not isinstance(d["title"], str):
         out.append(_err("title", "must be a string"))
-    return out
+    if "dir" in d and not (isinstance(d["dir"], str) and d["dir"]):
+        out.append(_err("dir", "must be a directory: where this board's packets go"))
+    return out + validate_repos(d.get("repo"))
 
 
 WATCH_KEYS = ("name", "repos", "dir", "labels", "query", "every", "hold", "from", "model",
@@ -1371,8 +1464,9 @@ def validate_watches(lst):
                                                    for x in r)):
             out.append(_err(k + ".repos", "required; a list of forge:owner/repo or "
                             "forge:owner/* (all the owner's repos)"))
-        if not isinstance(w.get("dir"), str) or not w["dir"]:
-            out.append(_err(k + ".dir", "required; where the packet folders go"))
+        if "dir" in w and (not isinstance(w["dir"], str) or not w["dir"]):
+            out.append(_err(k + ".dir", "where the packet folders go (leave it out for the "
+                            "board's packet directory)"))
         for x in ("labels", "branches", "workflows"):
             if x in w and not (isinstance(w[x], list) and all(isinstance(y, str) and y
                                                                for y in w[x])):

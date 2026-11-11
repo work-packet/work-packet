@@ -1836,8 +1836,24 @@ def model_choices(h=None):
 _ORIGIN = {}
 
 
+def _dispatcher(by):
+    """``[origin] by`` = ``packet:<wpid>``: {name, wpid} of that packet's project."""
+    if not (isinstance(by, str) and by.startswith("packet:")):
+        return None
+    wpid = by.split(":", 1)[1]
+    try:
+        hits = registry.find_packets(wpid)
+    except Exception:                       # noqa: BLE001
+        hits = []
+    if len(hits) != 1:
+        return {"name": wpid[:8], "wpid": wpid, "project": None}
+    return {"name": hits[0][0]["name"], "wpid": wpid, "project": hits[0][0]["name"]}
+
+
 def origin(entry):
     """Where a packet came from (``project.toml [origin]``, docs/starters-v1.md):
+    also who made it (``by``: {name, wpid} of the dispatching packet), its batch,
+    and its delivery (``deliver``: deliver.badge).
     {label, url, forge (it can be handed off as a pull request), pr ([pr]: url,
     number)}, or None."""
     path = os.path.join(entry["path"], "project.toml")
@@ -1859,10 +1875,17 @@ def origin(entry):
         if o.get("kind") == "issue":
             label = "%s#%s %s" % (o.get("repo", ""), o.get("number", ""), o.get("title", ""))
         else:
-            label = o.get("title") or o.get("repo") or o.get("url") or o.get("kind", "")
+            label = o.get("title") or o.get("repo") or ("@" + o["registry"] if o.get(
+                "registry") else "") or o.get("url") or o.get("kind", "")
         out = {"label": label.strip(), "url": o.get("url") or "",
                "forge": bool(o.get("forge") and o.get("repo")),
-               "pr": pr if isinstance(pr, dict) and pr.get("url") else None}
+               "pr": pr if isinstance(pr, dict) and pr.get("url") else None,
+               "by": _dispatcher(o.get("by")), "batch": o.get("batch") or ""}
+    from .. import deliver                    # docs/agent-dispatch.md §5.4
+    b = deliver.badge(entry)
+    if b is not None:
+        out = dict(out or {"label": "", "url": "", "forge": False, "pr": None, "by": None,
+                           "batch": ""}, deliver=b)
     _ORIGIN[path] = (mt, out)
     return out
 
@@ -1884,7 +1907,7 @@ def watchers(h, board):
                     "on": w.get("on", "issues"), "branches": w.get("branches") or [],
                     "workflows": w.get("workflows") or [],
                     "every": w.get("every", "15m"), "enabled": w.get("enabled", True),
-                    "hold": w.get("hold", True), "dir": w["dir"],
+                    "hold": w.get("hold", True), "dir": w.get("dir") or "",
                     "propose": w.get("propose", False), "pr": w.get("pr", "off"),
                     "polled": _ago(s.get("polled")), "made": sorted(s["seen"].items()),
                     "failed": sorted(s["failed"].items()), "errors": s.get("errors") or []})

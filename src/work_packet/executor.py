@@ -752,6 +752,33 @@ def step_dirs(pkt):
     return add_dirs + [d for d in workspace.linked_dirs(pkt) if d not in add_dirs]
 
 
+def _wider_notes(proj):
+    """The step's notes from beyond the project (docs/agent-dispatch.md §4.2):
+    its board's, yours, and its delivery, general to specific."""
+    from . import registry
+    from .tomlio import load_toml
+    out = []
+    try:
+        e = next((x for x in registry.entries() if os.path.realpath(x["path"])
+                  == os.path.realpath(proj)), None)
+        board = registry.board_of(e) if e else None
+        out.append(("Your notes", registry.notes(None)))
+        if board:
+            out.append(("Board notes (%s)" % board, registry.notes(board)))
+        d = load_toml(os.path.join(proj, "project.toml")).get("deliver") or {}
+    except Exception:                   # noqa: BLE001  notes never stop a step
+        return out
+    if d.get("do"):
+        out.append(("Delivery", "When this packet completes, wpk %s%s. Commit your work on "
+                    "the branch checked out now; do not push, and do not switch branches."
+                    % ({"push": "pushes this branch to origin",
+                        "draft-pr": "pushes this branch and opens a draft pull request",
+                        "pr": "pushes this branch and opens a pull request"}.get(d["do"],
+                                                                                 d["do"]),
+                       " once `%s` passes" % d["gate"] if d.get("gate") else "")))
+    return out
+
+
 def _run(pkt, st, meta, body, n, a, lease, now, prof):
     tz = clock.zone(st.tz)
     limit = profiles.value(st, prof, "step_context_tokens")
@@ -788,7 +815,8 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
                         state_dir=pkt.state_dir,
                         handoffs=handoffs,
                         last_attempt=_last_attempt(pkt, n), notes=queued,
-                        sizes=_size_list(st), requests=_requests_section(pkt))
+                        sizes=_size_list(st), requests=_requests_section(pkt),
+                        wider_notes=_wider_notes(st.project_dir))
     fsutil.atomic_write(os.path.join(sd, "prompt.md"), text)
     # 7. step-start, then 5. snapshot (so the journal line is part of it).
     run_no = pkt.next_run(n)     # not the attempt: that restarts at 1 on a resume

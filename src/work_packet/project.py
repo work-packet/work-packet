@@ -272,7 +272,20 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
     if packet:
         from . import livecard
         livecard.update_project(entry, h)       # the card, from the start
+    install_skills(h)
     return plan
+
+
+def install_skills(h=None):
+    """The ``wpk-*`` skills, for sessions in any packet (docs/agent-dispatch.md,
+    decision 3): on by default, off with ``[skills] install = false``."""
+    from . import skills
+    try:
+        on = (registry.load_config_file(h).get("skills") or {}).get("install", True)
+    except registry.ConfigError:
+        on = True
+    if on:
+        skills.install()
 
 
 def adopt(path, h=None):

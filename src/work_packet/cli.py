@@ -33,6 +33,12 @@ def _outcome(out) -> int:
     return out.code
 
 
+def _poke():
+    """wpkd looks for due packets now, not at its next poll (agent-dispatch.md P0.2)."""
+    from .sched import home_lease
+    return home_lease.poke()
+
+
 class Terminated(BaseException):
     """SIGTERM: the scheduler cancelled this step (Stop now, a farm limit)."""
 
@@ -147,10 +153,11 @@ def cmd_new(args) -> int:
 
 
 def cmd_start(args) -> int:
-    """docs/starters-v1.md: make a packet with a starter, or from a recipe."""
+    """docs/starters-v1.md: make a packet with a starter, or from a recipe; many
+    at once with --recipes (docs/agent-dispatch.md §5.1)."""
     import json
     from . import starters
-    if args.list or not (args.starter or args.recipe):
+    if args.list or not (args.starter or args.recipe or args.recipes):
         for n in starters.names():
             s = starters.get(n)
             print("%-8s %s" % (n, s.help))
@@ -158,15 +165,26 @@ def cmd_start(args) -> int:
                 print("         %-8s %s%s%s" % (f.key + "=", f.label, " (%s)" % f.placeholder
                                                     if f.placeholder else "",
                                                     ", required" if f.required else ""))
-        print("every starter: name= dir= objective= from= model= harness= hold=no")
+        print("every starter: name= dir= board= objective= inputs=F,G deliver=push|draft-pr|pr "
+              "gate=CMD from= model= harness= hold=no")
         for n, e in starters.broken().items():
             print("%s: did not load: %s" % (n, e))
         return 0
+    if args.go and args.open:
+        return _err("--go hands it to the runner, --open to you: give one")
+    say = (lambda ln: print(ln, file=sys.stderr)) if args.json else print
     try:
-        if args.recipe:
+        if args.recipes:
+            fp = sys.stdin if args.recipes == "-" else open(args.recipes, encoding="utf-8")
+            with fp:
+                items = json.load(fp)
+            if not isinstance(items, list) or not items:
+                return _err("--recipes: a JSON list of recipes")
+            recipes = [_batch_item(x) for x in items]
+        elif args.recipe:
             fp = sys.stdin if args.recipe == "-" else open(args.recipe, encoding="utf-8")
             with fp:
-                recipe = starters.check(json.load(fp))
+                recipes = [starters.check(json.load(fp))]
         else:
             vals = {}
             for kv in args.values:
@@ -179,21 +197,240 @@ def cmd_start(args) -> int:
                         args.search, ""), vals):
                     print("%-40s %s" % (c["value"], c["label"]))
                 return 0
-            recipe = starters.from_values(args.starter, vals)
-        if args.go:
-            recipe["hold"] = False
-        lines = starters.preview(recipe)
-        if args.json:
-            print(starters.dumps(recipe))
-        for ln in lines:
-            print(ln)
-        if args.dry_run:
-            return 0
-        plan = starters.make(recipe, progress=_new_progress(sys.stderr))
+            recipes = [starters.from_values(args.starter, vals)]
     except (starters.StartError, ValueError, OSError) as e:
         return _err(str(e))
-    print("Created %s: the card is %s" % (plan.name, layout_card(plan)))
+    refused = _dispatch_guard(recipes)
+    if refused:
+        return _err(refused)
+    _lineage(recipes, batch=len(recipes) > 1 or bool(args.recipes))
+    for r in recipes:
+        if args.go:
+            r["hold"] = False
+        if args.open:
+            r["hold"] = True
+    # Every recipe is checked before any is made: one refusal refuses them all.
+    previews, problems = [], []
+    for r in recipes:
+        try:
+            previews.append(starters.preview(r))
+        except starters.StartError as e:
+            previews.append(None)
+            problems.append("%s: %s" % (r.get("name"), e))
+    folders = [starters.folder_of(r) for r in recipes]
+    for f in sorted(set(f for f in folders if folders.count(f) > 1)):
+        problems.append("%s: more than one recipe makes it" % f)
+    names = [r["name"] for r in recipes]
+    for n in sorted(set(n for n in names if names.count(n) > 1)):
+        problems.append("%s: more than one recipe is named it" % n)
+    if args.json and args.dry_run:
+        print(json.dumps([{"recipe": r, "preview": pv} for r, pv in zip(recipes, previews)]
+                         if len(recipes) > 1 or args.recipes else
+                         dict(recipe=recipes[0], preview=previews[0]), indent=2, sort_keys=True))
+    else:
+        for r, pv in zip(recipes, previews):
+            for ln in pv or ():
+                say(ln)
+            if len(recipes) > 1:
+                say("")
+    if problems:
+        for p in problems:
+            print("wpk: refused: %s" % p, file=sys.stderr)
+        return _err("nothing was made" if len(recipes) > 1 else problems[0].split(": ", 1)[1])
+    if args.dry_run:
+        return 0
+    made = []
+    for r in recipes:
+        try:
+            plan = starters.make(r, progress=_new_progress(sys.stderr))
+        except (starters.StartError, OSError) as e:
+            if made:
+                print("wpk: made %s before this failed" % ", ".join(m["name"] for m in made),
+                      file=sys.stderr)
+            return _err("%s: %s" % (r["name"], e))
+        out = _made(plan, r, args.open)
+        made.append(out)
+        say("Created %s: the card is %s" % (plan.name, layout_card(plan)))
+        if out.get("open_url"):
+            say("Open it: %s" % out["open_url"])
+        elif out.get("open_note"):
+            say(out["open_note"])
+    if len(made) > 1:
+        _record_dispatch(made, recipes)
+    if args.go:
+        _poke()
+    if args.json:
+        print(json.dumps(made if len(recipes) > 1 or args.recipes else made[0], indent=2))
     return 0
+
+
+def _batch_item(x):
+    """One item of --recipes: ``{"starter": ..., field values}`` or a recipe."""
+    from . import starters
+    if not isinstance(x, dict):
+        raise starters.StartError("--recipes: each item is a JSON object")
+    if "starter" in x:
+        vals = {k: v for k, v in x.items() if k != "starter"}
+        for k in ("hold",):
+            if k in vals and isinstance(vals[k], bool):
+                vals[k] = "yes" if vals[k] else "no"
+        return starters.from_values(x["starter"], vals)
+    r = dict(x)
+    if r.get("inputs"):
+        r["inputs"] = starters.read_inputs(r["inputs"])
+    return starters.check(r)
+
+
+def _dispatch_guard(recipes):
+    """Refusals for a session making packets (docs/agent-dispatch.md §5.5): too
+    many at once; a runner step (unless ``[dispatch] steps``); a packet nested
+    in this one's folder by default."""
+    from . import registry, schema, starters
+    try:
+        ds = dict(schema.DISPATCH_DEFAULTS, **(registry.load_config_file().get("dispatch")
+                                               or {}))
+    except registry.ConfigError:
+        ds = dict(schema.DISPATCH_DEFAULTS)
+    if len(recipes) > ds["max_batch"]:
+        return ("%d packets at once; [dispatch] max_batch is %d" % (len(recipes),
+                                                                    ds["max_batch"]))
+    if os.environ.get("WPK_STEP") and not ds["steps"]:
+        return ("a runner step does not make packets (set [dispatch] steps = true to allow "
+                "it); say what is needed in the report instead")
+    if os.environ.get("WPK_WPID"):
+        bad = [r["name"] for r in recipes if not starters.placed(r)]
+        if bad:
+            return ("%s: no dir= and no packet directory set; from inside a packet that "
+                    "would nest it here. Set [packets] root (or the board's dir), or pass "
+                    "dir=" % ", ".join(bad))
+    return None
+
+
+def _lineage(recipes, batch):
+    """``[origin] by`` (the packet whose session made it, or you, in a batch) and
+    ``batch`` (docs/agent-dispatch.md §5.2). A packet you make alone gets neither."""
+    import secrets
+    from . import clock
+    by = "packet:%s" % os.environ["WPK_WPID"] if os.environ.get("WPK_WPID") else "user"
+    if not batch and by == "user":
+        return
+    bid = None
+    if batch:
+        bid = "b-%s-%s" % (clock.now().strftime("%Y%m%d-%H%M"), secrets.token_hex(2))
+    for r in recipes:
+        o = r.setdefault("origin", {})
+        o.setdefault("by", by)
+        if bid:
+            o["batch"] = bid
+
+
+def _board_url(path):
+    """``path`` on the board, as a link for outside it: ``[notify] link``, else the
+    running board's first URL; None without either."""
+    from . import registry
+    try:
+        base = (registry.load_config_file().get("notify") or {}).get("link") or ""
+    except registry.ConfigError:
+        base = ""
+    if not base:
+        try:
+            from .dash.server import read_state
+            st = read_state(registry.home()) or {}
+        except ImportError:
+            st = {}
+        base = (st.get("urls") or [""])[0]
+    return base.rstrip("/") + path if base else None
+
+
+def _made(plan, r, open_how):
+    """What --json says of a packet made; with ``open_how``, it is opened for you."""
+    import urllib.parse
+    from . import deliver, layout, registry
+    e = registry.get(plan.name) or {"name": plan.name, "path": plan.path, "root": plan.root}
+    out = {"name": plan.name, "wpid": plan.root, "folder": layout.packet_folder(plan.path),
+           "branch": (r.get("clone") or {}).get("branch"), "board": r.get("board") or "main",
+           "url": _board_url("/p/%s" % urllib.parse.quote(plan.name)),
+           "state": "held" if r["hold"] or not r.get("objective") else "runnable"}
+    b = deliver.badge(e)
+    if b:
+        out["deliver"] = b["text"]
+    if open_how:
+        out.update(_open_for_you(e, plan, r, open_how))
+    return out
+
+
+def _open_for_you(e, plan, r, how):
+    """``--open``: the packet is yours (claimed), its objective waits as the
+    kickoff for the first session, and a link opens it (docs/agent-dispatch.md §6)."""
+    import shutil
+    import subprocess
+    from urllib.parse import quote
+    from . import actions, ide, layout, registry, setup
+    from .packet import Packet
+    actions.claim(e)
+    tg = setup.target(plan.path)
+    pkt = Packet(layout.run_dir(plan.path, plan.root))
+    if r.get("objective"):
+        from . import fsutil
+        fsutil.atomic_write(ide.kickoff_path(plan.path), ide.kickoff_text(
+            r["objective"], [i["name"] for i in r.get("inputs") or ()], pkt.state_dir))
+    ws = ide.kickoff_workspace(tg, pkt)
+    try:
+        cfg = ide.load_config()
+    except Exception:                   # noqa: BLE001  the link is a nicety
+        cfg = {}
+    out = {"kickoff": os.path.exists(ide.kickoff_path(plan.path))}
+    if how == "ide-web":
+        if not cfg.get("web"):
+            out["open_note"] = "web VS Code is off ([ide] web); open it from the board"
+            return out
+        from .dash import ide as dide
+        try:
+            key = dide.Backends(registry.home(), cfg).register(ws, None, plan.name, plan.root,
+                                                               None)
+        except Exception as ex:         # noqa: BLE001
+            out["open_note"] = "could not register it with the board's VS Code: %s" % ex
+            return out
+        ide.allow_automatic_tasks()
+        url = _board_url("/ide/%s/?workspace=%s" % (key, quote(ws, safe="/")))
+        if url:
+            out["open_url"] = url
+        else:
+            out["open_note"] = "the board is not running: open %s from it" % plan.name
+        return out
+    from .dash.tailscale import Tailnet
+    try:
+        host = ide.ssh_host(cfg, Tailnet())
+    except Exception:                   # noqa: BLE001
+        host = None
+    out["open_url"] = "vscode://vscode-remote/ssh-remote+%s%s?windowId=_blank" % (
+        host, quote(ws, safe="/")) if host else "vscode://file%s" % quote(ws, safe="/")
+    if os.environ.get("VSCODE_IPC_HOOK_CLI") and shutil.which("code"):
+        try:
+            subprocess.Popen(["code", "--new-window", ws], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            out["opened"] = True
+        except OSError:
+            pass
+    return out
+
+
+def _record_dispatch(made, recipes):
+    """The dispatching packet's journal: a ``dispatched`` record (§5.2)."""
+    wpid = os.environ.get("WPK_WPID")
+    if not wpid:
+        return
+    from . import clock, journal, registry, schema
+    from .packet import Packet
+    try:
+        pkt = Packet(registry.resolve(wpid))
+        journal.append(pkt.journal_path, {
+            "type": "dispatched", "t": schema.format_timestamp(clock.now()),
+            "by": "session", "made": [m["name"] for m in made],
+            "batch": (recipes[0].get("origin") or {}).get("batch")})
+    except Exception:                   # noqa: BLE001  lineage is also in each [origin]
+        pass
 
 
 def _new_progress(out):
@@ -302,6 +539,26 @@ def cmd_board(args) -> int:
             was = registry.move(args.name, args.board)
             print("%s is on %s already" % (args.name, args.board) if was == args.board else
                   "Moved %s from %s to %s" % (args.name, was, args.board))
+        elif args.op == "set":
+            ch = {}
+            for kv in args.pairs:
+                k, eq, v = kv.partition("=")
+                if not eq:
+                    return _err("%s: give key=value" % kv)
+                ch[k.strip()] = v.strip()
+            done = registry.set_board(args.name, ch)
+            print("Set %s on %s" % (", ".join(done), args.name) if done else "nothing to change")
+        elif args.op == "show":
+            b = registry.board(args.name)
+            if b is None:
+                return _err("no board named %r" % args.name)
+            print("board    %s%s" % (args.name, " (%s)" % b["title"] if b.get("title") else ""))
+            print("packets  %s" % (registry.packet_dir(args.name) or
+                                   "not set (here, or the last packet's folder)"))
+            n = registry.notes_path(args.name)
+            print("notes    %s%s" % (n, "" if os.path.isfile(n) else " (none yet)"))
+            print("repos    %s" % (", ".join("@" + r["name"] for r in registry.repos(args.name))
+                                   or "-"))
         else:
             bs = registry.boards()
             on = [b["name"] for b in bs]
@@ -312,6 +569,155 @@ def cmd_board(args) -> int:
     except registry.BoardError as e:
         return _err(str(e))
     return 0
+
+
+def _here_board():
+    """The board of the packet this session is in ($WPK_WPID), or None."""
+    from . import registry
+    wpid = os.environ.get("WPK_WPID")
+    if not wpid:
+        return None
+    e = _entry_of(wpid)
+    return registry.board_of(e) if e else None
+
+
+def cmd_repos(args) -> int:
+    import json
+    from . import registry
+    rs = registry.repos(args.board or _here_board())
+    if args.json:
+        print(json.dumps(rs, indent=1))
+        return 0
+    if not rs:
+        print("No repos. Add [[repo]] (name, url, aliases, ref, branch_prefix) to config.toml "
+              "or boards/<board>.toml (docs/agent-dispatch.md §4.1).")
+    for r in rs:
+        print("@%-20s %s%s" % (r["name"], r["url"], " (%s)" % r["scope"]
+                               if r["scope"] == "board" else ""))
+        extra = [("aliases", ", ".join(r.get("aliases") or ())), ("ref", r.get("ref")),
+                 ("branches", (r.get("branch_prefix") or "") + "<name>"
+                  if r.get("branch_prefix") else ""), ("upstream", r.get("upstream")),
+                 ("notes", r.get("notes"))]
+        for k, v in extra:
+            if v:
+                print("    %-9s %s" % (k, v))
+    return 0
+
+
+def context(board):
+    """``wpk context``: what a session making packets should know (§4.2)."""
+    from . import registry, schema
+    try:
+        ds = dict(schema.DISPATCH_DEFAULTS, **(registry.load_config_file().get("dispatch")
+                                               or {}))
+    except registry.ConfigError:
+        ds = dict(schema.DISPATCH_DEFAULTS)
+    return {"board": board, "boards": [b["name"] for b in registry.boards()],
+            "packet_dir": registry.packet_dir(board),
+            "notes": registry.notes(None).strip(), "notes_path": registry.notes_path(None),
+            "board_notes": registry.notes(board).strip(),
+            "board_notes_path": registry.notes_path(board),
+            "repos": registry.repos(board), "max_batch": ds["max_batch"],
+            "here": os.environ.get("WPK_WPID")}
+
+
+def cmd_context(args) -> int:
+    import json
+    from . import registry
+    board = args.board or _here_board() or registry.DEFAULT_BOARD
+    if registry.board(board) is None:
+        return _err("no board named %r" % board)
+    c = context(board)
+    if args.json:
+        print(json.dumps(c, indent=1))
+        return 0
+    print("# Board: %s (boards: %s)" % (board, ", ".join(c["boards"])))
+    print("New packets go in: %s" % (os.path.join(c["packet_dir"], "<name>") if c["packet_dir"]
+                                     else "not set: pass dir= (or set [packets] root)"))
+    print("At most %d packets at once." % c["max_batch"])
+    for title, text, path in (("Your notes", c["notes"], c["notes_path"]),
+                              ("Board notes (%s)" % board, c["board_notes"],
+                               c["board_notes_path"])):
+        print("\n## %s\n" % title)
+        print(text if text else "(none: %s)" % path)
+    print("\n## Repos (clone=@name)\n")
+    if not c["repos"]:
+        print("(none: [[repo]] in config.toml or boards/%s.toml)" % board)
+    for r in c["repos"]:
+        print("- @%s: %s%s%s%s" % (r["name"], r["url"], "; also called: " + ", ".join(
+            r["aliases"]) if r.get("aliases") else "", "; base " + r["ref"] if r.get("ref")
+            else "", "; branches " + r["branch_prefix"] + "<name>" if r.get("branch_prefix")
+            else ""))
+        if r.get("notes"):
+            print("  %s" % r["notes"])
+    return 0
+
+
+def cmd_deliver(args) -> int:
+    from . import deliver, executor, project, registry
+    e = registry.get(args.target) or _entry_of(args.target)
+    if e is None:
+        return _err("no project %s" % args.target)
+    try:
+        if args.now:
+            r = deliver.run(e["name"], by=executor._who())
+            print(r["msg"])
+            return 0 if r["ok"] else 1
+        if args.off:
+            print("delivery cancelled" if deliver.off(e["name"], by=executor._who())
+                  else "%s had no delivery" % e["name"])
+            return 0
+        if args.set:
+            d = {"do": args.set}
+            if args.gate:
+                d["gate"] = args.gate
+
+            def put(t):
+                if t.get("deliver") == d:
+                    return []
+                t["deliver"] = d
+                return ["deliver: %s" % args.set]
+            try:
+                project.change_settings(e["path"], put, executor._who())
+            except project.ProjectError as ex:
+                return _err(str(ex))
+    except deliver.DeliverError as ex:
+        return _err(str(ex))
+    b = deliver.badge(e)
+    print(b["text"] if b else "%s: no delivery ([deliver] not set)" % e["name"])
+    return 0
+
+
+def cmd_kickoff(args) -> int:
+    """Take the packet's kickoff and start a Claude (or Codex) session with it."""
+    import shutil
+    from . import ide, layout, registry
+    from .project import project_of
+    from .tomlio import load_toml
+    t = args.target or os.environ.get("WPK_WPID") or "."
+    try:
+        proj = project_of(registry.resolve(t))
+    except (registry.LookupFailed, OSError) as ex:
+        return _err(str(ex))
+    if proj is None:
+        return _err("%s is not in a packet" % t)
+    text = ide.take_kickoff(proj)
+    if text is None:
+        print("No kickoff waiting (it was taken). `wpk show %s` shows where it stands." % t)
+        return 0
+    try:
+        harness = registry.load_config().get("harness") or "claude"
+        harness = load_toml(os.path.join(proj, "project.toml")).get("harness") or harness
+    except Exception:                   # noqa: BLE001
+        harness = "claude"
+    exe = shutil.which(harness if harness in ("claude", "codex") else "claude")
+    if args.print or exe is None:
+        print(text, end="")
+        if exe is None and not args.print:
+            print("\n(%s is not on the PATH: give it the text above)" % harness, file=sys.stderr)
+        return 0
+    os.chdir(layout.packet_folder(proj))
+    os.execv(exe, [exe, text])
 
 
 def cmd_pr(args) -> int:
@@ -427,7 +833,8 @@ def cmd_watch(args) -> int:
                 w.get("every", "15m"), when, len(s["seen"]),
                 ", %d failing" % len(s["failed"]) if s["failed"] else ""))
             print("    %s%s -> %s" % (", ".join(w["repos"]), "  labels: " + ", ".join(
-                w["labels"]) if w.get("labels") else "", w["dir"]))
+                w["labels"]) if w.get("labels") else "",
+                w.get("dir") or "(the board's packet directory)"))
             for e in s.get("errors") or []:
                 print("    error: %s" % e)
         if not ws:
@@ -561,6 +968,8 @@ def cmd_admin(args) -> int:
         code = max(code, out.code)
         if op == "pause" and out.code == 0:
             _cancel_pending(p.wpid)
+    if op in ("resume", "handoff") and code == 0:
+        _poke()
     return code
 
 
@@ -1363,8 +1772,11 @@ def cmd_next(args) -> int:
     note = args.message if args.message is not None else (draft or {}).get("note")
     archive = args.archive if args.archive is not None else (draft or {}).get("archive_outline")
     carry = args.carry_session or bool((draft or {}).get("carry_session"))
-    return _outcome(actions.continue_(pkt, text, note=note, archive_outline=archive,
-                                      carry_session=carry, force=args.force))
+    out = actions.continue_(pkt, text, note=note, archive_outline=archive,
+                            carry_session=carry, force=args.force)
+    if out.code == 0:
+        _poke()
+    return _outcome(out)
 
 
 def _project_dir(target):
@@ -1913,16 +2325,8 @@ def cmd_serve(args) -> int:
 
 
 def _is_wpk(pid):
-    """Whether ``pid`` still runs wpk, so a reused pid is never signalled. Without
-    ``/proc`` there is no telling, and the lease's own check has to do."""
-    try:
-        with open("/proc/%d/cmdline" % pid, "rb") as fp:
-            argv = fp.read().split(b"\0")
-    except FileNotFoundError:
-        return not os.path.isdir("/proc/self")
-    except OSError:
-        return False
-    return any(b"work_packet" in a or os.path.basename(a) == b"wpk" for a in argv)
+    from .sched import home_lease
+    return home_lease.runs_wpk(pid)
 
 
 def _wpkd_pid(h, held, flag):
@@ -2132,12 +2536,23 @@ def build_parser() -> argparse.ArgumentParser:
                        "packet from an issue; held for setup unless --go.")
     p.add_argument("starter", nargs="?")
     p.add_argument("values", nargs="*", metavar="KEY=VALUE")
-    p.add_argument("--recipe", metavar="FILE", help="a recipe as JSON (- for stdin)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--recipe", metavar="FILE", help="a recipe as JSON (- for stdin)")
+    g.add_argument("--recipes", metavar="FILE",
+                   help="several packets at once (docs/agent-dispatch.md §5.1): a JSON list "
+                   "of {\"starter\": ..., field values} or recipes (- for stdin); all are "
+                   "checked first, and one refusal makes none")
     p.add_argument("--search", metavar="FIELD", help="list the choices for a field "
                    "(its value is the search text)")
-    p.add_argument("--go", action="store_true", help="runnable at once (needs an objective)")
+    p.add_argument("--go", action="store_true", help="runnable at once (needs an objective); "
+                   "wpkd starts it now")
+    p.add_argument("--open", choices=("ide-web", "ide-desktop"),
+                   help="yours to work on in VS Code: the objective waits as the first "
+                   "session's kickoff, and the result has a link that opens it")
     p.add_argument("--dry-run", action="store_true", help="say what it would do")
-    p.add_argument("--json", action="store_true", help="print the recipe")
+    p.add_argument("--json", action="store_true",
+                   help="machine-readable: with --dry-run the recipes and what they would do; "
+                   "else what was made (name, wpid, folder, branch, board, url, open_url)")
     p.add_argument("--list", action="store_true", help="the starters and their fields")
     p.set_defaults(func=cmd_start)
 
@@ -2170,7 +2585,49 @@ def build_parser() -> argparse.ArgumentParser:
     bp = bsub.add_parser("move", help="put a project on a board")
     bp.add_argument("name", help="the project")
     bp.add_argument("board")
+    bp = bsub.add_parser("set", help="set a board's title or dir (where its new packets go; "
+                         "empty to unset)")
+    bp.add_argument("name")
+    bp.add_argument("pairs", nargs="+", metavar="KEY=VALUE")
+    bp = bsub.add_parser("show", help="a board's settings, notes file and packet directory")
+    bp.add_argument("name")
     p.set_defaults(func=cmd_board)
+
+    p = sub.add_parser("repos", help="the repos an agent may name ([[repo]] in config.toml "
+                       "and the board's .toml)", description="docs/agent-dispatch.md §4. "
+                       "`wpk start clone clone=@NAME` clones one.")
+    p.add_argument("--board", help="with this board's own (they win by name)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_repos)
+
+    p = sub.add_parser("context", help="what an agent making packets should know: your notes, "
+                       "the board's notes, the repos, where packets go",
+                       description="docs/agent-dispatch.md §4.2. Notes: $WPK_HOME/agent.md "
+                       "and $WPK_HOME/boards/<board>.md.")
+    p.add_argument("--board", help="the board (default: this packet's, else main)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_context)
+
+    p = sub.add_parser("deliver", help="a packet's delivery on completion: show it, push now, "
+                       "or cancel it", description="docs/agent-dispatch.md §5.4. A packet "
+                       "with [deliver] pushes its branch (or opens its PR) when it completes.")
+    p.add_argument("target", help="project name")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--now", action="store_true", help="deliver now, whatever its state")
+    g.add_argument("--off", action="store_true", help="cancel delivery")
+    g.add_argument("--set", choices=("push", "draft-pr", "pr"),
+                   help="turn delivery on (with --gate)")
+    p.add_argument("--gate", help="with --set: a command that must pass first")
+    p.set_defaults(func=cmd_deliver)
+
+    p = sub.add_parser("kickoff", help="start the packet's first session with its kickoff "
+                       "(what `wpk start --open` left for it)",
+                       description="docs/agent-dispatch.md §6.2. Takes the kickoff, once: run "
+                       "again, it only shows the packet.")
+    p.add_argument("target", nargs="?", default=None,
+                   help="WPID or project (default: this packet, $WPK_WPID or .)")
+    p.add_argument("--print", action="store_true", help="print it instead of starting a session")
+    p.set_defaults(func=cmd_kickoff)
 
     p = sub.add_parser("watch", help="the boards' watchers: list them, or poll them now",
                        description="Watchers are [[watch]] tables in boards/<board>.toml; "

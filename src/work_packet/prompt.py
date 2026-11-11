@@ -252,8 +252,10 @@ def handoff_section(handoffs):
 
 def build(*, status, last_summary, instruction, step, attempt, max_attempts,
           now, tz, children=(), agent_md=None, state_dir=None, handoffs=(),
-          last_attempt="", notes=(), sizes=(), requests=""):
-    """The prompt text. ``now`` is aware UTC; ``tz`` a tzinfo for local display."""
+          last_attempt="", notes=(), sizes=(), requests="", wider_notes=()):
+    """The prompt text. ``now`` is aware UTC; ``tz`` a tzinfo for local display.
+    ``wider_notes``: ``(title, text)`` sections above the project's notes (board
+    notes, your notes, delivery: docs/agent-dispatch.md §4.2)."""
     wake_line = ""
     if status.get("state") == "SLEEPING" and status.get("wake_at"):
         due = schema.parse_timestamp(status["wake_at"])
@@ -261,9 +263,9 @@ def build(*, status, last_summary, instruction, step, attempt, max_attempts,
         wake_line = "- Woken by a timer (`%s`) due %s%s\n" % (
             status.get("resume_expr"), status["wake_at"],
             ", %s late" % _ago(late) if late >= 60 else "")
-    agent = ""
+    agent = "".join("## %s\n\n%s\n\n" % (t, capped(x)) for t, x in wider_notes if x.strip())
     if agent_md:
-        agent = "## Project notes (agent.md)\n\n%s\n\n" % agent_md.strip()
+        agent += "## Project notes (agent.md)\n\n%s\n\n" % agent_md.strip()
     with open(TEMPLATE, encoding="utf-8") as fp:
         tmpl = Template(fp.read())
     return tmpl.substitute(
@@ -277,6 +279,17 @@ def build(*, status, last_summary, instruction, step, attempt, max_attempts,
         children=children_table(children), agent_md=agent,
         state=state_files(state_dir) if state_dir else "Not shown.",
         sizes=sizes_section(sizes), instruction=(instruction or "").strip())
+
+
+NOTES_CAP = 4096
+
+
+def capped(text, cap=NOTES_CAP):
+    """``text`` stripped, cut at about ``cap`` characters with a pointer to the rest."""
+    text = text.strip()
+    if len(text) <= cap:
+        return text
+    return text[:cap].rsplit("\n", 1)[0] + "\n\n(cut here: `wpk context` shows the rest)"
 
 
 def sizes_section(sizes):

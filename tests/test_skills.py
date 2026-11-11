@@ -22,7 +22,8 @@ def test_dirs_follow_the_harness_homes(tmp_path):
 def test_install(tmp_path, monkeypatch):
     d = [str(tmp_path / "claude"), str(tmp_path / "codex")]
     monkeypatch.setattr(skills, "dirs", lambda environ=None: d)
-    names = ["wpk-checkpoint", "wpk-handoff", "wpk-note", "wpk-todo", "wpk-done"]
+    names = ["wpk-checkpoint", "wpk-handoff", "wpk-note", "wpk-todo", "wpk-done",
+             "wpk-dispatch"]
     assert sorted(skills.install()) == sorted(os.path.join(x, n, "SKILL.md")
                                               for x in d for n in names)
     got = [os.path.join(x, "wpk-checkpoint", "SKILL.md") for x in d]
@@ -30,7 +31,7 @@ def test_install(tmp_path, monkeypatch):
     assert meta["name"] == "wpk-checkpoint" and "packet's folder" in body
     assert "checkpoint -m" in body and skills.MARK in body
     meta, body = frontmatter.load(os.path.join(d[0], "wpk-handoff", "SKILL.md"))
-    assert meta["name"] == "wpk-handoff" and "handoff . -m" in body and "--after-me" in body
+    assert meta["name"] == "wpk-handoff" and "handoff . --note-file -" in body and "--after-me" in body
     assert skills.install() == []                       # already current
     with open(got[1], "w") as fp:                       # someone made it their own
         fp.write("mine\n")

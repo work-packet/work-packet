@@ -1,13 +1,14 @@
 """The ``wpk-*`` skills for Claude Code and Codex: ``wpk-checkpoint``
 (docs/session-checkpoint.md §4.1), ``wpk-handoff``, ``wpk-note`` and ``wpk-done``
-(docs/collaboration.md §11).
+(docs/collaboration.md §11), ``wpk-dispatch`` (docs/agent-dispatch.md §5.3).
 
 A session in an editor the board opened for a packet (``WPK_WPID`` set) runs it to
 record where the packet stands: the model already has the session's context, so
 its status is the best one and costs no extra call. Installed for the user, in
 ``$CLAUDE_CONFIG_DIR/skills`` (else ``~/.claude/skills``) and ``$CODEX_HOME/skills``
 (else ``~/.codex/skills``), when the board opens VS Code for a packet. A skill
-someone edited (no longer carrying ``MARK``) is left alone.
+someone edited (no longer carrying ``MARK``) is left alone. Also whenever a
+packet is made (``project.install_skills``; off with ``[skills] install = false``).
 """
 
 import os
@@ -73,8 +74,23 @@ Run these in the packet's folder. First check where it stands with `{wpk} show .
    a colleague who has not seen this session: the goal, what is done, what is
    left, where things are. If you have not recorded where it stands yet, run
    /wpk-checkpoint first.
-2. If the state is COMPLETED (the runner finished its last task):
-   `{wpk} next . -m "<instruction>"`. Otherwise: `{wpk} handoff . -m "<instruction>"`.
+2. If the state is COMPLETED (the runner finished its last task), the
+   instruction replaces the old one:
+
+   ```
+   {wpk} next . -f - <<'EOF'
+   <instruction>
+   EOF
+   ```
+
+   Otherwise it goes to the next step as a note:
+
+   ```
+   {wpk} handoff . --note-file - <<'EOF'
+   <instruction>
+   EOF
+   ```
+
    Add `--after-me` to `handoff` when the user wants it to start only once they
    stop working on it (otherwise it starts now, beside them).
 3. Tell the user, in one line, what you handed off.
@@ -103,6 +119,70 @@ description: Capture a to-do into the wpk board's Inbox, linked to the current w
 
 `{wpk} todo "<one line: what, and why it matters>"`, in the packet's folder (it
 links the item to the packet). Don't start on it; tell the user it is captured.
+""",
+    "wpk-dispatch": """---
+name: wpk-dispatch
+description: Make new wpk work packets from this session and hand them off - several for independent agents (split a list of work), or one opened in VS Code for the user (e.g. "a VS Code packet from my fork, hand it this testcase"). Use when the user asks to create, start, dispatch or split work into packets, or to open a new packet.
+---
+{mark}
+
+# Make packets and hand them off
+
+**1. Know the names.** Run `{wpk} context` (add `--board <name>` when the user
+names a board) and `{wpk} repos`. They give the boards, where packets go, the
+user's notes, and the repos the user has named, with their aliases. Resolve:
+
+- "my X fork", "the X repo": a repo whose name or alias matches; clone it with
+  `clone=@<name>`. A URL or path the user gives is used as it is.
+- "this repo": the clone this session is in (`git remote get-url origin`).
+- "this board": the board in the context (this packet's board).
+
+If any of these is ambiguous or missing, ask; never guess a repo or a board.
+
+**2. Write each packet's objective** for an agent that has not seen this
+session: the goal, its slice of the work, the files or tests involved, how to
+check it, what "done" means, and the branch it works on. Give each packet its
+own branch (`branch=`, or the repo's branch prefix does it). Data the agent
+needs (a testcase, its slice of a list) goes in `inputs` (files, or
+`{"name": ..., "text": ...}`); it lands in the packet's state/.
+
+**3. Delivery.** Only when the user asked for it ("push when done", "open a
+PR"): `"deliver": "push"` (or `draft-pr`, `pr`). wpk pushes the branch when the
+packet completes, so the objective says "commit on your branch", never "push":
+the agent does not push. If they said "once the tests pass", add
+`"gate": "<the test command>"`.
+
+**4a. Several packets for the runner.** Write the list and dry-run it:
+
+```
+{wpk} start --recipes - --go --dry-run <<'JSON'
+[{"starter": "clone", "name": "<name>", "board": "<board>", "clone": "@<repo>",
+  "branch": "<branch>", "objective": "<objective>",
+  "inputs": [{"name": "tests.md", "text": "<its slice>"}], "deliver": "push"},
+ ...]
+JSON
+```
+
+Show the user what it says (names, folders, branches, delivery) and get a yes.
+Then run the same with `--json` instead of `--dry-run`, and tell them what was
+made, with each packet's `url`.
+
+**4b. One packet the user works on in VS Code** ("a VS Code packet", "open
+it", "I want to look at it"): the same fields with one starter, and `--open`
+instead of `--go`:
+
+```
+{wpk} start clone name=<name> board=<board> clone=@<repo> branch=<branch> objective="<objective>" inputs=<file> --open ide-web --json
+```
+
+Confirm in one line first ("Making <name> on <board> from <repo>, branch
+<branch> - go?"). Use `ide-desktop` if the user works in desktop VS Code. The
+objective waits for the packet's first Claude session. Give the user the
+`open_url` from the result as a link: one click opens it.
+
+If wpk refuses (a name taken, a folder not empty, no packet directory), say
+what it said and settle it with the user; don't force it. Don't make more
+packets than the user asked for.
 """,
     "wpk-done": """---
 name: wpk-done

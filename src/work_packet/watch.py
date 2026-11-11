@@ -451,7 +451,14 @@ def recipe(w, key, h=None, item=None):
     or, for ``on = "ci"``, a CI breakage (``ci_key``). ``item`` is what the poll
     found (for a breakage, its latest run and how many failed)."""
     from . import starters
-    vals = {"dir": os.path.expanduser(w["dir"]), "hold": "yes" if w.get("hold", True) else "no"}
+    vals = {"hold": "yes" if w.get("hold", True) else "no", "board": w["board"]}
+    if w.get("dir"):
+        vals["dir"] = os.path.expanduser(w["dir"])
+    else:                       # the board's packet directory (agent-dispatch.md §3)
+        if registry.packet_dir(w["board"], None, h) is None:
+            raise starters.StartError("watcher %s has no dir, and neither board %s nor "
+                                      "[packets] root says where packets go"
+                                      % (w["name"], w["board"]))
     for k in ("from", "model", "harness"):
         if w.get(k):
             vals[k] = w[k]

@@ -516,6 +516,29 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             "moved %s from %s to %s" % (e["name"], was, to)
         return back(url, executor.Outcome(executor.OK, msg), poke_runner=False)
 
+    async def deliver_post(request):
+        """Push now / Cancel delivery (docs/agent-dispatch.md §5.4)."""
+        from .. import deliver, executor
+        e = entry(request)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        f = await form(request)
+        url = "/p/%s" % urllib.parse.quote(e["name"])
+        op = (f.get("op") or [""])[0]
+        try:
+            if op == "off":
+                await run_in_threadpool(deliver.off, e["name"], home, who(request))
+                out = executor.Outcome(executor.OK, "%s will not push on completion" % e["name"])
+            elif op == "now":
+                r = await run_in_threadpool(deliver.run, e["name"], home, who(request))
+                out = executor.Outcome(executor.OK if r["ok"] else executor.USAGE,
+                                       r["msg"].splitlines()[0])
+            else:
+                out = executor.Outcome(executor.USAGE, "op: now or off")
+        except deliver.DeliverError as ex:
+            out = executor.Outcome(executor.USAGE, str(ex))
+        return back(url, out, poke_runner=False)
+
     async def pr_open(request):
         """Hand the packet back to its forge: push, open (or find) the pull request."""
         from .. import executor, pr
@@ -1926,7 +1949,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         except registry.ConfigError:
             cfg = {"model": "", "harness": "claude"}
         vals = dict(values)
-        vals.setdefault("dir", base)
+        # With a packet directory set, an empty dir means "the board's" (folder_of).
+        if registry.packet_dir(vals.get("board"), None, home) is None:
+            vals.setdefault("dir", base)
         st = starters.get(starter)
         return render(request, "new.html", status=status, projects=es, model=cfg["model"],
                       boards=[b["name"] for b in registry.boards(home)],
@@ -2007,7 +2032,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                                 preview=lines, recipe=r)
             if bg:
                 await run_in_threadpool(starters.preview, r, home)   # refusals, at once
-                jid = jobs.start(r, starters.folder_of(r), lambda plan: made(plan, start), home)
+                jid = jobs.start(r, starters.folder_of(r, home), lambda plan: made(plan, start), home)
                 return JSONResponse({"job": jid, "ws": "/new/job/%s/ws" % jid,
                                      "log": "/new/job/%s/log" % jid})
             plan = await run_in_threadpool(starters.make, r, home)
@@ -2671,6 +2696,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/reports/keep", report_keep, methods=["POST"]),
         Route("/p/{project}/board", board_move, methods=["POST"]),
         Route("/p/{project}/pr", pr_open, methods=["POST"]),
+        Route("/p/{project}/deliver", deliver_post, methods=["POST"]),
         Route("/p/{project}/run", project_run, methods=["POST"]),
         Route("/healthz", health),
         *panels.mounts(home),

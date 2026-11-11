@@ -151,3 +151,38 @@ class HomeLease:
             except FileNotFoundError:
                 pass
         self.mine = None
+
+
+def runs_wpk(pid):
+    """Whether ``pid`` still runs wpk, so a reused pid is never signalled. Without
+    ``/proc`` there is no telling, and the lease's own check has to do."""
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as fp:
+            argv = fp.read().split(b"\0")
+    except FileNotFoundError:
+        return not os.path.isdir("/proc/self")
+    except OSError:
+        return False
+    return any(b"work_packet" in a or os.path.basename(a) == b"wpk" for a in argv)
+
+
+def poke(h=None):
+    """Have this home's wpkd (or `wpk dash` board) look for due packets now, as
+    the board's own buttons do: SIGUSR1, sent only to a server on this host whose
+    ``server.json`` says it takes it. Otherwise its next poll finds them. Returns
+    whether it was sent; never raises."""
+    import signal
+    try:
+        with open(os.path.join(h or registry.home(), "server.json")) as fp:
+            st = json.load(fp)
+        pid = int(st["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if st.get("poke") != "SIGUSR1" or not st.get("runner") \
+            or st.get("host") != socket.gethostname() or not runs_wpk(pid):
+        return False
+    try:
+        os.kill(pid, signal.SIGUSR1)
+    except OSError:
+        return False
+    return True

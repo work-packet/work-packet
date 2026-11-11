@@ -261,7 +261,9 @@ def test_watch(forge, tmp_path):
 def test_watch_config_and_cli(forge, tmp_path, capsys):
     from work_packet import cli, watch
     assert [p.field for p in schema.validate_watches([{"name": "x", "repos": ["nope"]}])] \
-        == ["watch[0].repos", "watch[0].dir"]
+        == ["watch[0].repos"]          # no dir: the board's packet directory (agent-dispatch.md)
+    assert [p.field for p in schema.validate_watches([{"name": "x", "repos": ["a:b/c"],
+                                                       "dir": ""}])] == ["watch[0].dir"]
     assert schema.validate_watches([{"name": "x", "repos": ["a:b/c"], "dir": "d",
                                      "every": "10s"}])[0].field == "watch[0].every"
     _watch_board(tmp_path, every="1h", max_new=1, hold=False)

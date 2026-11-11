@@ -17,9 +17,10 @@ import time
 from .. import layout
 
 RECIPE_KEYS = ("name", "dir", "folder", "clone", "objective", "inputs", "origin", "model",
-               "harness", "extra", "hold", "from", "board")
+               "harness", "extra", "hold", "from", "board", "deliver")
 CLONE_KEYS = ("url", "ref", "branch", "share", "tool")
 CLONE_TOOLS = ("ivpm", "git")         # dash-create-progress-design.md: ivpm, the default
+DELIVER = ("push", "draft-pr", "pr")   # docs/agent-dispatch.md §5.4
 
 
 class StartError(Exception):
@@ -41,7 +42,8 @@ class Field:
 COMMON = (
     Field("name", "Name", placeholder="from what you pick, if empty",
           help="Lower case, digits, - and _. The packet folder is <directory>/<name>."),
-    Field("dir", "In directory"),
+    Field("dir", "In directory", placeholder="the board's packet directory",
+          help="Empty: the board's dir, else [packets] root (Settings)."),
 )
 # Asked by every starter, after its own fields.
 TAIL = (
@@ -170,14 +172,41 @@ def check(recipe):
             raise StartError("inputs: each needs a plain file name and text")
     if r.get("origin") is not None and not isinstance(r["origin"], dict):
         raise StartError("origin: a table")
+    d = r.get("deliver")
+    if isinstance(d, str):
+        d = r["deliver"] = {"do": d}
+    if d is not None:
+        if not isinstance(d, dict) or set(d) - {"do", "gate"}:
+            raise StartError("deliver: push, draft-pr or pr, or a table {do, gate}")
+        if d.get("do") in (None, "", "none", "off"):
+            del r["deliver"]
+        elif d["do"] not in DELIVER:
+            raise StartError("deliver: one of %s (or none)" % ", ".join(DELIVER))
+        elif "gate" in d and not (isinstance(d["gate"], str) and d["gate"].strip()):
+            raise StartError("deliver: gate is a command")
     r.setdefault("hold", True)
     return r
 
 
-def folder_of(r):
+def folder_of(r, h=None):
+    """The packet's folder: ``folder``; else ``<dir>/<name>``; else where the
+    settings put the board's packets (registry.packet_dir); else ``./<name>``."""
     if r.get("folder"):
         return os.path.abspath(os.path.expanduser(r["folder"]))
+    if not r.get("dir"):
+        from .. import registry
+        d = registry.packet_dir(r.get("board"), r["name"], h)
+        if d:
+            return d
     return os.path.abspath(os.path.join(os.path.expanduser(r.get("dir") or "."), r["name"]))
+
+
+def placed(r, h=None):
+    """Whether ``r``'s folder was chosen (``folder``, ``dir``, or the settings),
+    not just ``./<name>``."""
+    from .. import registry
+    return bool(r.get("folder") or r.get("dir")
+                or registry.packet_dir(r.get("board"), r["name"], h))
 
 
 def _setup_copy(r, h):
@@ -213,14 +242,44 @@ def _extra(r, copy, h):
     if r.get("origin"):
         extra["origin"] = {k: v for k, v in r["origin"].items()
                            if isinstance(v, (str, int)) and v != ""}
+    if r.get("deliver"):
+        d = dict(r["deliver"])
+        if (r.get("clone") or {}).get("ref"):
+            d.setdefault("base", r["clone"]["ref"])
+        extra["deliver"] = d
     return extra
+
+
+def _deliver_check(r, folder, clone):
+    """Refuse a delivery that cannot happen, before anything is made."""
+    d = r.get("deliver")
+    if not d:
+        return None
+    if clone:
+        if not clone.get("branch"):
+            raise StartError("deliver: needs a branch of its own (branch=): the base "
+                             "branch is never pushed")
+        branch = clone["branch"]
+    else:
+        if not os.path.isdir(os.path.join(folder, ".git")):
+            raise StartError("deliver: %s is not a git clone, so there is nothing to push"
+                             % folder)
+        branch = subprocess.run(["git", "-C", folder, "rev-parse", "--abbrev-ref", "HEAD"],
+                                capture_output=True, text=True).stdout.strip() or "?"
+    if d["do"] != "push" and not ((r.get("origin") or {}).get("forge")
+                                  and (r.get("origin") or {}).get("repo")):
+        raise StartError("deliver: %s needs a repo on a configured forge; use push" % d["do"])
+    what = {"push": "push %s to origin", "draft-pr": "push %s and open a draft pull request",
+            "pr": "push %s and open a pull request"}[d["do"]] % branch
+    return "on completion: %s%s" % (what, " if `%s` passes" % d["gate"] if d.get("gate")
+                                    else "")
 
 
 def preview(recipe, h=None):
     """What ``make`` would do, as lines; raises StartError if it would refuse."""
     from .. import project
     r = check(recipe)
-    folder = folder_of(r)
+    folder = folder_of(r, h)
     copy, clone = _setup_copy(r, h)
     _extra(r, copy, h)
     try:
@@ -248,6 +307,9 @@ def preview(recipe, h=None):
     if r.get("origin"):
         o = r["origin"]
         out.append("from %s" % (o.get("url") or o.get("title") or o.get("kind")))
+    dl = _deliver_check(r, folder, clone)
+    if dl:
+        out.append(dl)
     if r.get("objective"):
         out.append("objective: %s" % r["objective"].strip().splitlines()[0][:100])
     out.append("held for setup: hand it off in Compose" if r["hold"] or not r.get("objective")
@@ -432,7 +494,7 @@ def make(recipe, h=None, progress=None):
     from ..packet import Packet
     preview(recipe, h)                # every refusal before anything is made
     r = check(recipe)
-    folder = folder_of(r)
+    folder = folder_of(r, h)
     copy, clone = _setup_copy(r, h)
     extra = _extra(r, copy, h)
     rep = _Report(progress)
@@ -486,7 +548,36 @@ def from_values(starter, values, h=None):
     for k in ("name", "dir", "objective", "from", "model", "harness"):
         if vals.get(k):
             r[k] = vals[k]            # what you typed wins over what the starter suggests
+    if vals.get("inputs"):
+        r["inputs"] = (r.get("inputs") or []) + read_inputs(vals["inputs"])
+    if vals.get("deliver"):
+        r["deliver"] = {"do": vals["deliver"]}
+        if vals.get("gate"):
+            r["deliver"]["gate"] = vals["gate"]
     return check(r)
+
+
+def read_inputs(given):
+    """Inputs as given (a list, or comma-separated paths): each a path, read
+    now, or ``{"name", "text"}``. Returns ``[{"name", "text"}]``."""
+    if isinstance(given, str):
+        given = [x.strip() for x in given.split(",") if x.strip()]
+    if not isinstance(given, list):
+        raise StartError("inputs: a list of files, or {name, text}")
+    out = []
+    for i in given:
+        if isinstance(i, dict):
+            out.append(i)
+            continue
+        if not isinstance(i, str):
+            raise StartError("inputs: a list of files, or {name, text}")
+        p = os.path.expanduser(i)
+        try:
+            with open(p, encoding="utf-8") as fp:
+                out.append({"name": os.path.basename(p), "text": fp.read()})
+        except (OSError, UnicodeDecodeError) as e:
+            raise StartError("inputs: %s: %s" % (i, e)) from None
+    return out
 
 
 def dumps(recipe):

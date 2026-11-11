@@ -117,8 +117,8 @@ def _resolve(t, repo=None, packet=False):
         raise IdeError(str(e)) from None
     pkt = _packet_of(t, tg)
     who = owner(pkt)
-    from . import skills
-    skills.install()            # /wpk-checkpoint for its sessions (docs/session-checkpoint.md §4.1)
+    from . import project
+    project.install_skills()    # /wpk-checkpoint for its sessions (docs/session-checkpoint.md §4.1)
     if layout.is_packet_layout(tg.proj):
         return _packet_folder(tg, pkt, who, repo)
     if repo is None:
@@ -476,3 +476,85 @@ def launch(op):
     subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)
     return argv
+
+
+# --- a packet opened with its first instruction (docs/agent-dispatch.md §6.2) -------
+
+KICKOFF = "kickoff.md"
+KICKOFF_DONE = "kickoff.done.md"
+KICKOFF_WS = "kickoff.code-workspace"
+
+
+def kickoff_path(proj):
+    """The instruction a session in the packet starts from, until one takes it."""
+    return os.path.join(proj, KICKOFF)
+
+
+def kickoff_text(objective, inputs, state_dir):
+    """What the first session is told: the objective, and where its inputs are."""
+    out = objective.strip() + "\n"
+    if inputs:
+        out += "\nInputs, in %s:\n%s\n" % (state_dir, "\n".join("- %s" % i for i in inputs))
+    return out
+
+
+def take_kickoff(proj):
+    """Take the kickoff (atomically: of two takers one gets it). Its text, or None."""
+    done = os.path.join(proj, KICKOFF_DONE)
+    try:
+        os.rename(kickoff_path(proj), done)
+    except FileNotFoundError:
+        return None
+    try:
+        with open(done, encoding="utf-8") as fp:
+            return fp.read()
+    except OSError:
+        return None
+
+
+def wpk_command():
+    """``wpk`` as a task runs it: the one on the PATH, else this Python's module."""
+    exe = shutil.which("wpk")
+    return shlex.quote(exe) if exe else "%s -m work_packet" % shlex.quote(sys.executable)
+
+
+def kickoff_workspace(tg, pkt):
+    """A workspace for the packet folder whose folder-open task runs
+    ``wpk kickoff``: opened once by a dispatch (``wpk start --open``); the board
+    opens the plain folder after that. Kept beside project.toml, out of the
+    packet's own ``.vscode/``. Returns its path."""
+    ws = os.path.join(tg.proj, KICKOFF_WS)
+    folder = layout.packet_folder(tg.proj)
+    task = {"label": "wpk: kickoff", "type": "shell",
+            "command": "%s kickoff %s" % (wpk_command(), pkt.wpid),
+            "runOptions": {"runOn": "folderOpen"},
+            "presentation": {"reveal": "always", "panel": "dedicated", "focus": True},
+            "problemMatcher": []}
+    _write_merged(ws, [{"path": os.path.relpath(folder, tg.proj),
+                        "name": os.path.basename(folder)}],
+                  _settings(tg, pkt), [task] + _tasks(pkt))
+    return ws
+
+
+def allow_automatic_tasks(h=None):
+    """``task.allowAutomaticTasks = "on"`` in the board's web VS Code (its
+    machine settings, in wpk's own server data dir), so the kickoff task runs on
+    open in a trusted folder. A value you set is left alone. Returns whether it
+    wrote."""
+    p = os.path.join(h or registry.home(), "ide", "data", "data", "Machine", "settings.json")
+    try:
+        with open(p) as fp:
+            cur = parse_jsonc(fp.read())
+    except FileNotFoundError:
+        cur = {}
+    except (OSError, ValueError):
+        return False
+    if "task.allowAutomaticTasks" in cur:
+        return False
+    cur["task.allowAutomaticTasks"] = "on"
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        atomic_write(p, json.dumps(cur, indent=2) + "\n")
+    except OSError:
+        return False
+    return True

@@ -129,3 +129,39 @@ def hook_output(event, text):
     """The JSON a hook prints to give the session ``text`` as added context."""
     return json.dumps({"hookSpecificOutput": {"hookEventName": event,
                                               "additionalContext": text}})
+
+
+BOARD_NOTES_LINES = 40
+
+
+def dispatch_context(proj, wpid=None, take=True):
+    """More for SessionStart, outside ``MAX`` (docs/agent-dispatch.md §4.2, §6.2):
+    the kickoff a dispatch left for the first session (taken, so only one session
+    gets it), and the notes for this packet's board and for you: the board's in
+    full when short, else a pointer to `wpk context`."""
+    from . import ide, registry
+    out = []
+    kick = ide.take_kickoff(proj) if take else None
+    if kick and kick.strip():
+        out.append("## Your task in this packet\n\nThe session that made this packet handed "
+                   "it this to work on. Start on it with the user's first message (they may "
+                   "just say go), unless that asks for something else:\n\n" + kick.strip())
+    board = None
+    try:
+        e = next((x for x in registry.entries() if os.path.realpath(x["path"])
+                  == os.path.realpath(proj)), None)
+        board = registry.board_of(e) if e else None
+    except Exception:                       # noqa: BLE001  notes are a nicety
+        pass
+    lines = []
+    bn = registry.notes(board).strip() if board else ""
+    if bn and bn.count("\n") < BOARD_NOTES_LINES:
+        lines.append("## Board notes (%s)\n\n%s" % (board, bn))
+    elif bn:
+        lines.append("Board notes (%s): %d lines; `wpk context` shows them." % (
+            board, bn.count("\n") + 1))
+    gn = registry.notes(None).strip()
+    if gn:
+        lines.append("Your notes for agents: %d lines; `wpk context` shows them (and the "
+                     "repos you named with [[repo]])." % (gn.count("\n") + 1))
+    return "\n\n".join(out + lines)

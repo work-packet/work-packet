@@ -326,7 +326,7 @@ class Board:
             "urls": self.urls["network"] + self.urls["loopback"] + self.urls["tailnet"],
             "auth": self.cfg["auth"] if self.network else None,
             "runner": self.runner is not None, "sock": self.sock,
-            "host": socket.gethostname(),
+            "host": socket.gethostname(), "poke": "SIGUSR1",
         }, indent=1) + "\n")
 
     def _cert(self):
@@ -445,6 +445,10 @@ class Board:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._on_stop)
         loop.add_signal_handler(signal.SIGUSR2, self._on_restart)
+        # SIGUSR1: look for due packets now (`wpk start --go`, `wpk handoff`;
+        # sched/home_lease.poke). server.json says so, so an older wpkd, for
+        # which SIGUSR1 would be fatal, is never sent it.
+        loop.add_signal_handler(signal.SIGUSR1, self._on_poke)
         if self.restarted is not None:
             ide_forward.TOKENS.load(ide_forward.saved_path(self.home))
         else:                           # a stop ended them; a crash leaves the file
@@ -532,8 +536,11 @@ class Board:
                 if (renders.read_listener(self.home) or {}).get("pid") == os.getpid():
                     os.unlink(renders.listener_file(self.home))
             self.renders.stop()
-            for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGUSR2):
+            for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGUSR2, signal.SIGUSR1):
                 loop.remove_signal_handler(sig)
+            # Ignored, not fatal, from here on: an exec to restart keeps that
+            # until the new image handles it, and server.json may still say poke.
+            signal.signal(signal.SIGUSR1, signal.SIG_IGN)
 
     def stop(self):
         if self._stop is not None:
@@ -550,6 +557,10 @@ class Board:
                                "wpkd was stopped instead")
             self.restart = None
         self._stop.set()
+
+    def _on_poke(self):
+        if self.runner is not None:
+            self.runner.poke()
 
     def _on_restart(self):
         asyncio.ensure_future(self._restart_request())

@@ -126,7 +126,8 @@ def handle(event, ev, env, now=None):
         if ev.get("source") == "compact":
             return rec, compact_nudge(proj, wpid, rec)  # it keeps the briefing in the summary
         return rec, "\n\n".join(x for x in (briefing.briefing(proj, wpid),
-                                             others_note(proj, rec, now)) if x)
+                                             others_note(proj, rec, now),
+                                             briefing.dispatch_context(proj, wpid)) if x)
     return rec, briefing.new_notes(proj, wpid, ev.get("session_id"), now)
 
 

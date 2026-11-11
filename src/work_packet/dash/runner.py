@@ -33,6 +33,7 @@ class Runner:
         self._thread = None
         self._watcher = None
         self._sessions = None
+        self._deliver = None
         self.watch_tick = watch_tick
         self._lease = None
         self.dispatcher = None
@@ -68,6 +69,9 @@ class Runner:
             self._sessions = threading.Thread(target=self._sessions_loop,
                                               name="wpk-ide-sessions", daemon=True)
             self._sessions.start()
+            self._deliver = threading.Thread(target=self._deliver_loop, name="wpk-deliver",
+                                             daemon=True)
+            self._deliver.start()
 
     def poke(self):
         """Look for due packets now."""
@@ -80,7 +84,7 @@ class Runner:
         self.halt()
         if self._thread is not None:
             self._thread.join(timeout)
-        for t in (self._watcher, self._sessions):
+        for t in (self._watcher, self._sessions, self._deliver):
             if t is not None:
                 t.join(timeout)
         if self._lease is not None:
@@ -174,6 +178,19 @@ class Runner:
                 except Exception:
                     log.exception("hooked session pass failed")
             self._stopping.wait(every)
+
+    def _deliver_loop(self):
+        """Packets with [deliver] that completed push their branch (or open their
+        pull request): docs/agent-dispatch.md §5.4. A thread of its own, as a
+        gate may run a test suite."""
+        from .. import deliver
+        while not self._stopping.is_set():
+            try:
+                deliver.sync(self.home, report=lambda name, msg, ok: log.warning(
+                    "deliver %s: %s", name, msg.splitlines()[0]))
+            except Exception:
+                log.exception("delivery pass failed")
+            self._stopping.wait(self.watch_tick)
 
     def _watch_loop(self):
         """Poll the boards' watchers that are due; poke the dispatcher when one

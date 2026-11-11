@@ -380,3 +380,152 @@ def delete_board(name, h=None):
     os.unlink(path)
     fsutil.fsync_dir(os.path.dirname(path))
     return [e["name"] for e in moved]
+
+
+def board(name, h=None):
+    """``boards/<name>.toml`` as written (``{"name": "main"}`` for main without
+    one); None if there is no such board."""
+    p = os.path.join(boards_dir(h), name + ".toml")
+    try:
+        return load_toml(p)
+    except FileNotFoundError:
+        return {"name": name} if name == DEFAULT_BOARD else None
+    except (OSError, ValueError) as e:
+        raise BoardError("%s: %s" % (p, e)) from None
+
+
+BOARD_SETTABLE = ("title", "dir")
+
+
+def set_board(name, changes, h=None):
+    """Set top-level keys of ``boards/<name>.toml`` (``{key: value or None}``),
+    line by line so its comments and ``[[watch]]`` tables stay as they are.
+    Returns the keys that changed."""
+    import re
+    import tomli_w
+    from .tomlio import tomllib
+    bad = sorted(set(changes) - set(BOARD_SETTABLE))
+    if bad:
+        raise BoardError("a board's %s cannot be set here (only %s)" % (
+            ", ".join(bad), ", ".join(BOARD_SETTABLE)))
+    b = board(name, h)
+    if b is None:
+        raise BoardError("no board named %r" % (name,))
+    p = os.path.join(boards_dir(h), name + ".toml")
+    if not os.path.exists(p):                   # main, set for the first time
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        b = {"name": name, "created": schema.format_timestamp(clock.now())}
+        save_toml(p, b)
+    with open(p) as fp:
+        lines = fp.read().splitlines()
+    done = []
+    for k, v in changes.items():
+        if v == "":
+            v = None
+        if b.get(k) == v:
+            continue
+        top = next((i for i, ln in enumerate(lines) if ln.lstrip().startswith("[")), len(lines))
+        rx = re.compile(r"^\s*%s\s*=" % re.escape(k))
+        at = next((i for i in range(top) if rx.match(lines[i])), None)
+        if v is None:
+            if at is not None:
+                del lines[at]
+        elif at is not None:
+            lines[at] = tomli_w.dumps({k: v}).strip()
+        else:
+            last = max([i for i in range(top) if lines[i].strip()] or [-1])
+            lines.insert(last + 1, tomli_w.dumps({k: v}).strip())
+        done.append(k)
+    if not done:
+        return []
+    text = "\n".join(lines) + "\n"
+    try:
+        got = tomllib.loads(text)
+    except ValueError:
+        raise BoardError("could not edit %s safely: edit it by hand" % p) from None
+    probs = [x for x in schema.validate_board(got, name) if x.level == "error"]
+    if probs:
+        raise BoardError("%s: %s" % (probs[0].field, probs[0].msg))
+    fsutil.atomic_write(p, text)
+    return done
+
+
+# --- where new packets go (docs/agent-dispatch.md §3) --------------------------------
+
+def _expand(p):
+    return os.path.abspath(os.path.expanduser(os.path.expandvars(p)))
+
+
+def packet_dir(board_name=None, name=None, h=None):
+    """The folder a new packet ``name`` on ``board_name`` goes in, from the
+    settings: the board's ``dir``, else ``[packets] root`` (``<root>/<board>/``,
+    or ``<root>/`` with ``layout = "flat"``). None when neither is set. Without
+    ``name``, the directory it goes in."""
+    bn = board_name or DEFAULT_BOARD
+    try:
+        b = board(bn, h) or {}
+    except BoardError:
+        b = {}
+    if b.get("dir"):
+        d = _expand(b["dir"])
+    else:
+        try:
+            pk = load_config_file(h).get("packets") or {}
+        except ConfigError:
+            pk = {}
+        if not pk.get("root"):
+            return None
+        d = _expand(pk["root"])
+        if pk.get("layout", "board") == "board":
+            d = os.path.join(d, bn)
+    return os.path.join(d, name) if name else d
+
+
+# --- what the agent is told (docs/agent-dispatch.md §4) ------------------------------
+
+def notes_path(board_name=None, h=None):
+    """``$WPK_HOME/agent.md`` (no board), or ``boards/<board>.md``."""
+    if board_name is None:
+        return os.path.join(h or home(), "agent.md")
+    return os.path.join(boards_dir(h), board_name + ".md")
+
+
+def notes(board_name=None, h=None):
+    """The text of those notes; "" if there are none."""
+    try:
+        with open(notes_path(board_name, h), encoding="utf-8") as fp:
+            return fp.read()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def repos(board_name=None, h=None):
+    """The ``[[repo]]`` entries an agent may name, the board's over the global
+    ones by name, each with ``scope`` ("board" or "global")."""
+    try:
+        glob = load_config_file(h).get("repo") or []
+    except ConfigError:
+        glob = []
+    out = {r["name"]: dict(r, scope="global") for r in glob if isinstance(r, dict)
+           and r.get("name")}
+    if board_name:
+        try:
+            b = board(board_name, h) or {}
+        except BoardError:
+            b = {}
+        for r in b.get("repo") or []:
+            if isinstance(r, dict) and r.get("name"):
+                out[r["name"]] = dict(r, scope="board")
+    return sorted(out.values(), key=lambda r: r["name"])
+
+
+def repo(name, board_name=None, h=None):
+    """The repo entry called ``name`` (or with ``name`` as an alias, any case)."""
+    rs = repos(board_name, h)
+    hit = next((r for r in rs if r["name"] == name), None)
+    if hit is None:
+        n = name.strip().lower()
+        hits = [r for r in rs if n in [a.strip().lower() for a in r.get("aliases") or ()]]
+        if len(hits) == 1:
+            hit = hits[0]
+    return hit
