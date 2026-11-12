@@ -13,8 +13,9 @@
 {% endif %}
 {%- endmacro %}
 
-{% macro badge(c) -%}
-{% if c.studio %}<span class="state PAUSED studio" title="taken for the studio: the runner leaves it alone">IN STUDIO</span><span class="muted"> ({{ c.studio|join(", ") }})</span>{% endif %}
+{#- ``short``: who has it goes in the hover, not beside the badge (a board card is narrow). -#}
+{% macro badge(c, short=False) -%}
+{% if c.studio %}<span class="state PAUSED studio" title="taken for the studio ({{ c.studio|join(', ') }}): the runner leaves it alone">IN STUDIO</span>{% if not short %}<span class="muted"> ({{ c.studio|join(", ") }})</span>{% endif %}{% endif %}
 {% if c.pausing %}<span class="state PAUSED" title="pauses when the running step ends">PAUSING</span>{% endif %}
 {%- endmacro %}
 

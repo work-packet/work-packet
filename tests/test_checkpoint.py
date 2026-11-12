@@ -163,7 +163,7 @@ def test_the_card_says_where_it_stands(tmp_path, fake):
     checkpoint.record(pkt, "Parser half done", next_action="Write the tests")
     c = _client()
     html = c.get("/b/main").text
-    assert '<div class="stat" title="Parser half done">' in html
+    assert '<div class="stat">Parser half done</div>' in html
     assert "Next: Write the tests" in html and 'class="asof">as of ' in html
     assert "session active" not in html
     # A session of the packet worked after the checkpoint: the card says so.

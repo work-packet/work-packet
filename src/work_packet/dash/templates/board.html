@@ -34,12 +34,23 @@
 .card[open] .body { cursor: pointer; }
 .card[open] .body :is(a, button, form, code) { cursor: auto; }
 .card > summary::-webkit-details-marker { display: none; }
-.card .name { font-weight: 700; display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
-.card .name > a { color: inherit; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The name keeps room to be read: when the tags don't fit beside it, they wrap below. */
+.card .name { font-weight: 700; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 6px; }
+.card .name > a { color: inherit; flex: 0 1 auto; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .name > a:hover { color: var(--link); }
-.card .tags { display: flex; gap: 4px; align-items: baseline; flex: none; font-weight: 400; font-size: 11.5px; }
-.card .tags::after { content: "▸"; color: var(--muted); }
-.card[open] .tags::after { content: "▾"; }
+.card .tags { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px 4px; align-items: baseline;
+  flex: 0 1 auto; margin-left: auto; font-weight: 400; font-size: 11.5px; }
+/* Hovering a folded card shows all of it (board.js); .peek holds what it shows. */
+.card .peek { display: none; }
+.peekbox { position: fixed; z-index: 50; max-width: 360px; box-sizing: border-box; padding: 8px 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  font-size: 12.5px; pointer-events: none; overflow-wrap: anywhere; }
+.peekbox .pk-name { font-weight: 700; } .peekbox .pk-col { color: var(--muted); font-weight: 400; }
+.peekbox > div { margin-top: 3px; } .peekbox .pk-tags { display: flex; flex-wrap: wrap; gap: 3px 6px; align-items: baseline; font-size: 11.5px; }
+.peekbox .counts { margin-top: 4px; }
+.card > summary { position: relative; padding-right: 18px; }
+.card > summary::after { content: "▸"; position: absolute; right: 6px; top: 4px; color: var(--muted); font-size: 11.5px; }
+.card[open] > summary::after { content: "▾"; }
 .card .brief { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .brief .state { font-size: 10px; padding: 0 4px; }
 .card[open] .brief { display: none; }
@@ -107,8 +118,8 @@
     {% set href = "/p/" ~ (c.name|urlencode) ~ ("/" ~ c.running.wpid ~ "/live" if c.running else "/compose" if c.setup else "#answer" if k == "question" else "") %}
     <details class="card {{ c.css }}" id="card-{{ c.name }}" draggable="true" data-project="{{ c.name }}"{% if c.root %} data-root="{{ c.root.wpid }}"{% endif %}>
     <summary>
-      <div class="name"><a href="{{ href }}" title="{{ c.name }}">{{ c.name }}</a>
-        <span class="tags">{% if c.agents %}<span class="agent {{ c.agents.turn }}" title="{{ c.agents.title }}">{{ c.agents.text }}</span>{% endif %}{{ plm.chips(c.plan, c.due, c.at_risk, c.forecast) }}{% if c.autonomy != "handoff" %}<span class="auto" title="autonomy: {{ c.autonomy }}">{{ c.autonomy }}</span>{% endif %}{{ pz.badge(c) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}</span></div>
+      <div class="name"><a href="{{ href }}">{{ c.name }}</a>
+        {% set tags %}{% if c.agents %}<span class="agent {{ c.agents.turn }}" title="{{ c.agents.title }}">{{ c.agents.text }}</span>{% endif %}{{ plm.chips(c.plan, c.due, c.at_risk, c.forecast) }}{% if c.autonomy != "handoff" %}<span class="auto" title="autonomy: {{ c.autonomy }}">{{ c.autonomy }}</span>{% endif %}{{ pz.badge(c, short=True) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}{% endset %}{% if tags|trim %}<span class="tags">{{ tags }}</span>{% endif %}</div>
       {#- One line, cut to fit; the whole of it is in the body. -#}
       {% if c.running %}{% set brief = (c.running.name or c.running.short) ~ " step " ~ c.running.step ~ (", " ~ c.running.for if c.running.for else "") %}
       {% elif k == "queued" %}{% set why = waiting.get(c.root.wpid) if c.root and waiting else none %}{% set brief = "waiting on: " ~ why.why if why and why.waiting else "due now" %}
@@ -118,8 +129,17 @@
       {% elif k == "review" %}{% set brief = "finished " ~ c.finished ~ ": review it" %}
       {% elif c.column == "Done" %}{% set brief = c.lifecycle ~ (" · finished " ~ c.finished if c.finished else "") %}
       {% else %}{% set brief = c.ball.text %}{% endif %}
-      <div class="brief {{ 'err' if k == 'failure' }}" title="{{ brief }}">{% if c.running %}<span class="state running pulse">RUN</span> {% endif %}{{ brief }}</div>
-      {% if c.root and c.root.summary and c.root.summary != brief %}<div class="stat" title="{{ c.root.summary }}">{{ c.root.summary }}</div>{% endif %}
+      <div class="brief {{ 'err' if k == 'failure' }}">{% if c.running %}<span class="state running pulse">RUN</span> {% endif %}{{ brief }}</div>
+      {% if c.root and c.root.summary and c.root.summary != brief %}<div class="stat">{{ c.root.summary }}</div>{% endif %}
+      <div class="peek">
+        <div><span class="pk-name">{{ c.name }}</span> <span class="pk-col">· {{ c.column }}</span></div>
+        <div class="pk-tags">{% if c.agents %}<span class="agent {{ c.agents.turn }}">{{ c.agents.title or c.agents.text }}</span>{% endif %}{{ plm.chips(c.plan, c.due, c.at_risk, c.forecast) }}{% if c.autonomy != "handoff" %}<span class="auto">autonomy: {{ c.autonomy }}</span>{% endif %}{{ pz.badge(c) }}{% if c.trouble %}<span class="badge">{{ c.trouble }} failed</span>{% endif %}</div>
+        <div class="{{ 'err' if k == 'failure' }}">{% if c.running %}<span class="state running">RUN</span> {% endif %}{{ brief }}</div>
+        {% if c.root and c.root.summary and c.root.summary != brief %}<div class="muted">{{ c.root.summary }}</div>{% endif %}
+        {% if c.intent %}<div class="muted">Next: {{ c.intent }}</div>{% endif %}
+        <div class="counts">{% for st, n in c.counts %}<span class="{{ st }}">{{ n }} {{ st|lower|replace("_", " ") }}</span>{% endfor %}<span class="muted" style="margin-left:auto">{{ c.spend_total|money }}</span></div>
+        <div class="muted">step {{ c.root.step if c.root else "?" }} · last step {{ c.last_step }}{% if c.since and c.since.as_of %} · as of {{ c.since.as_of }}{% endif %}</div>
+      </div>
     </summary>
     <div class="body">
       {% if c.running %}

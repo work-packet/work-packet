@@ -1,5 +1,6 @@
 // The board page (board.html): dragging a card onto a board in the side tab
-// (docs/boards.md), cards that unfold and stay so, and forms that ask first (data-confirm).
+// (docs/boards.md), cards that unfold and stay so, a hover that shows a folded card
+// whole, and forms that ask first (data-confirm).
 (function () {
   var h = document.documentElement;
   document.addEventListener("submit", function (e) {
@@ -45,6 +46,39 @@
     all.forEach(function (d) { if (!d.open) open = true; });
     all.forEach(function (d) { d.open = open; });
   });
+  // Hovering a folded card shows the whole of it: its name, tags, status and counts,
+  // in a box beside the card (the board scrolls, so the box is fixed to the window).
+  var box = null, timer = null, over = null;
+  function hide() { clearTimeout(timer); timer = null; over = null; if (box) box.hidden = true; }
+  function show(card) {
+    var src = card.querySelector(":scope > summary .peek");
+    if (!src || card.open || h.classList.contains("wpk-dragging")) return;
+    if (!box) { box = document.createElement("div"); box.className = "peekbox"; box.setAttribute("role", "tooltip"); document.body.appendChild(box); }
+    box.innerHTML = src.innerHTML; box.hidden = false;
+    var r = card.getBoundingClientRect(), w = box.offsetWidth, ht = box.offsetHeight,
+        vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+    var x, y;
+    if (r.right + 8 + w <= vw) x = r.right + 8;           // to the right of the card
+    else if (r.left - 8 - w >= 0) x = r.left - 8 - w;     // or to its left
+    if (x !== undefined) y = Math.min(r.top, vh - ht - 4);
+    else {                                                // or below it, else above
+      x = Math.max(4, Math.min(r.left, vw - w - 4));
+      y = r.bottom + 6 + ht <= vh ? r.bottom + 6 : r.top - 6 - ht;
+    }
+    y = Math.max(4, y);
+    box.style.left = x + "px"; box.style.top = y + "px";
+  }
+  document.addEventListener("mouseover", function (e) {
+    var s = e.target.closest && e.target.closest("details.card[data-project]:not([open]) > summary");
+    var card = s && s.parentNode;
+    if (card === over) return;
+    hide();
+    if (!card) return;
+    over = card;
+    timer = setTimeout(function () { if (over === card) show(card); }, 350);
+  });
+  document.addEventListener("mouseleave", hide);
+  ["scroll", "dragstart", "click", "wpk:swap"].forEach(function (t) { document.addEventListener(t, hide, true); });
   document.addEventListener("wpk:swap", restore);
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", restore); else restore();
 
