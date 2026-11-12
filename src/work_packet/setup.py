@@ -857,7 +857,8 @@ def ivpm_clone(src, folder, args=(), on_line=None):
     if exe is None:
         raise SetupError("ivpm is not installed: install it (pip install ivpm)")
     p = os.path.expanduser(src)
-    rc, said = run_streamed([exe, "clone"] + list(args)
+    verbose = ["-v"] if on_line and ivpm_clone_takes_v() else []
+    rc, said = run_streamed([exe, "clone"] + verbose + list(args)
                             + [p if os.path.exists(p) else src, folder], on_line)
     if rc:
         tail = "\n".join(said.splitlines()[-15:])
@@ -888,6 +889,23 @@ def ivpm_version():
 
 
 _IVPM_VERSION = {}
+
+
+def ivpm_clone_takes_v():
+    """Whether the installed ivpm's ``clone`` takes ``-v``, which shows custom
+    sources' (p4_mkwa's) progress; 2.42.0's does not, and refuses it. Asked once
+    per process."""
+    if "clone-v" not in _IVPM_VERSION:
+        exe, yes = ivpm_exe(), False
+        if exe:
+            try:
+                res = subprocess.run([exe, "clone", "--help"], capture_output=True,
+                                     text=True, timeout=30)
+                yes = not res.returncode and "--verbose" in res.stdout
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        _IVPM_VERSION["clone-v"] = yes
+    return _IVPM_VERSION["clone-v"]
 
 
 def ivpm_wanted(folder):

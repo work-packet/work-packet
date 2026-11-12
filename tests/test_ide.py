@@ -314,6 +314,23 @@ def test_desktop_off_keeps_the_browser_buttons(short_home, source, tmp_path, mon
         c.__exit__(None, None, None)
 
 
+def test_browser_buttons_reuse_the_desks_tab(short_home, source, tmp_path, monkeypatch):
+    """A second "VS Code (browser)" click goes to the tab already showing that
+    folder, not a new one: two tabs on one desk look like two sessions."""
+    monkeypatch.chdir(tmp_path)
+    proj, pkt = setup_root(tmp_path, source)
+    c, be, origin, tok = _web_client(short_home, tmp_path)
+    try:
+        for page, name in (("/p/dvs", "wpk-ide-dvs"),
+                           ("/p/dvs/" + pkt.wpid, "wpk-ide-" + pkt.wpid)):
+            t = c.get(page).text
+            assert 'value="web" formtarget="%s"' % name in t, page
+            assert 'value="web" formtarget="_blank"' not in t, page
+    finally:
+        be.stop()
+        c.__exit__(None, None, None)
+
+
 # --- web VS Code (V3) ----------------------------------------------------------------
 
 import asyncio                                                   # noqa: E402

@@ -190,7 +190,7 @@ def _now():
 
 def sync(h=None, report=lambda name, msg, ok: None):
     """Open the pull request of each completed packet made by a watcher with
-    ``pr`` on. A failure is kept in the watcher's state and not tried again
+    ``pr`` on, before watchers wrote ``[deliver]`` (deliver.py does those). A failure is kept in the watcher's state and not tried again
     by itself (``wpk pr`` or "Open PR" tries again). Returns the number opened."""
     from . import watch
     modes = {"%s/%s" % (w["board"], w["name"]): w for w in watch.find(None, h)
@@ -204,7 +204,7 @@ def sync(h=None, report=lambda name, msg, ok: None):
         except (OSError, ValueError):
             continue
         w = modes.get((o.get("origin") or {}).get("watch"))
-        if w is None or o.get("pr") or state(e) != "COMPLETED":
+        if w is None or o.get("pr") or o.get("deliver") or state(e) != "COMPLETED":
             continue
         s = watch.load_state(w, h)
         if e["name"] in s.get("pr_failed", {}):

@@ -89,6 +89,7 @@
 {% if total == 0 and not broken %}
 <div class="panel" style="margin-bottom:12px"><p class="muted" style="margin:0">Nothing on this board yet. Drag a card onto <strong>{{ here.name }}</strong> in the side tab, or use the Board setting on a project's page.</p></div>
 {% endif %}
+{% if batch %}<p class="panel" style="margin-bottom:12px">Showing the packets made together in <strong>{{ batch }}</strong>. <a href="/b/{{ here.name|urlencode }}">Show all</a></p>{% endif %}
 <div class="board">
 {% for col in columns %}
   <section class="col" id="col-{{ loop.index }}" data-follow="no" data-col="{{ col }}">
@@ -201,7 +202,7 @@
   <label>On <select name="on">{% for v, t in (("issues", "new issues"), ("ci", "CI failures")) %}<option value="{{ v }}"{{ " selected" if (w.on if w else "issues") == v }}>{{ t }}</option>{% endfor %}</select></label>
   <label title="issues only">Labels <input name="labels" value="{{ w.labels|join(' ') if w else '' }}" placeholder="optional"></label>
   <label title="CI only; empty: each repo's default branch">Branches <input name="branches" value="{{ w.branches|join(' ') if w else '' }}" placeholder="default branch" size="10"></label>
-  <label>Packet folders in <input name="dir" required value="{{ w.dir if w else '' }}" placeholder="~/work/issues"></label>
+  <label>Packet folders in <input name="dir" value="{{ w.dir if w else '' }}" placeholder="{{ 'the board\'s: ' ~ bset.packet_dir if bset.packet_dir else '~/work/issues' }}"></label>
   <label>Every <input name="every" value="{{ w.every if w else '15m' }}" size="5"></label>
   <label>Pull request <select name="pr">{% for v in ("off", "draft", "ready") %}<option{{ " selected" if (w.pr if w else "off") == v }}>{{ v }}</option>{% endfor %}</select></label>
   <label title="each new issue goes to the Inbox for you to accept, instead of becoming a project"><input type="checkbox" name="propose" value="1"{{ " checked" if w and w.propose }}> to the Inbox</label>
@@ -239,6 +240,17 @@
 {% if not watchers or not watchers[0].problems %}
 <details><summary class="muted">Add a watcher</summary>{{ watch_form(none, "Add") }}</details>
 {% endif %}
+<h2 id="board-settings">Packets and agent notes</h2>
+<p class="muted" style="font-size:12.5px;margin-top:-6px">Where this board's new packets go, and what an agent making or working on them should know (docs/agent-dispatch.md). <code>wpk context --board {{ here.name }}</code> shows the same.</p>
+<form class="act" method="post" action="/b/{{ here.name|urlencode }}/settings">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <p><label>New packets go in <input name="dir" value="{{ bset.dir }}" size="40" placeholder="{{ bset.default or 'not set: [packets] root in Settings, or the last packet\'s folder' }}"></label>
+  <span class="muted" style="font-size:12px">{% if bset.packet_dir %}now: <code>{{ bset.packet_dir }}/&lt;name&gt;</code>{% endif %}</span></p>
+  <p><label for="b-notes">Notes for agents</label> <span class="muted" style="font-size:12px"><code>boards/{{ here.name }}.md</code>: shown in full to sessions when short, and to runner steps (4 KB)</span><br>
+  <textarea id="b-notes" name="notes" rows="8" style="width:100%" placeholder="How work on this board is done: builds, tests, conventions, what &quot;my fork&quot; means...">{{ bset.notes }}</textarea></p>
+  {% if bset.repos %}<p class="muted" style="font-size:12.5px">Repos an agent may name: {% for r in bset.repos %}<code>@{{ r.name }}</code> ({{ r.scope }}){{ ", " if not loop.last }}{% endfor %}. Add more as <code>[[repo]]</code> in <code>boards/{{ here.name }}.toml</code> or <code>config.toml</code>.</p>{% endif %}
+  <button class="mini">Save</button>
+</form>
 {% if broken %}
 <h2>Projects that could not be read</h2>
 <table>{% for b in broken %}<tr><td>{{ b.name }}</td><td class="err">{{ b.why }}</td></tr>{% endfor %}</table>

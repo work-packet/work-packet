@@ -163,6 +163,14 @@ def _record_locked(pkt, rec):
 
 # --- sending ----------------------------------------------------------------------------
 
+def _new_dir(proj, to, h=None):
+    from . import registry
+    e = next((x for x in registry.entries(h) if os.path.realpath(x["path"])
+              == os.path.realpath(proj)), None)
+    d = registry.packet_dir(registry.board_of(e) if e else None, to, h)
+    return d or os.path.join(os.path.dirname(layout.packet_folder(proj)), to)
+
+
 def send(pkt, rid, to=None, path=None, external=None, by=None, h=None):
     """Send request ``rid`` of the requester ``pkt`` (§4). Returns the index entry."""
     from . import actions, project
@@ -202,9 +210,9 @@ def send(pkt, rid, to=None, path=None, external=None, by=None, h=None):
                 raise RequestError("project %s: %s" % (to, out.msg))
             created = False
         else:
-            # beside the requester's folder, never inside it (its repo, for a packet folder)
-            dest = os.path.abspath(path) if path else os.path.join(
-                os.path.dirname(layout.packet_folder(proj)), to)
+            # The requester's board's packet directory (docs/agent-dispatch.md §3);
+            # else beside the requester's folder, never inside it (its repo).
+            dest = os.path.abspath(path) if path else _new_dir(proj, to, h)
             extra = {"setup": {"repo": [dict(r) for r in meta["repo"]]}} if meta.get("repo") \
                 else None
             try:

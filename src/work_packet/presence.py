@@ -26,7 +26,7 @@ TURNS = ("working", "waiting", "blocked", "ended")
 # What a record may hold: identifiers, times and states; no prompt or reply text.
 FIELDS = ("source", "kind", "via", "host", "pid", "session", "launch", "wpid", "by",
           "since", "beat", "active", "turn", "turn_since", "tool", "attached", "visible",
-          "idle_since", "transcript", "waited", "background")
+          "idle_since", "transcript", "waited", "background", "prompted")
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
 
 
@@ -153,6 +153,14 @@ def _alive(pid):
         return False
 
 
+def engaged(rec):
+    """Has this agent session had a prompt? The VS Code Claude extension starts a
+    session whenever the workbench loads; until someone types to it, it does
+    nothing and is not a second session on the packet. Records from before
+    ``prompted`` existed count as engaged."""
+    return rec.get("prompted") is not False
+
+
 def counts(rec, recs, now):
     """Does this live record say a person is here? A web tab alone counts only
     while it was visible, or something else beat, in the last ``ATTACH_CAP_S``
@@ -180,6 +188,7 @@ WHERE = {"ide-web": "VS Code (web)", "ide-desktop": "VS Code", "vscode": "VS Cod
 
 def where(recs):
     """Where the person is, for a card: "VS Code (web) · Claude ×2 (1 blocked) · Codex ×1"."""
+    recs = [r for r in recs if r.get("kind") not in AGENTS or engaged(r)]
     places = sorted({WHERE.get(r.get("via") or r.get("kind"), r.get("via") or "")
                      for r in recs if r.get("kind") not in AGENTS} - {""})
     if not places:

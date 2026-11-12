@@ -8,7 +8,8 @@ to a browser as they are:
 - ``{"k": "pkg", "name", "state": "run"|"ok"|"fail", "type", "secs", "error", "loc"}``
 - ``{"k": "task", "name", "state", "at", "total", "msg", "secs", "pkg", "sub"}``: ``at``
   of ``total`` (a "step" is a stage of whoever reads these)
-- ``{"k": "git", "pkg", "phase", "pct", "cur", "total"}``: git's own progress
+- ``{"k": "git", "pkg", "phase", "pct", "cur", "total"}``: git's own progress, or
+  a custom source's (p4_mkwa, say) steps ``[pkg] msg (a/b)``: a package's progress
 - ``{"k": "detail", "pkg", "text"}``: a line about a package or task
 - ``{"k": "diag", "severity", "loc", "msg"}``
 - ``{"k": "summary", "data": {...}}``
@@ -196,6 +197,7 @@ _RX = [
     ("errors", re.compile(r"^Errors encountered:$")),
     ("diag", re.compile(r"^(?:(\S+:\d+(?::\d+)?): )?(note|warning|error|fatal): (.*)$")),
 ]
+_PCT_TAIL = re.compile(r"\s+\d+%.*$")   # "Syncing files 25% (0h0m5s left)"
 _KV = re.compile(r"^ +([A-Za-z][\w -]*?): +(\S.*)$")
 ROOT = "[clone]"
 
@@ -208,7 +210,8 @@ class IvpmTranscript:
     def __init__(self, root=None):
         self.root = os.path.abspath(root) if root else None
         self.packages = {}            # name -> {state, type, secs, error, loc}
-        self.tasks = {}               # name -> {state, at, total, msg, secs}
+        self.tasks = {}               # name -> {state, at, total, msg, secs, pkg}: a
+                                      # package's task is "type:pkg" (p4_mkwa:mypkg)
         self.summary = {}
         self.diagnostics = []
         self.phase = "resolving"
@@ -274,18 +277,27 @@ class IvpmTranscript:
         if m.group(1) == "clone":     # `>> [clone] (git)`: the root clone, a package
             self._last_pkg = ROOT
             return [self._pkg(ROOT, state="run", type=m.group(2))]
-        return [self._task(m.group(1), state="run", pkg=m.group(2))]
+        # Named for its package too: the name is the source type, which two
+        # packages fetched at once share.
+        return [self._task("%s:%s" % m.groups(), state="run", pkg=m.group(2), at=None,
+                           total=None, msg=None, secs=None)]
 
     def _task_error(self, m):
         if m.group(2) == "clone":
             return [self._pkg(ROOT, state="fail", error=m.group(4))]
-        return [self._task(m.group(2), state="fail", msg=m.group(4), pkg=m.group(3))]
+        name = m.group(2) if not m.group(3) else "%s:%s" % (m.group(2), m.group(3))
+        return [self._task(name, state="fail", msg=m.group(4), pkg=m.group(3))]
 
     def _task_end(self, m):
         secs = float(m.group(3)) if m.group(3) else None
         if m.group(2) == "clone":
             return [self._pkg(ROOT, state="ok", secs=secs)]
-        return [self._task(m.group(2), state="ok", secs=secs)]
+        name = m.group(2)
+        if name not in self.tasks:    # not printed for a package's task, but if it is
+            run = [n for n, t in self.tasks.items() if t["state"] == "run" and t["pkg"]
+                   and n.startswith(name + ":")]
+            name = run[0] if len(run) == 1 else name
+        return [self._task(name, state="ok", secs=secs)]
 
     def _pkg_start(self, m):
         out = self._set_phase("fetching") if self.phase == "resolving" else []
@@ -293,31 +305,56 @@ class IvpmTranscript:
         return out + [self._pkg(m.group(1), state="run", type=m.group(2))]
 
     def _pkg_end(self, m):
-        return [self._pkg(m.group(1), state="ok",
-                          secs=float(m.group(2)) if m.group(2) else None)]
+        secs = float(m.group(2)) if m.group(2) else None
+        return self._end_pkg_tasks(m.group(1), state="ok", secs=secs) + \
+            [self._pkg(m.group(1), state="ok", secs=secs)]
 
     def _pkg_error(self, m):
-        return [self._pkg(m.group(1), state="fail", loc=m.group(2), error=m.group(3))]
+        return self._end_pkg_tasks(m.group(1), state="fail", msg=m.group(3)) + \
+            [self._pkg(m.group(1), state="fail", loc=m.group(2), error=m.group(3))]
+
+    def _end_pkg_tasks(self, pkg, **kw):
+        """A package's tasks end with it: IVPM prints no ``<< [task]`` for them."""
+        return [self._task(n, **kw) for n in self._pkg_tasks(pkg)]
+
+    def _pkg_tasks(self, pkg):
+        return [n for n, t in self.tasks.items() if t["state"] == "run" and t["pkg"] == pkg]
 
     def _resolved(self, m):
         return [{"k": "detail", "pkg": self._last_pkg, "text": "→ " + m.group(1)}]
 
-    def _active_task(self):
+    def _active_task(self, pkg=None):
+        """The task a line is about: the last running one of package ``pkg``
+        (its ``[pkg]`` tag); for an untagged line, the last running one not a
+        package's (a package's lines are tagged), else the last running."""
         run = [n for n, t in self.tasks.items() if t["state"] == "run"]
+        if pkg:
+            mine = self._pkg_tasks(pkg)
+            if mine:
+                return mine[-1]
+        else:
+            run = [n for n in run if not self.tasks[n]["pkg"]] or run
         return run[-1] if run else None
 
     def _step(self, m):
-        name = self._active_task()
-        if name is None:
-            return [{"k": "detail", "pkg": m.group(2), "text": m.group(3)}]
-        return [self._task(name, at=int(m.group(4)), total=int(m.group(5)),
-                           msg=m.group(3))]
+        pkg, msg, at, total = m.group(2), m.group(3), int(m.group(4)), int(m.group(5))
+        name = self._active_task(pkg)
+        out = [{"k": "detail", "pkg": pkg, "text": msg}] if name is None else \
+            [self._task(name, at=at, total=total, msg=msg)]
+        if pkg and self.packages.get(pkg, {}).get("state") == "run" and total:
+            # On the package's row, as git's own progress is.
+            out.append({"k": "git", "pkg": pkg, "phase": _PCT_TAIL.sub("", msg) or msg,
+                        "pct": at * 100 // total, "cur": at, "total": total})
+        return out
 
     def _indented(self, m):
-        name = self._active_task()
-        if name is not None and not m.group(2):
-            return [self._task(name, msg=m.group(3))]
-        return [{"k": "detail", "pkg": m.group(2) or self._last_pkg, "text": m.group(3)}]
+        pkg, text = m.group(2), m.group(3)
+        name = self._active_task(pkg)
+        if name is not None and not pkg:
+            return [self._task(name, msg=text)]
+        out = [self._task(name, msg=text)] if name is not None and \
+            self.tasks[name]["pkg"] == pkg else []
+        return out + [{"k": "detail", "pkg": pkg or self._last_pkg, "text": text}]
 
     def _summary(self, m):
         self._block = "summary"

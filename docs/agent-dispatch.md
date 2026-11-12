@@ -430,15 +430,15 @@ plus the existing suites), `[~]` partly built, `[ ]` not started.
       `project.new` and the IDE open), off with `[skills] install = false`.
 
 **D — directories and notes**
-- [~] D1 Built: `[packets] root/layout`, board `dir`, `registry.packet_dir`;
-      starters (`folder_of`), `/new` (an empty dir means the board's, when a
-      directory is set), watchers (`dir` now optional), refusal to nest under
-      `WPK_WPID`, `wpk board set <b> dir=…`, `wpk board show`, global Settings
-      fields (`packets.root`, `packets.layout`, `skills.install`). Not built: a
-      `dir` field on the board page (there is no board Settings page yet);
-      `requests.send` and the setup TUI still choose their own folder.
-- [~] D2 Built: `$WPK_HOME/agent.md`, `$WPK_HOME/boards/<b>.md`, `wpk context
-      [--board] [--json]`. Not built: editing them on the dashboard.
+- [x] D1 `[packets] root/layout`, board `dir`, `registry.packet_dir`; starters
+      (`folder_of`), `/new` (an empty dir means the board's, when a directory is
+      set), watchers (`dir` optional, on the form too), `requests.send` (the
+      requester's board's directory, else beside it as before), the setup TUI;
+      refusal to nest under `WPK_WPID`; `wpk board set <b> dir=…`, `wpk board
+      show`; global Settings fields (`packets.root`, `packets.layout`,
+      `skills.install`); "Packets and agent notes" on each board's page.
+- [x] D2 `$WPK_HOME/agent.md`, `$WPK_HOME/boards/<b>.md`, `wpk context [--board]
+      [--json]`; edited on Settings ("Notes for agents") and on the board's page.
 - [x] D3 `[[repo]]` (global + board, board wins by name; aliases), `wpk repos`,
       `clone=@name` (url, ref, tool, share, `branch_prefix` + name), `/new` clone
       search lists them first.
@@ -446,7 +446,10 @@ plus the existing suites), `[~]` partly built, `[ ]` not started.
       notes, at SessionStart; "Your notes" / "Board notes" sections (4 KB cap
       each) above the project notes in the step prompt, plus a "Delivery" section
       telling the step not to push.
-- [ ] D5 (follow-on) PreToolUse hook refusing `git push` in steps with `[deliver]`.
+- [x] D5 A step of a packet with `[deliver]` gets `WPK_DELIVER`; the Bash
+      PreToolUse hook (`bghook.py`) then refuses `git push` (also `git -C d push`,
+      with env assignments or options before it) and says why. Claude only: Codex
+      steps have no hooks; they get the prompt's "Delivery" section.
 
 **B — batch dispatch**
 - [x] B1 `wpk start --recipes FILE|-`: items are `{"starter", field values}` or
@@ -455,11 +458,11 @@ plus the existing suites), `[~]` partly built, `[ ]` not started.
       refused, one refusal makes none; `--dry-run --json` gives recipes and
       previews; `--json` gives `[{name, wpid, folder, branch, board, url, state,
       deliver}]`.
-- [~] B2 Built: `[origin] by` (`packet:<wpid>` from a session; `user` in a
-      batch) and `batch`; a `dispatched` journal record on the dispatching
-      packet; the packet page says "made by <packet> (<batch>)". Not built: the
-      dispatcher's "Dispatched: a, b, c" list, a batch filter, `wpk show
-      --dispatched`.
+- [x] B2 `[origin] by` (`packet:<wpid>` from a session; `user` in a batch) and
+      `batch`; a `dispatched` journal record on the dispatching packet; the
+      packet page says "made by <packet> (<batch>)"; the dispatcher's page lists
+      "Dispatched: a, b (states, delivery)" with a link to the batch on its board
+      (`/b/<board>?batch=…`, a filter); `wpk show <p> --dispatched`.
 - [x] B3 `[deliver] do/gate/base`, `deliver.py`: due when the root is COMPLETED
       and HEAD has not been tried; the gate runs first; push refusals as `pr.py`'s
       (never the base, nothing uncommitted, commits ahead, no force); result in
@@ -472,7 +475,9 @@ plus the existing suites), `[~]` partly built, `[ ]` not started.
       origin". A `draft-pr`/`pr` delivery needs a forge origin (refused at preview
       otherwise); a delivery needs a branch of its own (refused at preview).
 - [x] B4 `wpk-dispatch` skill (both branches); `[dispatch] max_batch` (8);
-      runner steps refused unless `[dispatch] steps = true`.
+      runner steps refused unless their project allows it (`wpk set <p>
+      dispatch=true`, `[permissions] dispatch`; their prompt then says so) or
+      `[dispatch] steps = true` for all.
 - [x] B5 Real-model check (sonnet, `claude -p` with the skill as system prompt,
       a scratch home with `[[repo]] calc` and board `dv`): "split these 4 tests
       across two packets on the dv board from my calc fork… push when done" made
@@ -499,7 +504,10 @@ plus the existing suites), `[~]` partly built, `[ ]` not started.
       the first Claude session in the packet the kickoff as "Your task in this
       packet". wpk sets `task.allowAutomaticTasks = "on"` in its web VS Code's
       machine settings unless you set it.
-- [ ] I4 "Ready" attention item and notification click; optional ntfy.
+- [x] I4 A packet whose kickoff waits is a "ready for you: open it in VS Code"
+      attention item (`/p/<p>?open=ide-web|ide-desktop`, which opens it); a
+      browser notification always, an ntfy push with `[notify] ready = true`
+      (Settings). It goes when a session takes the kickoff.
 - [x] I5 Real-model check (sonnet): "a new VS Code packet on the dv board from my
       calc fork on a new branch; hand it this testcase" made the packet with the
       testcase as an input, the kickoff, and gave the `vscode://` link. Not
@@ -513,16 +521,18 @@ plus the existing suites), `[~]` partly built, `[ ]` not started.
   is in a workspace file there, not in the packet's `.vscode/tasks.json`: a
   clone's own `.vscode/` is left alone, and only the dispatch's first open runs
   the task (the board opens the plain folder after that).
-- Steps may dispatch only with the global `[dispatch] steps = true`; the
-  per-project permission with an owner's question (§5.5) is not built.
-- Watchers keep their own `pr = draft|ready` path (`pr.sync`); they do not write
-  `[deliver]` yet.
+- A project's `[permissions] dispatch` is true or false: there is no "ask the
+  owner first" mode (§5.5).
+- Watchers with `pr = draft|ready` write `[deliver] do = "draft-pr"|"pr"` into
+  what they make, so delivery makes their PRs (retried when HEAD moves);
+  `pr.sync` still serves packets they made before.
 - `[origin] by/batch` is written for packets a session or a batch makes, not for
   each packet you make by hand.
 
-**Found on the way, not fixed:** `wpk ide` prints a web link without the
-server key (`/ide/?folder=…`, cli.py `cmd_ide`), which the board answers 404.
+**Found on the way, fixed:** `wpk ide` printed a web link without the server key
+(`/ide/?folder=…`), which the board answered 404; it now registers the target
+and prints `/ide/<key>/?…`.
 
-**Next:** I1 (open a kickoff link in serve-web and desktop VS Code: does the
-task run, is the session seen by the board), a runner-to-push run of a batch,
-then the dashboard pieces (board dir and notes editing, dispatched list, I4).
+**Next (needs the user):** I1 (open a kickoff link in serve-web and desktop VS
+Code: does the task run, is the session seen by the board), and a batch run
+through the runner to the push.

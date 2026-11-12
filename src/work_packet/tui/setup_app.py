@@ -253,7 +253,8 @@ class SetupApp(App):
         if self.tg is None:
             return [Static("New project", classes="formhead"),
                     self._row(Input(placeholder="name, e.g. dvs-enh", id="p-name")),
-                    self._row(Input(placeholder="directory (default ./<name>)", id="p-dir")),
+                    self._row(Input(placeholder="directory (default: the packet directory "
+                                         "in Settings, else ./<name>)", id="p-dir")),
                     self._row(Input(placeholder="model (default from config.toml)",
                                     id="p-model"),
                               Button("Create", id="p-create", variant="primary"))]
@@ -462,7 +463,8 @@ class SetupApp(App):
             self.say("give the project a name", "red")
             return
         try:
-            project.new(name, None, path=self._val("p-dir") or None,
+            from .. import registry
+            project.new(name, None, path=self._val("p-dir") or registry.packet_dir(None, name),
                         model=self._val("p-model") or None)
             self.tg = setup.target(name)
         except (project.ProjectError, setup.SetupError, OSError) as e:

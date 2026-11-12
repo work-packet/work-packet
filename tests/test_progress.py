@@ -216,3 +216,124 @@ def test_a_cancel_kills_the_command_and_its_children():
     assert not _alive(out["kid"])          # a zombie counts as gone (no init in CI's container)
     with c.on(), pytest.raises(progress.Cancelled):     # and nothing more starts
         run_streamed(["true"])
+
+
+# --- custom sources (ivpmx's p4_mkwa, git_mkwa, p4) ---------------------------
+
+P4_MKWA = """\
+>> mypkg (p4_mkwa)
+>> [p4_mkwa] (mypkg)
+   [mypkg] Reading CDB
+   [mypkg] Creating client
+   [mypkg] Syncing files
+   [mypkg] Syncing files 25% (0h0m5s left) (25/100)
+   [mypkg] Syncing files 50% (0h0m5s left) (50/100)
+   [mypkg] Complete
+<< mypkg (312.4s)
+"""
+
+
+def feed_all(t, text):
+    out = []
+    for ln in text.splitlines():
+        out += t.feed(ln)
+    return out
+
+
+def test_a_custom_source_shows_progress_on_its_package_row():
+    t = IvpmTranscript()
+    ev = feed_all(t, P4_MKWA.split("   [mypkg] Complete")[0])
+    task = t.tasks["p4_mkwa:mypkg"]
+    assert task["pkg"] == "mypkg" and (task["at"], task["total"]) == (50, 100)
+    assert task["state"] == "run"
+    bars = [e for e in ev if e["k"] == "git"]
+    assert bars == [
+        {"k": "git", "pkg": "mypkg", "phase": "Syncing files", "pct": 25, "cur": 25, "total": 100},
+        {"k": "git", "pkg": "mypkg", "phase": "Syncing files", "pct": 50, "cur": 50, "total": 100}]
+    # A tagged phase message is the task's message, and still a detail.
+    ev = t.feed("   [mypkg] Complete")
+    assert ev[0]["k"] == "task" and ev[0]["msg"] == "Complete"
+    assert ev[1] == {"k": "detail", "pkg": "mypkg", "text": "Complete"}
+
+
+def test_a_custom_source_task_ends_with_its_package():
+    t = IvpmTranscript()
+    ev = feed_all(t, P4_MKWA)
+    assert t.tasks["p4_mkwa:mypkg"]["state"] == "ok"
+    assert t.tasks["p4_mkwa:mypkg"]["secs"] == 312.4
+    assert t.packages["mypkg"]["state"] == "ok"
+    assert [e["k"] for e in ev[-2:]] == ["task", "pkg"]
+    assert not t.running()
+
+
+def test_a_failed_package_fails_its_task():
+    t = IvpmTranscript()
+    feed_all(t, ">> mypkg (p4_mkwa)\n>> [p4_mkwa] (mypkg)\n   [mypkg] Syncing files (5/100)")
+    ev = t.feed("<< mypkg (ivpm.yaml:4:3) ERROR: p4 sync failed")
+    assert ev[0] == dict(t.tasks["p4_mkwa:mypkg"], k="task", name="p4_mkwa:mypkg")
+    assert ev[0]["state"] == "fail" and ev[0]["msg"] == "p4 sync failed"
+    assert t.feed("<< [p4_mkwa] [mypkg] ERROR: again")[0]["name"] == "p4_mkwa:mypkg"
+
+
+def test_two_custom_source_packages_at_once_do_not_collide():
+    t = IvpmTranscript()
+    feed_all(t, ">> a (p4_mkwa)\n>> b (p4_mkwa)\n>> [p4_mkwa] (a)\n>> [p4_mkwa] (b)")
+    ea = t.feed("   [a] Syncing files 10% (0h1m0s left) (10/100)")
+    eb = t.feed("   [b] Syncing files 40% (0h0m30s left) (40/100)")
+    assert (t.tasks["p4_mkwa:a"]["at"], t.tasks["p4_mkwa:b"]["at"]) == (10, 40)
+    assert ea[0]["name"] == "p4_mkwa:a" and ea[1]["pkg"] == "a" and ea[1]["pct"] == 10
+    assert eb[0]["name"] == "p4_mkwa:b" and eb[1]["pkg"] == "b" and eb[1]["pct"] == 40
+    t.feed("<< a (5.0s)")
+    assert t.tasks["p4_mkwa:a"]["state"] == "ok" and t.tasks["p4_mkwa:b"]["state"] == "run"
+    assert t.feed("   [b] Syncing files 90% (0h0m3s left) (90/100)")[0]["name"] == "p4_mkwa:b"
+
+
+@pytest.mark.parametrize("venv_first", [False, True])
+def test_a_root_task_beside_a_custom_source_keeps_its_own_steps(venv_first):
+    t = IvpmTranscript()
+    pk = ">> mypkg (p4_mkwa)\n>> [p4_mkwa] (mypkg)"
+    feed_all(t, ">> [venv]\n" + pk if venv_first else pk + "\n>> [venv]")
+    ev = t.feed("   Installing package set 1/2 (1/2)")
+    assert ev == [dict(t.tasks["venv"], k="task", name="venv")]
+    assert (t.tasks["venv"]["at"], t.tasks["venv"]["total"]) == (1, 2)
+    assert t.feed("   Resolving")[0]["name"] == "venv"
+    ev = t.feed("   [mypkg] Syncing files (30/100)")
+    assert ev[0]["name"] == "p4_mkwa:mypkg" and ev[1]["k"] == "git"
+    assert t.tasks["venv"]["at"] == 1 and t.tasks["p4_mkwa:mypkg"]["at"] == 30
+
+
+def test_a_custom_source_at_verbosity_0_is_just_its_package():
+    t = IvpmTranscript()
+    ev = feed_all(t, ">> mypkg (p4_mkwa)\n<< mypkg (12.0s)")
+    assert [e["k"] for e in ev] == ["phase", "pkg", "pkg"] and not t.tasks
+
+
+def test_ivpm_clone_is_verbose_when_its_output_is_read(monkeypatch):
+    from work_packet import setup
+    ran = []
+    monkeypatch.setattr(setup, "ivpm_exe", lambda: "/x/ivpm")
+    monkeypatch.setattr(progress, "run_streamed", lambda cmd, on_line=None: ran.append(cmd)
+                        or (0, ""))
+    monkeypatch.setattr(setup, "_IVPM_VERSION", {"clone-v": True})
+    setup.ivpm_clone("https://h/r.git", "/w/r", ["-b", "dev"], on_line=lambda *a: None)
+    setup.ivpm_clone("https://h/r.git", "/w/r", ["-b", "dev"])
+    assert ran == [["/x/ivpm", "clone", "-v", "-b", "dev", "https://h/r.git", "/w/r"],
+                   ["/x/ivpm", "clone", "-b", "dev", "https://h/r.git", "/w/r"]]
+    # An ivpm whose clone has no -v (2.42.0) refuses it: not given.
+    ran.clear()
+    monkeypatch.setattr(setup, "_IVPM_VERSION", {"clone-v": False})
+    setup.ivpm_clone("https://h/r.git", "/w/r", on_line=lambda *a: None)
+    assert ran == [["/x/ivpm", "clone", "https://h/r.git", "/w/r"]]
+
+
+def test_ivpm_clone_takes_v_asks_the_installed_ivpm(monkeypatch, tmp_path):
+    from work_packet import setup
+    exe = tmp_path / "ivpm"
+    exe.write_text("#!/bin/sh\n[ \"$1 $2\" = \"clone --help\" ] && echo '  -v, --verbose'\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(setup, "ivpm_exe", lambda: str(exe))
+    monkeypatch.setattr(setup, "_IVPM_VERSION", {})
+    assert setup.ivpm_clone_takes_v() is True
+    exe.write_text("#!/bin/sh\necho usage; exit 0\n")
+    monkeypatch.setattr(setup, "_IVPM_VERSION", {})
+    assert setup.ivpm_clone_takes_v() is False

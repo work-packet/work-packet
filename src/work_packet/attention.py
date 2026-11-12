@@ -45,7 +45,7 @@ def session_items(proj, now=None, idle_escalate=IDLE_ESCALATE_S):
         return []
     out = []
     for r in recs:
-        if r.get("kind") not in presence.AGENTS:
+        if r.get("kind") not in presence.AGENTS or not presence.engaged(r):
             continue
         since = r.get("turn_since") or r.get("beat") or now
         name = presence.AGENTS[r["kind"]]
@@ -75,6 +75,7 @@ def log_waits(proj, root, now=None, idle_escalate=IDLE_ESCALATE_S):
     for r in presence.records(proj, now, ttl=None):
         since = r.get("turn_since")
         if r.get("kind") not in presence.AGENTS or r.get("turn") != "waiting" or not since or \
+                not presence.engaged(r) or \
                 now - since < idle_escalate or r.get("waited") == since:
             continue
         wpid = r.get("wpid") or root

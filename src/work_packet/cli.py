@@ -294,9 +294,10 @@ def _dispatch_guard(recipes):
     if len(recipes) > ds["max_batch"]:
         return ("%d packets at once; [dispatch] max_batch is %d" % (len(recipes),
                                                                     ds["max_batch"]))
-    if os.environ.get("WPK_STEP") and not ds["steps"]:
-        return ("a runner step does not make packets (set [dispatch] steps = true to allow "
-                "it); say what is needed in the report instead")
+    if os.environ.get("WPK_STEP") and not ds["steps"] and not _step_may_dispatch():
+        return ("a runner step does not make packets (`wpk set <project> dispatch=true` "
+                "allows it for one project, [dispatch] steps = true for all); say what is "
+                "needed in the report instead")
     if os.environ.get("WPK_WPID"):
         bad = [r["name"] for r in recipes if not starters.placed(r)]
         if bad:
@@ -304,6 +305,17 @@ def _dispatch_guard(recipes):
                     "would nest it here. Set [packets] root (or the board's dir), or pass "
                     "dir=" % ", ".join(bad))
     return None
+
+
+def _step_may_dispatch():
+    """``[permissions] dispatch`` of the project whose step this is."""
+    from . import project
+    try:
+        e = _entry_of(os.environ["WPK_WPID"])
+        return bool(e and (project.load_project(e["path"]).get("permissions") or {})
+                    .get("dispatch"))
+    except Exception:                   # noqa: BLE001  not allowed when unsure
+        return False
 
 
 def _lineage(recipes, batch):
@@ -890,7 +902,18 @@ def cmd_ps(args) -> int:
 def cmd_show(args) -> int:
     from . import registry, views
     try:
-        for line in views.show(_packet(args.target)):
+        pkt = _packet(args.target)
+        if args.dispatched:             # docs/agent-dispatch.md §5.2
+            from . import starters
+            got = starters.dispatched([pkt.wpid])
+            if not got:
+                print("%s made no packets" % pkt.wpid[:8])
+            for d in got:
+                print("%-24s %-12s %s%s%s" % (d["name"], d["state"], d["board"],
+                                              "  " + d["batch"] if d["batch"] else "",
+                                              "  " + d["deliver"] if d["deliver"] else ""))
+            return 0
+        for line in views.show(pkt):
             print(line)
     except (registry.LookupFailed, OSError) as e:
         return _err(str(e))
@@ -2239,7 +2262,14 @@ def cmd_ide(args) -> int:
         except ImportError:
             st = None
         if st and st.get("urls"):
-            web = st["urls"][0].rstrip("/") + ide.web_path(op)
+            # The board serves /ide/<key>/: the target is registered under its key.
+            from .dash import ide as dide
+            try:
+                key = dide.Backends(registry.home(), cfg).register(
+                    op.path, None, op.project, op.wpid, None)
+                web = st["urls"][0].rstrip("/") + ide.web_path(op, "/ide/%s/" % key)
+            except Exception:           # noqa: BLE001  the other links still work
+                web = None
     ts = None
     try:
         from .dash.tailscale import Tailnet
@@ -2738,6 +2768,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("show", help="print a packet's status, memento and children")
     p.add_argument("target", help="WPID (or unique prefix), project name or directory")
+    p.add_argument("--dispatched", action="store_true",
+                   help="the packets its sessions made (wpk start), with their states")
     p.set_defaults(func=cmd_show)
 
     p = sub.add_parser("report", help="print a finished packet's completion report: outcome, "

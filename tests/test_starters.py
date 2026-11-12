@@ -371,17 +371,19 @@ def test_pr_by_a_watcher_and_the_page(forge, tmp_path):
     [(_, name)] = watch.poll(w)["made"]
     e = registry.get(name)
     folder = layout.packet_folder(e["path"])
-    assert pr.sync() == 0                              # not completed yet
+    from work_packet import deliver
+    assert registry.get(name) and deliver.policy(e) == {"do": "draft-pr"}   # docs/agent-dispatch.md
+    assert deliver.sync() == 0                         # not completed yet
     _finish(e)
-    assert pr.sync() == 0                              # completed, nothing committed: kept
-    assert "nothing to hand off" in watch.load_state(w)["pr_failed"][name]
+    assert deliver.sync() == 1                         # completed, nothing committed: kept
+    assert "nothing to hand off" in deliver.last(e)["msg"]
+    assert deliver.sync() == 0                         # the same HEAD is not tried again
     (tmp_path / "w" / name / "count.py").write_text("x\n")
     git(folder, "add", "count.py")
     git(folder, "commit", "-q", "-m", "fix")
-    assert pr.sync() == 0                              # a failure is not retried by itself
-    pr.forget_failure(name)
-    assert pr.sync() == 1 and forge.pulls[0]["title"].startswith("WIP: ")
-    assert pr.sync() == 0 and len(forge.pulls) == 1    # recorded: not opened twice
+    assert deliver.sync() == 1 and forge.pulls[0]["title"].startswith("WIP: ")
+    assert deliver.sync() == 0 and len(forge.pulls) == 1    # recorded: not opened twice
+    assert pr.sync() == 0                              # [deliver] packets are not pr.sync's
     assert schema.validate_watches([{"name": "x", "repos": ["a:b/c"], "dir": "d",
                                      "pr": "yes"}])[0].field == "watch[0].pr"
     page = _client().get("/p/%s" % name).text
@@ -440,6 +442,8 @@ def deps(where):
     print("<< [Installing Python packages] (0.1s)", flush=True)
 if a == ["--version"]:
     print("2.40.2")
+elif "--help" in a:                     # 2.40.2's clone takes no -v
+    print("usage: ivpm clone [-b BRANCH] src [workspace_dir]")
 elif a[:1] == ["update"]:
     deps(".")
 elif a[:1] == ["clone"]:
@@ -480,6 +484,7 @@ def fake_ivpm(tmp_path, monkeypatch):
     (bin_ / "ivpm").chmod(0o755)
     monkeypatch.setenv("PATH", "%s:%s" % (bin_, os.environ["PATH"]))
     monkeypatch.delitem(setup._IVPM_VERSION, "v", raising=False)   # asked again
+    monkeypatch.delitem(setup._IVPM_VERSION, "clone-v", raising=False)
     return log
 
 

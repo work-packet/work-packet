@@ -376,6 +376,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         if here is None:
             return not_found(request, "board %s" % name)
         cols, broken = data.only(cols, broken, name)
+        batch = request.query_params.get("batch", "")
+        if batch:               # one dispatch's packets (docs/agent-dispatch.md §5.2)
+            cols = {k: [c for c in v if c.get("batch") == batch] for k, v in cols.items()}
+        bset = await run_in_threadpool(board_settings, name)
         snap = await run_in_threadpool(dsched.snapshot, home)
         watchers = await run_in_threadpool(data.watchers, home, name)
         ib = await run_in_threadpool(data.inbox_view, home, cols, name)
@@ -384,7 +388,49 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                       milestones=msv,
                       waiting=dsched.waiting(snap), watchers=watchers, captures=ib["entries"],
                       inbox_requests=ib["requests"], inbox_projects=ib["projects"],
-                      side=side, here=here, main_board=registry.DEFAULT_BOARD)
+                      side=side, here=here, main_board=registry.DEFAULT_BOARD,
+                      batch=batch, bset=bset)
+
+    def starters_dispatched(wpids):
+        from .. import starters
+        return starters.dispatched(wpids, home)
+
+    def board_settings(name):
+        """The board's packet directory, notes and repos (docs/agent-dispatch.md §3-4)."""
+        try:
+            b = registry.board(name, home) or {}
+        except registry.BoardError:
+            b = {}
+        return {"dir": b.get("dir") or "", "packet_dir": registry.packet_dir(name, None, home),
+                "notes": registry.notes(name, home), "repos": registry.repos(name, home)}
+
+    async def board_settings_post(request):
+        """Save a board's packet directory and its notes for agents."""
+        from .. import executor, fsutil
+        name = request.path_params["board"]
+        to = "/b/%s#board-settings" % urllib.parse.quote(name)
+        if name not in [b["name"] for b in registry.boards(home)]:
+            return not_found(request, "board %s" % name)
+        if not is_owner(request):
+            return back(to, executor.Outcome(executor.USAGE, "only the board's owner can "
+                                             "change it"), poke_runner=False)
+        f = await form(request)
+        d = (f.get("dir") or [""])[0].strip()
+        notes = (f.get("notes") or [""])[0].replace("\r\n", "\n")
+        try:
+            got = await run_in_threadpool(registry.set_board, name, {"dir": d or None}, home)
+            path = registry.notes_path(name, home)
+            if notes.strip() != registry.notes(name, home).strip():
+                if notes.strip():
+                    await run_in_threadpool(fsutil.atomic_write, path,
+                                            notes.rstrip("\n") + "\n")
+                elif os.path.exists(path):
+                    os.unlink(path)
+                got.append("notes")
+        except (registry.BoardError, OSError) as ex:
+            return back(to, executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+        return back(to, executor.Outcome(executor.OK, "saved: %s" % ", ".join(got) if got
+                                         else "nothing changed"), poke_runner=False)
 
     async def milestones_post(request):
         """Add or remove a board milestone (plan F3d): ``op`` add (``name``,
@@ -865,7 +911,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             if card["unread"]:
                 await run_in_threadpool(mark_seen, request, e, nodes)
             kw = dict(e=e, card=card, nodes=nodes, tasks=ts, work=work_rows(e),
-                      docs=await run_in_threadpool(docs_rows, e, card))
+                      docs=await run_in_threadpool(docs_rows, e, card),
+                      dispatched=await run_in_threadpool(
+                          starters_dispatched, [n["wpid"] for n in nodes]))
             return await tab(request, e, now, kw)
         return handle
 
@@ -1539,8 +1587,30 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                  "set": bool(cur[(t, k)]), "secret": (t, k) in settings.SECRET,
                  "default": d, "table": t} for t, k, typ, d, lb in settings.KEYS]
         return render(request, "settings.html", rows=rows, owner=is_owner(request),
+                      notes=registry.notes(None, home), notes_path=registry.notes_path(None, home),
                       hooks=sessionhooks.enabled(ide.load_config(h), h),
                       side=data.side(home, cols, broken), here=None)
+
+    async def settings_notes_post(request):
+        """Your notes for agents, ``$WPK_HOME/agent.md`` (docs/agent-dispatch.md §4)."""
+        from .. import executor, fsutil
+        to = "/settings#agent-notes"
+        if not is_owner(request):
+            return back(to, executor.Outcome(executor.USAGE, "only the board's owner can "
+                                             "change them"), poke_runner=False)
+        f = await form(request)
+        notes = (f.get("notes") or [""])[0].replace("\r\n", "\n")
+        path = registry.notes_path(None, home)
+        if notes.strip() == registry.notes(None, home).strip():
+            return back(to, executor.Outcome(executor.OK, "nothing changed"), poke_runner=False)
+        try:
+            if notes.strip():
+                await run_in_threadpool(fsutil.atomic_write, path, notes.rstrip("\n") + "\n")
+            elif os.path.exists(path):
+                os.unlink(path)
+        except OSError as ex:
+            return back(to, executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+        return back(to, executor.Outcome(executor.OK, "saved your notes"), poke_runner=False)
 
     async def settings_post(request):
         from .. import executor, settings
@@ -1586,7 +1656,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         now = time.time()
         snz = attention.snoozes(h, who(request), now)
         its = [it for it in notify.items(cols, now)
-               if notify.pushable(it, cfg, now) and it["key"] not in snz]
+               if notify.pushable(it, cfg, now, browser=True) and it["key"] not in snz]
         return JSONResponse({"items": [{"key": it["key"], "title": notify._title(it),
                                         "text": it["text"], "url": it["url"]} for it in its]})
 
@@ -2686,6 +2756,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/b/{board}/watch/{name}/poll", watch_poll, methods=["POST"]),
         Route("/b/{board}/watch", watch_post, methods=["POST"]),
         Route("/b/{board}/milestones", milestones_post, methods=["POST"]),
+        Route("/b/{board}/settings", board_settings_post, methods=["POST"]),
         Route("/review", review_page),
         Route("/review/build", review_build, methods=["POST"]),
         Route("/review/tidy", review_tidy, methods=["POST"]),
@@ -2741,6 +2812,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/settings", settings_page),
         Route("/settings", settings_post, methods=["POST"]),
         Route("/settings/test-push", settings_test_push, methods=["POST"]),
+        Route("/settings/notes", settings_notes_post, methods=["POST"]),
         Route("/p/{project}/plan", plan_post, methods=["POST"]),
         Route("/backlog", backlog_page),
         Route("/brief", brief_page),

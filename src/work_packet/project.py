@@ -306,7 +306,7 @@ def adopt(path, h=None):
 # --- wpk allow / deny / set (long-running.md §6) ---------------------------------
 
 SETTABLE = ("model", "harness", "profile", "tz") + LIMITS + schema.PROJECT_SCHED_KEYS
-PERMISSION_KEYS = ("permission_mode",)
+PERMISSION_KEYS = ("permission_mode", "dispatch")   # dispatch: docs/agent-dispatch.md §5.5
 
 
 def parse_value(raw):
@@ -395,7 +395,7 @@ def set_values(proj, pairs, by):
             table = d.setdefault("permissions", dict(schema.PERMISSION_DEFAULTS)) \
                 if k in PERMISSION_KEYS else d
             if raw == "":
-                if k in table and k not in PERMISSION_KEYS:
+                if k in table and (k not in PERMISSION_KEYS or k == "dispatch"):
                     del table[k]
                     out.append("unset %s" % k)
                 continue

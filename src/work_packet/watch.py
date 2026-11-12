@@ -491,6 +491,8 @@ def recipe(w, key, h=None, item=None):
             raise starters.StartError("prompt %s: %s" % (w["prompt"], e)) from None
     r["origin"]["watch"] = "%s/%s" % (w["board"], w["name"])
     r["board"] = w["board"]
+    if w.get("pr", "off") != "off":     # delivered on completion (docs/agent-dispatch.md §5.4)
+        r["deliver"] = {"do": "draft-pr" if w["pr"] == "draft" else "pr"}
     return r
 
 

@@ -88,3 +88,34 @@ def test_session_start_names_the_other_live_session(tmp_path):
     presence.beat(proj, "claude-old", 290.0, host="far")
     assert "on far" in hookcmd.others_note(proj, me, 300.0, alive)
     assert hookcmd.others_note(proj, me, 290.0 + presence.TTL_S + 1, alive) == ""
+
+
+def test_a_session_nobody_has_typed_to_is_not_another_session(tmp_path, monkeypatch):
+    """The VS Code Claude extension starts a session whenever the workbench loads.
+    Until it gets a prompt it is not a second session: no warning, no "waiting
+    for you", not counted on the card."""
+    from work_packet import attention
+    proj = str(tmp_path)
+    monkeypatch.setattr(hookcmd, "_project", lambda ev, env: proj)
+    monkeypatch.setattr(hookcmd, "_journal", lambda *a, **k: None)
+    env = {"CLAUDE_CODE_ENTRYPOINT": "claude-vscode", "WPK_IDE_LAUNCH": "L-1",
+           "WPK_WPID": "w", "CLAUDE_PID": "111"}
+    hookcmd._apply("SessionStart", {"session_id": "panel", "cwd": proj, "source": "startup"},
+                   env, 100.0)
+    panel = presence.get(proj, "claude-panel")
+    assert panel["prompted"] is False and not presence.engaged(panel)
+    me = presence.beat(proj, "claude-new", 200.0, kind="claude", via="terminal", host=panel["host"],
+                       pid=222, session="new", launch="L-1", wpid="w", turn="waiting")
+    alive = {111, 222}.__contains__
+    assert hookcmd.others_note(proj, me, 300.0, alive) == ""
+    assert "Claude ×1" in presence.where([panel, me])
+    later = 200.0 + attention.IDLE_ESCALATE_S + 1
+    assert [a["session"] for a in attention.session_items(proj, later)] == ["new"]
+    # once someone types to it, it is a session like any other
+    hookcmd._apply("UserPromptSubmit", {"session_id": "panel", "cwd": proj}, env, 250.0)
+    assert presence.engaged(presence.get(proj, "claude-panel"))
+    assert "pid 111" in hookcmd.others_note(proj, me, 300.0, alive)
+    # a compaction's SessionStart is mid-conversation: it keeps the mark
+    hookcmd._apply("SessionStart", {"session_id": "panel", "cwd": proj, "source": "compact"},
+                   env, 260.0)
+    assert presence.engaged(presence.get(proj, "claude-panel"))

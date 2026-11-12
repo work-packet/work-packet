@@ -23,6 +23,7 @@ nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(-
   {% if card.root and card.root.state == "NEEDS_INPUT" and not card.running %}<a class="state NEEDS_INPUT" href="{{ base }}#answer" title="Answer its questions">NEEDS_INPUT</a>
   {% elif card.root %}<span class="state {{ card.root.state }}">{{ card.root.state }}</span>{% endif %}</h1>
 {% set og = origin_of(e) %}{% if og and (og.label or og.by) %}<p class="muted" style="margin:0 0 6px;font-size:13px">{% if og.label %}From {% if og.url %}<a href="{{ og.url }}">{{ og.label }}</a>{% else %}{{ og.label }}{% endif %}{% endif %}{% if og.by %}{{ " · " if og.label }}made by {% if og.by.project %}<a href="/p/{{ og.by.project|urlencode }}">{{ og.by.name }}</a>{% else %}{{ og.by.name }}{% endif %}{% if og.batch %} <span title="made in one dispatch with its siblings">({{ og.batch }})</span>{% endif %}{% endif %}{% if og.pr %} · handed off as <a href="{{ og.pr.url }}">pull request #{{ og.pr.number }}</a>{% endif %}</p>{% endif %}
+{% set dsp = dispatched|default([]) %}{% if dsp %}<p class="muted" style="margin:0 0 6px;font-size:13px">Dispatched: {% for d in dsp %}<a href="/p/{{ d.name|urlencode }}">{{ d.name }}</a> <span class="badge {{ d.state }}">{{ d.state }}</span>{% if d.deliver %} <span title="delivery">· {{ d.deliver }}</span>{% endif %}{{ ", " if not loop.last }}{% endfor %}{% set b0 = dsp[0] %}{% if b0.batch %} · <a href="/b/{{ b0.board|urlencode }}?batch={{ b0.batch|urlencode }}">the batch on its board</a>{% endif %}</p>{% endif %}
 {% if og and og.deliver %}<form class="act" method="post" action="{{ base }}/deliver" style="margin:0 0 6px;font-size:13px">
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
   <span class="{{ 'muted' if og.deliver.ok else 'err' }}" title="docs/agent-dispatch.md §5.4: only when it completes">{{ og.deliver.text }}</span>
@@ -79,7 +80,7 @@ nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(-
   <form class="act" method="post" action="{{ base }}/ide" style="display:flex;flex-direction:column;align-items:flex-start;gap:6px">
     <input type="hidden" name="csrf" value="{{ csrf or '' }}">
     {% if ide.desktop %}<button class="go" name="go" value="desktop" title="Open the project in VS Code on your desktop">Desktop</button>{% endif %}
-    {% if ide_web %}<span class="row"><button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% else %} title="Open the project in VS Code in a new browser tab"{% endif %}>Browser</button>{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}</span>{% endif %}
+    {% if ide_web %}<span class="row"><button class="go" name="go" value="web" formtarget="wpk-ide-{{ e.name }}"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% else %} title="Open the project in VS Code in a browser tab (the one it is already in, if open)"{% endif %}>Browser</button>{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}</span>{% endif %}
     <span class="muted" style="font-size:12px">{{ "The root packet's worktrees and state/." if card.root and not card.setup else "Its root: work/, state/ and the prompt." }}</span>
   </form>
   {% if work %}
@@ -90,9 +91,9 @@ nav.ptabs a.on { color: var(--ink); border-color: var(--line); background: var(-
     <input type="hidden" name="csrf" value="{{ csrf or '' }}">
     <input type="hidden" name="repo" value="{{ name }}">
     {% if ide.desktop %}<button class="go" name="go" value="desktop">{{ "Your clone" if git else "Open (shared)" }}</button>{% endif %}
-    {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}
+    {% if ide_web %}{% if ide_sizes|length > 1 %}<select name="size" aria-label="job size for VS Code" title="the job VS Code runs in">{% for z in ide_sizes %}<option value="{{ z.name }}" title="{{ z.title }}">{{ z.text }}</option>{% endfor %}</select>{% endif %}<button class="go" name="go" value="web" formtarget="wpk-ide-{{ e.name }}-{{ name }}"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}
     {% if git and tree %}{% if ide.desktop %}<button class="go" name="go" value="desktop-packet">Packet worktree</button>{% endif %}
-    {% if ide_web %}<button class="go" name="go" value="web-packet" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}{% endif %}
+    {% if ide_web %}<button class="go" name="go" value="web-packet" formtarget="wpk-ide-{{ e.name }}-{{ name }}-packet"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>in the browser</button>{% endif %}{% endif %}
   </form></td></tr>
   {% endfor %}
   </table>

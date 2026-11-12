@@ -582,3 +582,23 @@ def read_inputs(given):
 
 def dumps(recipe):
     return json.dumps(recipe, indent=2, sort_keys=True)
+
+
+def dispatched(wpids, h=None):
+    """The packets made from a session in one of ``wpids`` (their ``[origin] by``,
+    docs/agent-dispatch.md §5.2): ``[{name, state, batch, deliver}]``, by name."""
+    from .. import deliver, pr, registry
+    from ..tomlio import load_toml
+    want = {"packet:%s" % w for w in wpids}
+    out = []
+    for e in registry.entries(h):
+        try:
+            o = load_toml(os.path.join(e["path"], "project.toml")).get("origin") or {}
+        except (OSError, ValueError):
+            continue
+        if o.get("by") in want:
+            b = deliver.badge(e)
+            out.append({"name": e["name"], "state": pr.state(e) or "?",
+                        "batch": o.get("batch") or "", "board": registry.board_of(e),
+                        "deliver": b["text"] if b else ""})
+    return sorted(out, key=lambda x: x["name"])

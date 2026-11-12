@@ -12,7 +12,7 @@
 {% if not owner %}<p class="muted">Only the board's owner can change these.</p>{% endif %}
 <form class="act" method="post" action="/settings">
 <input type="hidden" name="csrf" value="{{ csrf or '' }}">
-{% set heads = {"ide": "Sessions", "focus": "The daily brief", "plan": "Limits", "notify": "Pushes (ntfy)"} %}
+{% set heads = {"packets": "New packets", "skills": "Skills", "ide": "Sessions", "focus": "The daily brief", "plan": "Limits", "notify": "Pushes (ntfy)"} %}
 {% for r in rows %}
 {% if loop.first or r.table != loop.previtem.table %}{% if not loop.first %}</table>{% endif %}
 <h2 id="{{ r.table }}">{{ heads[r.table] }}</h2>
@@ -29,6 +29,13 @@
 </form>
 {% if owner %}<form class="act" method="post" action="/settings/test-push"><input type="hidden" name="csrf" value="{{ csrf or '' }}"><button class="mini" title="Send one push to the ntfy topic above, as saved">Send a test push</button></form>{% endif %}
 <p class="muted" style="font-size:12.5px">Only a question from the runner and a Claude session blocked on a permission prompt push, each once, past its threshold, and not while its VS Code tab is in front of you. "Your turn" never pushes. Finished work, failures and your turn go to the digest, if you turn one on.</p>
+<h2 id="agent-notes">Notes for agents</h2>
+<form class="act" method="post" action="/settings/notes">
+<input type="hidden" name="csrf" value="{{ csrf or '' }}">
+<p class="muted" style="font-size:12.5px">What any agent making or working on your packets should know: your conventions, what "my fork" means. In <code>{{ notes_path }}</code>; each board has its own too (on its page). Sessions get a pointer, steps the text (4 KB); <code>wpk context</code> shows it.</p>
+<textarea name="notes" rows="8" style="width:100%"{% if not owner %} disabled{% endif %}>{{ notes }}</textarea>
+{% if owner %}<p><button class="mini">Save notes</button></p>{% endif %}
+</form>
 <h2 id="browser">Browser notifications</h2>
 <p><button type="button" class="mini" id="notify-browser">Turn on</button> <span class="muted" id="notify-browser-state"></span></p>
 <p class="muted" style="font-size:12.5px">While a board tab is open in this browser and hidden, the same questions and blocked sessions show as notifications. This is set per browser.</p>

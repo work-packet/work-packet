@@ -435,7 +435,7 @@ def agents(entry, wpid=None, now=None):
     except OSError:
         return None
     ags = [r for r in recs if r.get("kind") in presence.AGENTS and r.get("turn") in AGENT_RANK
-           and (wpid is None or r.get("wpid") in (None, wpid))]
+           and presence.engaged(r) and (wpid is None or r.get("wpid") in (None, wpid))]
     if not ags:
         return None
     ags.sort(key=lambda r: (AGENT_RANK[r["turn"]], r.get("turn_since") or 0))
@@ -619,6 +619,9 @@ def board(h=None, now=None, rows=None):
             broken.append({"name": e["name"], "board": on, "why": str(ex)})
             continue
         c["board"] = on
+        # A packet made for you whose first session has not started (agent-dispatch.md §6.3).
+        c["kickoff"] = os.path.exists(os.path.join(e["path"], "kickoff.md"))
+        c["batch"] = (origin(e) or {}).get("batch") or ""
         if rows is not None:
             rows += packet_rows(e, on, nodes)
         cols[c["column"]].append(c)

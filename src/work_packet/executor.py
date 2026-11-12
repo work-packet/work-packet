@@ -752,6 +752,15 @@ def step_dirs(pkt):
     return add_dirs + [d for d in workspace.linked_dirs(pkt) if d not in add_dirs]
 
 
+def _deliver_mode(proj):
+    """``[deliver] do`` of the project, or None."""
+    from .tomlio import load_toml
+    try:
+        return (load_toml(os.path.join(proj, "project.toml")).get("deliver") or {}).get("do")
+    except (OSError, ValueError):
+        return None
+
+
 def _wider_notes(proj):
     """The step's notes from beyond the project (docs/agent-dispatch.md §4.2):
     its board's, yours, and its delivery, general to specific."""
@@ -768,6 +777,11 @@ def _wider_notes(proj):
         d = load_toml(os.path.join(proj, "project.toml")).get("deliver") or {}
     except Exception:                   # noqa: BLE001  notes never stop a step
         return out
+    if (load_toml(os.path.join(proj, "project.toml")).get("permissions") or {}).get("dispatch"):
+        out.append(("Making packets", "This project lets its steps make new packets with "
+                    "`wpk start` (one, or several with --recipes), overriding the protocol's "
+                    "rule against it. Make only what the instruction asks for, with dir= or "
+                    "the packet directory, and say in your report what you made."))
     if d.get("do"):
         out.append(("Delivery", "When this packet completes, wpk %s%s. Commit your work on "
                     "the branch checked out now; do not push, and do not switch branches."
@@ -847,6 +861,10 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
         marker=os.path.join(sd, "ctxhook.fired"), resume_from=carried,
         notes=(notes.inbox(pkt), os.path.join(sd, notes.SEEN)) if h.caps.inject else None)
     env = dict(os.environ, WPK_WPID=meta["wpid"], WPK_STEP=str(n), WPK_ATTEMPT=str(a))
+    env.pop("WPK_DELIVER", None)
+    dl = _deliver_mode(st.project_dir)
+    if dl:                  # bghook.py refuses `git push` (docs/agent-dispatch.md §5.4)
+        env["WPK_DELIVER"] = dl
     t0 = time.time()        # for ctxhook's time warning; the timeout is wall-clock too
     env.update(WPK_STARTED_AT="%.0f" % t0, WPK_DEADLINE="%.0f" % (t0 + st.step_timeout_s),
                WPK_WARN_AT="%.0f" % (t0 + TIME_WARN * st.step_timeout_s))

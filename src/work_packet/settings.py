@@ -44,6 +44,7 @@ KEYS = [
     ("notify", "digest", str, "off", "Digest of the rest (off, hourly, daily)"),
     ("notify", "digest_at", str, "17:30", "Daily digest at (HH:MM)"),
     ("notify", "brief", bool, False, "Push the daily brief"),
+    ("notify", "ready", bool, False, "Push \"ready for you\" (a packet a session made for you)"),
 ]
 SECRET = {("notify", "ntfy_token")}
 

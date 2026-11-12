@@ -37,7 +37,8 @@ TIMEOUT_S = 10
 # The Desk's attention kinds as the types of §4.3.
 TYPE = {"needs": "question", "blocked": "blocked", "failed": "failure", "done": "review",
         "yourturn": "your turn", "trouble": "failure", "stalled": "decision",
-        "stuck": "decision", "stale": "stale", "stopped": "review", "atrisk": "decision"}
+        "stuck": "decision", "stale": "stale", "stopped": "review", "atrisk": "decision",
+        "ready": "ready"}
 
 
 class NotifyError(Exception):
@@ -54,6 +55,7 @@ def config(cfg):
     t.setdefault("digest", "off")
     t.setdefault("digest_at", DIGEST_AT)
     t.setdefault("brief", False)
+    t.setdefault("ready", False)        # push "ready for you" (browser notifications always)
     return t
 
 
@@ -75,6 +77,7 @@ def items(cols, now=None):
     rows += [{"kind": "atrisk", "card": c, "item": data.risk_item(c)} for c in cards
              if c.get("at_risk")]
     rows += [{"kind": c["unread"]["kind"], "card": c} for c in cards if c.get("unread")]
+    rows += [{"kind": "ready", "card": c} for c in cards if c.get("kickoff")]
     out = []
     for a in rows:
         c = a["card"]
@@ -88,20 +91,35 @@ def items(cols, now=None):
                 (c.get("root") or {}).get("updated")
             since = at.timestamp() if at else now
             text = c["ball"]["text"] if a["kind"] in ("needs", "failed") else \
-                "finished: review it" if a["kind"] == "done" else "stopped"
+                "finished: review it" if a["kind"] == "done" else \
+                "ready for you: open it in VS Code" if a["kind"] == "ready" else "stopped"
         out.append({"key": data.attention_key(a), "type": typ,
                     "project": c["name"], "text": text, "since": since or now,
                     "url": "/p/%s/jobs/%s" % (c["name"], a["item"]["job"])
-                    if a["kind"] == "job" else "/p/%s" % c["name"],
+                    if a["kind"] == "job" else "/p/%s?open=%s" % (c["name"], _ide_how())
+                    if a["kind"] == "ready" else "/p/%s" % c["name"],
                     "seen": any(r.get("kind") == "ide-web" and r.get("visible")
                                 for r in c.get("present") or ())})
     return out
 
 
-def pushable(it, cfg, now):
+def _ide_how():
+    """How "ready" opens a packet: web VS Code if the board serves it."""
+    try:
+        from . import ide
+        return "ide-web" if ide.load_config().get("web") else "ide-desktop"
+    except Exception:                   # noqa: BLE001
+        return "ide-web"
+
+
+def pushable(it, cfg, now, browser=False):
     """Is ``it`` one to push now (its type, past its threshold)? Blocked sessions
     come already past ``attention.BLOCKED_AFTER_S``. Nothing pushes while a web VS
-    Code tab on its project is visible (``seen``): you are looking at it."""
+    Code tab on its project is visible (``seen``): you are looking at it. "ready"
+    (a packet made for you: docs/agent-dispatch.md §6.3) goes to the browser, and
+    to ntfy only with ``[notify] ready = true``."""
+    if it["type"] == "ready":
+        return not it.get("seen") and (browser or bool(cfg.get("ready")))
     if it["type"] not in PUSH or it.get("seen"):
         return False
     if it["type"] == "question":

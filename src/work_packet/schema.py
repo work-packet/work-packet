@@ -1044,7 +1044,9 @@ def _validate_notify(d):
     if not isinstance(t, dict):
         return [_err("notify", "must be a table")]
     out = _unknown(t, ("ntfy_url", "ntfy_token", "link", "question_after_s", "max_per_hour",
-                       "digest", "digest_at", "brief"), "notify")
+                       "digest", "digest_at", "brief", "ready"), "notify")
+    if not isinstance(t.get("ready", False), bool):
+        out.append(_err("notify.ready", "must be true or false"))
     for k in ("ntfy_url", "link"):
         v = t.get(k, "")
         if not (isinstance(v, str) and (v == "" or v.startswith(("https://", "http://")))):
@@ -1358,7 +1360,10 @@ def validate_project(d):
         if not isinstance(perm, dict):
             out.append(_err("permissions", "must be a table"))
         else:
-            out += _unknown(perm, tuple(PERMISSION_DEFAULTS), "permissions")
+            out += _unknown(perm, tuple(PERMISSION_DEFAULTS) + ("dispatch",), "permissions")
+            if not isinstance(perm.get("dispatch", False), bool):
+                out.append(_err("permissions.dispatch", "must be true or false (its steps may "
+                                "make packets: docs/agent-dispatch.md §5.5)"))
             at = perm.get("allowed_tools")
             if at is not None and not (isinstance(at, list) and all(isinstance(t, str) and t for t in at)):
                 out.append(_err("permissions.allowed_tools", "must be a list of strings"))

@@ -345,3 +345,99 @@ def test_allow_automatic_tasks(tmp_path):
     assert json.loads(p.read_text()) == {"task.allowAutomaticTasks": "on"}
     p.write_text('{"task.allowAutomaticTasks": "off"}')
     assert not ide.allow_automatic_tasks(str(tmp_path))       # yours stays
+
+
+def test_a_project_may_let_its_steps_dispatch(home, tmp_path, monkeypatch, capsys):
+    from work_packet import executor
+    assert cli.main(["start", "folder", "name=boss", "dir=%s" % tmp_path]) == 0
+    e = registry.get("boss")
+    monkeypatch.setenv("WPK_WPID", e["root"])
+    monkeypatch.setenv("WPK_STEP", "2")
+    assert cli.main(["start", "folder", "name=c1", "dir=%s" % tmp_path]) == 4
+    assert "dispatch=true" in capsys.readouterr().err
+    monkeypatch.delenv("WPK_STEP")
+    assert cli.main(["set", "boss", "dispatch=true"]) == 0
+    monkeypatch.setenv("WPK_STEP", "2")
+    assert cli.main(["start", "folder", "name=c1", "dir=%s" % tmp_path]) == 0
+    assert "Making packets" in dict(executor._wider_notes(e["path"]))
+
+
+
+def test_steps_of_a_delivered_packet_do_not_push(monkeypatch):
+    import io
+    from work_packet import bghook
+
+    def run(cmd, env):
+        monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
+            {"tool_input": {"command": cmd}})))
+        return bghook.main(env)
+    on = {"WPK_DELIVER": "push"}
+    for cmd in ("git push", "git push -u origin mb/x", "cd x && git -C . push",
+                "git --no-pager push origin", "make && GIT_TRACE=1 git push"):
+        assert run(cmd, on) == 2, cmd
+    for cmd in ("git status", "git commit -m 'push it later'", "echo git push",
+                "grep -r 'git push' .", "git pull"):
+        assert run(cmd, on) == 0, cmd
+    assert run("git push", {}) == 0                     # no [deliver]: as before
+
+
+# --- the board -------------------------------------------------------------------------
+
+def test_board_settings_and_notes_on_the_dash(home, tmp_path):
+    from test_dash_tasks import _client, _flash
+    registry.new_board("vl")
+    c = _client()
+    page = c.get("/b/vl").text
+    assert 'action="/b/vl/settings"' in page and "Notes for agents" in page
+    r = c.post("/b/vl/settings", data={"dir": str(tmp_path / "vlw"), "notes": "Use ninja.\r\n"},
+               follow_redirects=False)
+    assert _flash(r) == ("saved: dir, notes", True)
+    assert registry.packet_dir("vl", "x") == str(tmp_path / "vlw" / "x")
+    assert registry.notes("vl") == "Use ninja.\n"
+    assert "Use ninja." in c.get("/b/vl").text
+    r = c.post("/b/vl/settings", data={"dir": "", "notes": ""}, follow_redirects=False)
+    assert _flash(r)[1] and registry.packet_dir("vl", "x") is None
+    assert not os.path.exists(registry.notes_path("vl"))
+    assert "Notes for agents" in c.get("/settings").text
+    r = c.post("/settings/notes", data={"notes": "Mine.\n"}, follow_redirects=False)
+    assert _flash(r) == ("saved your notes", True) and registry.notes(None) == "Mine.\n"
+
+
+def test_dispatched_lineage_on_the_dash(home, tmp_path, monkeypatch, capsys):
+    from test_dash_tasks import _client
+    assert cli.main(["start", "folder", "name=boss", "dir=%s" % tmp_path]) == 0
+    boss = registry.get("boss")
+    monkeypatch.setenv("WPK_WPID", boss["root"])
+    items = [{"starter": "folder", "name": n, "dir": str(tmp_path)} for n in ("c", "d")]
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(items)))
+    assert cli.main(["start", "--recipes", "-"]) == 0
+    monkeypatch.delenv("WPK_WPID")
+    capsys.readouterr()
+    assert cli.main(["show", "boss", "--dispatched"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("c ") and "\nd " in out
+    batch = _toml("c")["origin"]["batch"]
+    c = _client()
+    page = c.get("/p/boss").text
+    assert "Dispatched:" in page and 'href="/p/c"' in page and "?batch=%s" % batch in page
+    assert "made by" in c.get("/p/c").text
+    assert cli.main(["start", "folder", "name=other", "dir=%s" % tmp_path]) == 0
+    b = c.get("/b/main?batch=%s" % batch).text
+    assert "made together in" in b and 'href="/p/c"' in b and 'href="/p/other"' not in b
+
+
+def test_ready_for_you(home, tmp_path):
+    from work_packet import notify
+    from work_packet.dash import data
+    assert cli.main(["start", "folder", "name=vk", "dir=%s" % tmp_path, "objective=Look.",
+                     "--open", "ide-desktop"]) == 0
+    cols, _ = data.board()
+    its = [it for it in notify.items(cols) if it["type"] == "ready"]
+    assert len(its) == 1 and its[0]["url"].startswith("/p/vk?open=ide-")
+    cfg = notify.config({})
+    assert notify.pushable(its[0], cfg, 0, browser=True)
+    assert not notify.pushable(its[0], cfg, 0)              # ntfy: only with [notify] ready
+    assert notify.pushable(its[0], dict(cfg, ready=True), 0)
+    briefing.dispatch_context(registry.get("vk")["path"])    # the first session takes it
+    cols, _ = data.board()
+    assert not [it for it in notify.items(cols) if it["type"] == "ready"]

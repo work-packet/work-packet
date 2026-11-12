@@ -10,7 +10,7 @@
     <form class="act" method="post" action="/p/{{ c.name|urlencode }}/ide">
       <input type="hidden" name="csrf" value="{{ csrf or '' }}">
       <input type="hidden" name="wpid" value="{{ c.root.wpid }}">
-      {% if ide_web %}<button class="{{ cls }}" name="go" value="web" formtarget="_blank"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>VS Code (browser)</button>{% endif %}
+      {% if ide_web %}<button class="{{ cls }}" name="go" value="web" formtarget="wpk-ide-{{ c.root.wpid }}"{% if ide_web != "ok" %} disabled title="{{ ide_web }}"{% endif %}>VS Code (browser)</button>{% endif %}
       {% if ide.desktop %}<button class="{{ cls }}" name="go" value="desktop">VS Code (desktop)</button>{% endif %}
     </form>
     {% endif %}

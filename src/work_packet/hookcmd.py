@@ -139,7 +139,7 @@ def others(proj, rec, now=None, alive=None):
     out = []
     for r in presence.records(proj, now, ttl=None):
         if r.get("kind") != "claude" or r.get("session") == rec.get("session") or \
-                r.get("wpid") != rec.get("wpid"):
+                r.get("wpid") != rec.get("wpid") or not presence.engaged(r):
             continue
         pid = r.get("pid")
         if r.get("host") == rec.get("host") and isinstance(pid, int):
@@ -228,7 +228,9 @@ def _apply(event, ev, env, now=None):
                 transcript=tp)
     actor = {"kind": "claude", "via": base["via"], "session": sid}
     if event == "SessionStart":
-        rec = presence.beat(proj, src, now, turn="waiting", **base)
+        # After a compaction it is the same session, mid-conversation: keep its mark.
+        fresh = {} if ev.get("source") == "compact" else {"prompted": False}
+        rec = presence.beat(proj, src, now, turn="waiting", **fresh, **base)
         _journal(proj, wpid, {"type": "session-start", "t": _ts(now), "by": by,
                               "session": sid, "actor": actor,
                               "source": ev.get("source") or None})
@@ -240,7 +242,7 @@ def _apply(event, ev, env, now=None):
                               "reason": ev.get("reason") or None})
         return rec
     if event == "UserPromptSubmit":
-        return presence.beat(proj, src, now, turn="working", tool="", **base)
+        return presence.beat(proj, src, now, turn="working", tool="", prompted=True, **base)
     if event == "PermissionRequest":
         return presence.beat(proj, src, now, turn="blocked", tool=ev.get("tool_name") or "",
                              **base)
