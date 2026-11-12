@@ -240,6 +240,40 @@ Rules:
   wpk?" can be answered by looking.
 - `wpk doctor` lists the merged table and where each key came from.
 
+### 5.4 Links open in your browser, not on the desk (2026-11-12)
+
+VS Code sets `BROWSER` in its extension host and terminals to its own helper
+(`bin/helpers/browser.sh`, i.e. `code --openExternal`). That opens the link
+where the *client* is: on the laptop with Remote-SSH, or as a new tab of the
+web IDE, where `ide_forward.js` sends a localhost link through the board.
+
+Once `DISPLAY` is set, `xdg-open` no longer gets there. Its generic path asks
+`xdg-mime query default x-scheme-handler/http` **before** it tries `$BROWSER`,
+gets the node's default browser, and starts it on the desk. Live Server shows
+it: it calls its own bundled copy of `xdg-open` (from the `opn` package), not
+`vscode.env.openExternal`, so a preview landed in Firefox on the desk instead
+of a tab on the laptop. Many Node tools bundle `xdg-open` the same way.
+The default browser is set in the user's own `~/.config/mimeapps.list`, which beats any
+directory wpk could add to `XDG_CONFIG_DIRS`, so a config file can't fix it.
+
+**Fix:** a shim `xdg-mime` (`src/work_packet/desktop_bin/`). xproxy copies it to
+`<priv>/bin` and puts that first on the server's `PATH`. The bundled copies
+also find `xdg-mime` on `PATH`. When `BROWSER` is set (and isn't `xdg-open`),
+the shim answers "no default" for `x-scheme-handler/http` and `https`, so
+`xdg-open` falls through to `$BROWSER`. Every other query goes to the real
+`xdg-mime`. Without `BROWSER` (an app started from the desk's Apps menu), the
+desk's browser opens, as before. Files (`file://`, paths) still open on the
+desk; the laptop can't reach them.
+
+```toml
+[desktop]
+browser = "client"     # default: links go to VS Code's $BROWSER; "desk" = the node's browser
+```
+
+Not covered: an `xfce` desk session (`wm = "xfce"`), whose own apps use
+`exo-open`; and a tool started with its own browser command (Live Server's
+`CustomBrowser` setting, for example).
+
 ## 6. Noticing windows
 
 xproxy knows when a client connects while no viewer is attached. It writes

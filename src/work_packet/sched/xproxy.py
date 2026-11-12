@@ -67,12 +67,33 @@ def write_xauth(path, displays, cookie):
     os.replace(tmp, path)
 
 
-def apply_env(environ, conf, display, xauthority, key=None):
-    """The server's environment: ``DISPLAY``, ``XAUTHORITY``, ``[desktop.env]``
-    (literal values; ``{display}`` is the one substitution), then ``unset``."""
+SHIMS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "desktop_bin")
+
+
+def install_shims(priv, conf, src=SHIMS):
+    """``browser = "client"`` (§5.4): copy the ``xdg-mime`` shim to ``<priv>/bin``
+    (a copy keeps its mode, and outlives an upgrade of wpk). Returns the
+    directory to put first on ``PATH``, or None."""
+    if (conf.get("browser") or "client") != "client" or not os.path.isdir(src):
+        return None
+    out = os.path.join(priv, "bin")
+    os.makedirs(out, exist_ok=True)
+    for n in os.listdir(src):
+        dst = os.path.join(out, n)
+        shutil.copyfile(os.path.join(src, n), dst)
+        os.chmod(dst, 0o755)
+    return out
+
+
+def apply_env(environ, conf, display, xauthority, key=None, shims=None):
+    """The server's environment: ``DISPLAY``, ``XAUTHORITY``, the ``shims``
+    first on ``PATH``, ``[desktop.env]`` (literal values; ``{display}`` is the
+    one substitution), then ``unset``."""
     env = dict(environ)
     env["DISPLAY"] = ":%d" % display
     env["XAUTHORITY"] = xauthority
+    if shims:
+        env["PATH"] = shims + (":" + env["PATH"] if env.get("PATH") else "")
     if key:
         env["WPK_DESKTOP"] = "/desk/%s/" % key
     applied = {}
@@ -543,7 +564,8 @@ async def run(conf, state_dir, key, argv, priv=None, **kw):
             priv = priv or local_dir()
             proxy = Proxy(conf, state_dir, priv, key, **kw)
             await proxy.serve()
-            env, applied = apply_env(os.environ, conf, proxy.n, proxy.xauth, key)
+            env, applied = apply_env(os.environ, conf, proxy.n, proxy.xauth, key,
+                                     shims=install_shims(priv, conf))
             proxy.env = env
             _write_json(os.path.join(state_dir, "desktop.env.json"),
                         {"display": ":%d" % proxy.n, "env": applied,

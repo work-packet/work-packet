@@ -111,8 +111,10 @@ DESKTOP_DEFAULTS = {                  # docs/desktop.md §0, §7.1
     "env": {},                         # [desktop.env]: set wherever DISPLAY is (§5.3)
     "unset": ["SSH_ASKPASS"],          # removed from the environment, after env
     "apps": {},                        # [desktop.apps]: the tab's Apps menu (§7.1)
+    "browser": "client",               # links open in: client (VS Code's $BROWSER) | desk (§5.4)
 }
 DESKTOP_WMS = ("auto", "fvwm", "xfwm4", "xfce", "none")
+DESKTOP_BROWSERS = ("client", "desk")
 CONSOLE_DEFAULTS = {                  # docs/console.md §3
     "model": "haiku",                  # the agent's model; /model changes one conversation's
     "budget_usd": 0.5,                 # the most one reply may spend
@@ -890,6 +892,8 @@ def _validate_desktop(d):
         out.append(_err("desktop.enabled", "must be true or false"))
     if t.get("wm", "auto") not in DESKTOP_WMS:
         out.append(_err("desktop.wm", "must be one of %s" % ", ".join(DESKTOP_WMS)))
+    if t.get("browser", "client") not in DESKTOP_BROWSERS:
+        out.append(_err("desktop.browser", "must be one of %s" % ", ".join(DESKTOP_BROWSERS)))
     m = t.get("idle_min", 1)
     if not (isinstance(m, int) and not isinstance(m, bool) and m > 0):
         out.append(_err("desktop.idle_min", "must be a positive whole number"))

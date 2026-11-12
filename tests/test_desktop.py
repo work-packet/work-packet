@@ -60,6 +60,52 @@ def test_env_sets_display_then_the_table_then_unsets():
     assert env["WPK_DESKTOP"] == "/desk/abc/" and applied == {"A": "on :23"}
 
 
+def test_shims_go_first_on_path_unless_the_desk_keeps_its_browser(tmp_path):
+    shims = xproxy.install_shims(str(tmp_path), {})
+    assert shims == str(tmp_path / "bin") and os.access(os.path.join(shims, "xdg-mime"), os.X_OK)
+    env, _ = xproxy.apply_env({"PATH": "/usr/bin"}, {}, 23, "/p/xauth", shims=shims)
+    assert env["PATH"] == shims + ":/usr/bin"
+    assert xproxy.install_shims(str(tmp_path / "d"), {"browser": "desk"}) is None
+    assert schema.validate_config({"desktop": {"browser": "laptop"}})
+
+
+def _fake_open(tmp_path):
+    """A PATH whose real ``xdg-mime`` names a desk browser, and stub browsers that log."""
+    real, log = tmp_path / "real", tmp_path / "opened"
+    real.mkdir()
+    def tool(path, body):
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+    tool(real / "xdg-mime", 'echo desk.desktop\n')
+    (tmp_path / "applications").mkdir()
+    (tmp_path / "applications" / "desk.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Desk\nExec=%s %%u\n" % (real / "deskbrowser"))
+    tool(real / "deskbrowser", 'echo desk "$1" >> %s\n' % log)
+    tool(real / "client", 'echo client "$1" >> %s\n' % log)
+    return real, log
+
+
+XDG_OPEN = shutil.which("xdg-open")
+
+
+@pytest.mark.skipif(XDG_OPEN is None, reason="no xdg-open")
+@pytest.mark.parametrize("browser,want", [("client", "client"), ("", "desk")])
+def test_xdg_open_on_the_desk_uses_browser_when_set(tmp_path, browser, want):
+    real, log = _fake_open(tmp_path)
+    shims = xproxy.install_shims(str(tmp_path / "priv"), {})
+    env = {"HOME": str(tmp_path), "PATH": "%s:%s:/usr/bin:/bin" % (shims, real), "DISPLAY": ":99",
+           "XDG_DATA_HOME": str(tmp_path), "XDG_DATA_DIRS": str(tmp_path / "none"),
+           "XDG_CONFIG_HOME": str(tmp_path / "cfg"), "XDG_CONFIG_DIRS": str(tmp_path / "none")}
+    if browser:
+        env["BROWSER"] = str(real / browser)
+    subprocess.run([XDG_OPEN, "http://127.0.0.1:5500/a.html"], env=env, timeout=30,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert log.read_text().split() == [want, "http://127.0.0.1:5500/a.html"]
+    out = subprocess.run([os.path.join(shims, "xdg-mime"), "query", "default", "text/html"],
+                         env=env, capture_output=True, text=True).stdout
+    assert out.strip() == "desk.desktop"
+
+
 def test_window_manager_choice():
     have = lambda *names: (lambda n: n in names)   # noqa: E731
     assert xproxy.pick_wm({"wm": "auto"}, have("fvwm", "xfwm4")) == "fvwm"
