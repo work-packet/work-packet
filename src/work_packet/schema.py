@@ -5,6 +5,7 @@ Each ``validate_*`` function takes parsed data and returns a list of
 consistency is in ``check.py``.
 """
 
+import functools
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -287,7 +288,7 @@ def is_timestamp(v):
     if not isinstance(v, str) or not _TS_RX.match(v):
         return False
     try:
-        datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ")
+        parse_timestamp(v)
     except ValueError:
         return False
     return True
@@ -300,7 +301,10 @@ def format_timestamp(dt):
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+@functools.lru_cache(maxsize=8192)
 def parse_timestamp(v):
+    """``2026-10-21T18:02:11Z`` -> aware UTC datetime (immutable, so cached: a board
+    parses the same few thousand stamps on every build). Raises ValueError."""
     return datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 

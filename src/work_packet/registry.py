@@ -160,10 +160,16 @@ def entries(h=None):
 
 
 def get(name, h=None):
-    for e in entries(h):
-        if e["name"] == name:
-            return e
-    return None
+    """The entry ``name``, as ``entries()`` has it: its own file, not all of them."""
+    if not schema.is_name(name):
+        return None
+    try:
+        e = load_toml(entry_path(name, h))
+    except (OSError, ValueError):
+        return None
+    if [p for p in schema.validate_registry_entry(e, name) if p.level == "error"]:
+        return None
+    return e
 
 
 def register(entry, h=None):

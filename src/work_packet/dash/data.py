@@ -4,16 +4,19 @@ Every function here takes paths and returns plain dicts and lists, so the
 board can be tested without a web server.
 """
 
+import collections
 import json
 import os
+import pickle
 import shlex
 import socket
+import threading
 from datetime import datetime, timedelta
 from urllib.parse import quote as urlquote
 
 from .. import (clock, frontmatter, lease as lease_mod, notes as notes_mod, procs as procs_mod,
                questions, registry, report as report_mod, schema, stats)
-from .. import archived, layout, planning, views
+from .. import archived, fsutil, layout, planning, views
 from ..packet import Packet
 from ..project import ProjectError, load_project
 from ..views import packets, relative
@@ -31,18 +34,21 @@ COLUMN_CLASS = {"Inbox": "Inbox", "Needs you": "Needs", "Working: you": "You",
 TOOL_RESULT_MAX = 4000      # characters of one tool result shown in the step viewer
 
 
+def _read_text(path):
+    with open(path, encoding="utf-8", errors="replace") as fp:
+        return fp.read()
+
+
 def _read(path):
     try:
-        with open(path, encoding="utf-8", errors="replace") as fp:
-            return fp.read()
+        return fsutil.cached(path, _read_text, "text", copy=False)
     except OSError:
         return None
 
 
 def _json(path):
     try:
-        with open(path) as fp:
-            d = json.load(fp)
+        d = fsutil.load_json(path)
         return d if isinstance(d, dict) else None
     except (OSError, ValueError):
         return None
@@ -1418,68 +1424,107 @@ def activity(path):
     Returns ``{"events", "context", "output_tokens", "calls", "todos", "pending"}``:
     ``context`` is the last call's context size, ``todos`` the last TodoWrite
     list, and ``pending`` the tool call still waiting for its result, if any.
+
+    Read incrementally (docs/cpu-plan.md P2): each transcript's state is kept and
+    only the lines appended since are parsed; a shorter or replaced file starts over.
+    Each call gets its own copy.
     """
-    out = {"events": [], "context": None, "output_tokens": 0, "calls": 0, "todos": None,
-           "pending": None, "ended": None}
-    uses = {}
     try:
-        fp = open(path, encoding="utf-8", errors="replace")
+        st = os.stat(path)
     except OSError:
-        return out
-    with fp:
-        for line in fp:
+        return _feed_new()["out"]
+    with _feeds_lock:
+        f = _feeds.get(path)
+        if f is None or f["ino"] != st.st_ino or st.st_size < f["off"]:
+            f = _feeds[path] = _feed_new()
+            f["ino"] = st.st_ino
+        _feeds.move_to_end(path)
+        while len(_feeds) > FEEDS_MAX:
+            _feeds.popitem(last=False)
+        tail = b""
+        if st.st_size > f["off"]:
             try:
-                e = json.loads(line)
-            except ValueError:
+                with open(path, "rb") as fp:
+                    fp.seek(f["off"])
+                    data = fp.read()
+            except OSError:
+                data = b""
+            done = data.rfind(b"\n") + 1          # only whole lines move the state on
+            for line in data[:done].decode("utf-8", "replace").splitlines():
+                _feed_line(f, line)
+            f["off"] += done
+            f["out"]["events"] = f["out"]["events"][-FEED_MAX:]
+            tail = data[done:]
+        c = pickle.loads(pickle.dumps({"out": f["out"], "uses": f["uses"]}))
+    if tail.strip():                            # a last line with no newline (yet)
+        _feed_line(c, tail.decode("utf-8", "replace"))
+        c["out"]["events"] = c["out"]["events"][-FEED_MAX:]
+    c["out"]["pending"] = list(c["uses"].values())[-1] if c["uses"] else None
+    return c["out"]
+
+
+FEEDS_MAX = 256             # transcripts whose feed state is kept
+_feeds = collections.OrderedDict()   # path -> {"ino", "off", "out", "uses"}
+_feeds_lock = threading.Lock()
+
+
+def _feed_new():
+    return {"ino": None, "off": 0, "uses": {},
+            "out": {"events": [], "context": None, "output_tokens": 0, "calls": 0,
+                    "todos": None, "pending": None, "ended": None}}
+
+
+def _feed_line(f, line):
+    """One transcript line into the feed state ``f``."""
+    out, uses = f["out"], f["uses"]
+    try:
+        e = json.loads(line)
+    except ValueError:
+        return
+    if not isinstance(e, dict):
+        return
+    t = e.get("type")
+    if t == "assistant":
+        m = e.get("message") or {}
+        u = m.get("usage") or {}
+        if u:
+            out["calls"] += 1
+            out["context"] = sum(u.get(k) or 0 for k in (
+                "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+            out["output_tokens"] += u.get("output_tokens") or 0
+        for c in m.get("content") or ():
+            if not isinstance(c, dict):
                 continue
-            if not isinstance(e, dict):
-                continue
-            t = e.get("type")
-            if t == "assistant":
-                m = e.get("message") or {}
-                u = m.get("usage") or {}
-                if u:
-                    out["calls"] += 1
-                    out["context"] = sum(u.get(k) or 0 for k in (
-                        "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-                    out["output_tokens"] += u.get("output_tokens") or 0
-                for c in m.get("content") or ():
-                    if not isinstance(c, dict):
-                        continue
-                    if c.get("type") == "text" and c.get("text", "").strip():
-                        out["events"].append({"kind": "text", "label": _one_line(c["text"], 400)})
-                    elif c.get("type") == "tool_use":
-                        name, inp = c.get("name"), c.get("input")
-                        if name == "TodoWrite" and isinstance(inp, dict):
-                            out["todos"] = [{"content": x.get("content"),
-                                             "status": x.get("status"),
-                                             "active": x.get("activeForm")}
-                                            for x in inp.get("todos") or () if isinstance(x, dict)]
-                        label, detail = _tool_label(name, inp)
-                        ev = {"kind": "tool", "name": name, "label": _one_line(label),
-                              "detail": _one_line(detail, 300) if detail != label else "",
-                              "result": None, "error": False}
-                        out["events"].append(ev)
-                        uses[c.get("id")] = ev
-            elif t == "user":
-                for c in (e.get("message") or {}).get("content") or ():
-                    if isinstance(c, dict) and c.get("type") == "tool_result":
-                        ev = uses.pop(c.get("tool_use_id"), None)
-                        if ev is None:
-                            continue
-                        r = c.get("content")
-                        if isinstance(r, list):
-                            r = "\n".join(x.get("text", "") for x in r if isinstance(x, dict))
-                        lines = [ln for ln in str(r or "").splitlines() if ln.strip()]
-                        ev["error"] = bool(c.get("is_error"))
-                        ev["result"] = _one_line(lines[-1] if lines else "(no output)", 200)
-            elif t == "result":
-                out["ended"] = {"error": bool(e.get("is_error")), "cost": e.get("total_cost_usd"),
-                                "turns": e.get("num_turns")}
-    if uses:
-        out["pending"] = list(uses.values())[-1]
-    out["events"] = out["events"][-FEED_MAX:]
-    return out
+            if c.get("type") == "text" and c.get("text", "").strip():
+                out["events"].append({"kind": "text", "label": _one_line(c["text"], 400)})
+            elif c.get("type") == "tool_use":
+                name, inp = c.get("name"), c.get("input")
+                if name == "TodoWrite" and isinstance(inp, dict):
+                    out["todos"] = [{"content": x.get("content"),
+                                     "status": x.get("status"),
+                                     "active": x.get("activeForm")}
+                                    for x in inp.get("todos") or () if isinstance(x, dict)]
+                label, detail = _tool_label(name, inp)
+                ev = {"kind": "tool", "name": name, "label": _one_line(label),
+                      "detail": _one_line(detail, 300) if detail != label else "",
+                      "result": None, "error": False}
+                out["events"].append(ev)
+                uses[c.get("id")] = ev
+    elif t == "user":
+        for c in (e.get("message") or {}).get("content") or ():
+            if isinstance(c, dict) and c.get("type") == "tool_result":
+                ev = uses.pop(c.get("tool_use_id"), None)
+                if ev is None:
+                    continue
+                r = c.get("content")
+                if isinstance(r, list):
+                    r = "\n".join(x.get("text", "") for x in r if isinstance(x, dict))
+                lines = [ln for ln in str(r or "").splitlines() if ln.strip()]
+                ev["error"] = bool(c.get("is_error"))
+                ev["result"] = _one_line(lines[-1] if lines else "(no output)", 200)
+    elif t == "result":
+        out["ended"] = {"error": bool(e.get("is_error")), "cost": e.get("total_cost_usd"),
+                        "turns": e.get("num_turns")}
 
 
 LOG_RESULT_MAX = 20000      # characters of one tool result in the log view

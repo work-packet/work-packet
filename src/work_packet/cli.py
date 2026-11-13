@@ -2158,6 +2158,8 @@ def cmd_dash(args) -> int:
     import logging
     from . import registry
     logging.basicConfig(format="wpk dash: %(message)s", level=logging.WARNING)
+    if os.environ.get("WPK_DEBUG_LOOP"):       # the dispatcher's pass counts (docs/cpu-plan.md P0)
+        logging.getLogger("wpk.sched").setLevel(logging.INFO)
     try:
         cfg = registry.load_server_config()
     except registry.ConfigError as e:

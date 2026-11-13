@@ -36,8 +36,7 @@ def path(proj, source):
 
 def _load(p):
     try:
-        with open(p) as fp:
-            d = json.load(fp)
+        d = fsutil.load_json(p)
         return d if isinstance(d, dict) else None
     except (OSError, ValueError):
         return None

@@ -4,10 +4,13 @@ GET routes only read. The POST routes are the actions of docs/interaction.md §5
 each one a call into ``work_packet.actions`` or ``project`` and nothing more.
 """
 
+import asyncio
+import copy
 import datetime
 import json
 import logging
 import os
+import pickle
 import shutil
 import threading
 import time
@@ -173,6 +176,43 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
 
     jobs = newjobs.CreateJobs(home)       # New task's Create, in the background
 
+    # One board build at a time, off the event loop, shared by every page that
+    # asks while it runs (docs/cpu-plan.md P1.4): every open tab polls it. Not kept
+    # after: a change from the CLI or a step shows on the next load.
+    bcache = {"gen": 0, "task": None, "tgen": -1}
+
+    def board_build():
+        rows = []
+        cols, broken = data.board(home, rows=rows)
+        return cols, broken, rows
+
+    def board_done(f):
+        if bcache["task"] is f:
+            bcache["task"] = None
+
+    def board_copy(v):
+        try:
+            return pickle.loads(pickle.dumps(v))         # about 4x faster than deepcopy
+        except (pickle.PicklingError, TypeError, AttributeError):
+            return copy.deepcopy(v)
+
+    async def board_of(rows=None):
+        """``data.board(home)``: (cols, broken), a copy the caller may change;
+        ``rows``, given a list, gets every packet row."""
+        t = bcache["task"]
+        if t is None or bcache["tgen"] != bcache["gen"]:   # an action since: build anew
+            t = asyncio.ensure_future(run_in_threadpool(board_build))
+            bcache.update(task=t, tgen=bcache["gen"])
+            t.add_done_callback(board_done)
+        v = await asyncio.shield(t)                      # a closed tab doesn't cancel it
+        cols, broken, rs = await run_in_threadpool(board_copy, v)
+        if rows is not None:
+            rows.extend(rs)
+        return cols, broken
+
+    def board_changed():
+        bcache["gen"] += 1
+
     def render(request, name, status=200, **ctx):
         ctx["user"] = request.scope.get("state", {}).get("user")
         ctx["csrf"] = request.scope.get("state", {}).get("csrf")
@@ -199,6 +239,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         ctx["ide_sizes"] = ide_sizes() if getattr(ide_backend, "slot", False) else []
         ctx["ide_web"] = web_state(request, ctx["ide"])
         return HTMLResponse(env.get_template(name).render(**ctx), status_code=status)
+
+    async def arender(request, name, status=200, **ctx):
+        """``render`` off the event loop: templates and the banner's reads take time."""
+        return await run_in_threadpool(lambda: render(request, name, status, **ctx))
 
     def xpanels(request, slot, **ctx):
         """The plugins' panels for ``slot`` (design E7)."""
@@ -269,14 +313,15 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         finished), the boards' cost over ``?days=`` 1, 7 or 30 (docs/overview.md)."""
         from .. import attention
         days = days_of(request)
-        cols, broken = data.board(home)
+        cols, broken = await board_of()
         side = data.side(home, cols, broken)
         board = request.query_params.get("board")      # the Desk for one board (§8.1)
         if board not in [b["name"] for b in side]:
             board = None
         if board:
             cols, broken = data.only(cols, broken, board)
-        burn = tokens.board(archived.entries(home), days=days, on=[b["name"] for b in side])
+        burn = await run_in_threadpool(tokens.board, archived.entries(home), days=days,
+                                       on=[b["name"] for b in side])
         ov = data.overview(cols, broken, [b for b in side if not board or b["name"] == board],
                            burn)
         h, me = home or registry.home(), who(request)
@@ -300,7 +345,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         snap = await run_in_threadpool(dsched.snapshot, home)
         vsc = await run_in_threadpool(ide_sessions.recent_view, home or registry.home()) \
             if is_owner(request) else None
-        return render(request, "overview.html", ov=ov, burn=burn, broken=broken, live=True,
+        return await arender(request, "overview.html", ov=ov, burn=burn, broken=broken, live=True,
                       vsc=vsc, board=board, since=since, last=last,
                       sch=dsched.tiles(snap), xpanels=xpanels(request, "overview"),
                       home=home or registry.home(), side=side, here=None,
@@ -316,13 +361,13 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     async def stats_page(request):
         """Statistics (``/stats``): token use over ``?days=`` 1, 7 or 30, which the
         Overview showed at its foot (docs/overview-recent.md §3)."""
-        cols, broken = data.board(home)
+        cols, broken = await board_of()
         side = data.side(home, cols, broken)
         burn = await run_in_threadpool(
             lambda: tokens.board(archived.entries(home), days=days_of(request),
                                  on=[b["name"] for b in side], home=home or registry.home(),
                                  sessions=is_owner(request)))
-        return render(request, "stats.html", burn=burn, side=side, here=None,
+        return await arender(request, "stats.html", burn=burn, side=side, here=None,
                       windows=tokens.WINDOWS)
 
     def run_links(vs):
@@ -342,8 +387,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         """DFM runs (``/runs``; docs/dfm-events.md §5): live first, then newest."""
         wpid = request.query_params.get("wpid") or None
         vs = await run_in_threadpool(lambda: run_links(dfmrun.runs(dfm_home(), wpid=wpid)))
-        cols, broken = data.board(home)
-        return render(request, "runs.html", runs=vs, wpid=wpid, live=any(v["live"] for v in vs),
+        cols, broken = await board_of()
+        return await arender(request, "runs.html", runs=vs, wpid=wpid, live=any(v["live"] for v in vs),
                       refresh_ms=LIVE_MS, side=data.side(home, cols, broken))
 
     async def run_page(request):
@@ -354,7 +399,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             return not_found(request, "DFM run %s" % sid)
         r = run_links([dfmrun.view(run)])[0]
         kids = [k for k in await run_in_threadpool(dfmrun.runs, dfm_home()) if k["parent"] == sid]
-        return render(request, "run.html", r=r, kids=kids, live=r["live"], refresh_ms=LIVE_MS)
+        return await arender(request, "run.html", r=r, kids=kids, live=r["live"], refresh_ms=LIVE_MS)
 
     async def run_log(request):
         """The tail of one task's log, if the run's journal names it inside its rundir."""
@@ -370,7 +415,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     async def board(request):
         """One board (``/b/{board}``; docs/boards.md): its cards."""
         name = request.path_params["board"]
-        cols, broken = data.board(home)
+        cols, broken = await board_of()
         side = data.side(home, cols, broken)
         here = next((b for b in side if b["name"] == name), None)
         if here is None:
@@ -384,7 +429,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         watchers = await run_in_threadpool(data.watchers, home, name)
         ib = await run_in_threadpool(data.inbox_view, home, cols, name)
         msv = await run_in_threadpool(data.milestones_view, home, cols, name)
-        return render(request, "board.html", cols=cols, broken=broken, live=True,
+        return await arender(request, "board.html", cols=cols, broken=broken, live=True,
                       milestones=msv,
                       waiting=dsched.waiting(snap), watchers=watchers, captures=ib["entries"],
                       inbox_requests=ib["requests"], inbox_projects=ib["projects"],
@@ -484,7 +529,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     async def all_packets(request):
         """Every packet on every board, to sort and search (docs/boards.md)."""
         rows = []
-        cols, broken = data.board(home, rows=rows)
+        cols, broken = await board_of(rows=rows)
         states = sorted({r["state"] for r in rows}, key=str)
         snap = await run_in_threadpool(dsched.snapshot, home)
         cls = {}
@@ -492,7 +537,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             for r in rows:
                 if r["project"] == e["name"]:
                     cls[r["wpid"]] = dsched.packet_info(snap, e, r["wpid"])
-        return render(request, "packets.html", rows=rows, broken=broken, states=states,
+        return await arender(request, "packets.html", rows=rows, broken=broken, states=states,
                       sch=cls, classes=CLASSES, sizes=picker_sizes((snap or {}).get("sizes", {})),
                       boards=registry.boards(home),
                       side=data.side(home, cols, broken), live=True)
@@ -669,7 +714,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         if docs.building(ds) is None and rec is None:
             await run_in_threadpool(docs.kick, e["path"], None, False, (ent, name),
                                     who(request), home, 2)
-        return render(request, "docs_wait.html", e=e, ds=ds, rec=rec,
+        return await arender(request, "docs_wait.html", e=e, ds=ds, rec=rec,
                       building=docs.building(ds) is not None or rec is None)
 
     async def docs_log(request):
@@ -690,7 +735,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         f = await form(request)
         one = lambda k: (f.get(k) or [""])[0]
         url = local(one("back"), "/p/%s" % urllib.parse.quote(e["name"]))
-        card = packet_top(e, clock.now(), data.tree(e, clock.now()))[0]
+        card = (await run_in_threadpool(lambda: packet_top(e, clock.now(),
+                                                           data.tree(e, clock.now()))))[0]
         wpid = (card.get("running") or {}).get("wpid")
         got = await run_in_threadpool(docs.kick, e["path"], wpid, False,
                                       (one("entry"), one("name")), who(request), home, 2)
@@ -706,10 +752,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     async def sched_page(request):
         snap = await run_in_threadpool(dsched.snapshot, home)
         ch = await run_in_threadpool(dsched.chart, snap, home) if snap else None
-        cols, broken = data.board(home)
+        cols, broken = await board_of()
         creds = await run_in_threadpool(dsched.credential_rows, request, home)
         xp = await run_in_threadpool(xpanels, request, "sched")
-        return render(request, "sched.html", snap=snap, chart=ch, live=True, creds=creds, xpanels=xp,
+        return await arender(request, "sched.html", snap=snap, chart=ch, live=True, creds=creds, xpanels=xp,
                       lines=None if snap else ["the config cannot be read"],
                       events=dsched.recent(home), modes=dsched.MODES,
                       side=data.side(home, cols, broken))
@@ -884,7 +930,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         f = await form(request)
         names = [n for n in f.get("project") or () if n]
         if (f.get("all") or [""])[0]:
-            cols, _ = data.board(home)
+            cols, _ = await board_of()
             names = [c["name"] for v in cols.values() for c in v if c["unread"]]
         if not names:
             return back("/#attention", executor.Outcome(executor.USAGE, "tick some first"),
@@ -906,8 +952,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             if e is None:
                 return not_found(request, "project %s" % request.path_params["project"])
             now = clock.now()
-            nodes = data.tree(e, now)
-            card, ts = packet_top(e, now, nodes)
+            nodes = await run_in_threadpool(data.tree, e, now)
+            card, ts = await run_in_threadpool(packet_top, e, now, nodes)
             if card["unread"]:
                 await run_in_threadpool(mark_seen, request, e, nodes)
             kw = dict(e=e, card=card, nodes=nodes, tasks=ts, work=work_rows(e),
@@ -921,7 +967,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         nodes = kw["nodes"]
         root = nodes[0] if nodes else None
         # A finished project leads with its root packet's completion report.
-        rp = (data.packet(e, root["wpid"])
+        rp = (await run_in_threadpool(data.packet, e, root["wpid"])
               if root and root["state"] in ("COMPLETED", "FAILED") else None)
         bs = registry.boards(home)
         from .. import questions
@@ -935,7 +981,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         jl = await run_in_threadpool(jobs.all_jobs, e["path"])
         sv = await run_in_threadpool(split_mod.view, e, home)
         auto = request.query_params.get("open")    # just made: open it (collaboration.md W1)
-        return render(request, "project.html", rp=rp, live=True, asks=asks, vsc=vsc,
+        return await arender(request, "project.html", rp=rp, live=True, asks=asks, vsc=vsc,
                       autoopen=auto if auto in ("ide-web", "ide-desktop", "studio") else None,
                       jobs=jl[:10], more_jobs=max(len(jl) - 10, 0), now_t=time.time(),
                       is_owner=is_owner(request), sv=sv,
@@ -948,7 +994,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         states = sorted({t["state"] for t in kw["tasks"]}, key=str)
         if state:
             kw["tasks"] = [t for t in kw["tasks"] if t["state"] == state]
-        return render(request, "project_tasks.html", state=state, states=states, **kw)
+        return await arender(request, "project_tasks.html", state=state, states=states, **kw)
 
     async def project_task(request, e, now, kw):
         try:
@@ -958,7 +1004,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         t = data.task(e, kw["tasks"], n)
         if t is None:
             return not_found(request, "task %s" % request.path_params["n"])
-        return render(request, "task.html", t=t, live=bool(t["task"]["running"]), **kw)
+        return await arender(request, "task.html", t=t, live=bool(t["task"]["running"]), **kw)
 
     STEPS_PAGE = 50
 
@@ -978,26 +1024,26 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         except ValueError:
             page = 1
         kw["tasks"] = opts
-        return render(request, "project_steps.html", task=task, total=len(rows), page=page,
+        return await arender(request, "project_steps.html", task=task, total=len(rows), page=page,
                       pages=pages, steps=rows[(page - 1) * STEPS_PAGE:page * STEPS_PAGE], **kw)
 
     async def project_cost(request, e, now, kw):
         # the sessions people drove, as the VS Code sessions tables: the owner only
         tk = await run_in_threadpool(tokens.project, e, now, 14, home or registry.home(),
                                      is_owner(request))
-        return render(request, "project_cost.html", tk=tk, **kw)
+        return await arender(request, "project_cost.html", tk=tk, **kw)
 
     async def project_settings(request, e, now, kw):
         bs = registry.boards(home)
         snap = await run_in_threadpool(dsched.snapshot, home)
-        return render(request, "project_settings.html", settings=data.settings(e),
+        return await arender(request, "project_settings.html", settings=data.settings(e),
                       sch=dsched.project_info(snap, e), classes=CLASSES, boards=bs,
                       xpanels=xpanels(request, "settings", project=e),
                       on=registry.board_of(e, [b["name"] for b in bs]), **kw)
 
     async def packet(request):
         e = entry(request)
-        p = data.packet(e, request.path_params["wpid"]) if e else None
+        p = await run_in_threadpool(data.packet, e, request.path_params["wpid"]) if e else None
         if p is None:
             return not_found(request, "packet %s" % request.path_params["wpid"])
         await run_in_threadpool(mark_seen, request, e)
@@ -1016,11 +1062,11 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         auto = request.query_params.get("open")    # just made: open it (collaboration.md W1)
         rl = await run_in_threadpool(data.review_load, home) \
             if p["meta"].get("state") in ("PAUSED", "FAILED", "COMPLETED", "NEEDS_INPUT") else None
-        return render(request, "packet.html", e=e, p=p, live=True, classes=CLASSES, dfm=dfm,
+        return await arender(request, "packet.html", e=e, p=p, live=True, classes=CLASSES, dfm=dfm,
                       convs=convs, docs_built=built, vsc=vsc, rl=rl, strand=strand,
                       autoopen=auto if auto in ("ide-web", "ide-desktop", "studio") else None,
                       sch=dsched.packet_info(snap, e, request.path_params["wpid"]),
-                      tk=tokens.packet(e, request.path_params["wpid"]))
+                      tk=await run_in_threadpool(tokens.packet, e, request.path_params["wpid"]))
 
     async def step(request):
         e = entry(request)
@@ -1036,7 +1082,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         n = data.schema.parse_step_dir(request.path_params["step"])
         dfm = await run_in_threadpool(dfmrun.runs, dfm_home(), wpid=request.path_params["wpid"],
                                       step=n[0] if n else None) if n else []
-        return render(request, "step.html", e=e, s=s, view=view, tk=tokens.step(sd, s["meta"]),
+        return await arender(request, "step.html", e=e, s=s, view=view, tk=tokens.step(sd, s["meta"]),
                       dfm=dfm, live=s["info"]["outcome"] == "running" or any(r["live"] for r in dfm))
 
     # --- actions (POST) ---------------------------------------------------------
@@ -1050,6 +1096,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             runner.poke()
 
     def back(url, out, poke_runner=True):
+        board_changed()
         if out.code == 0 and poke_runner:
             poke()
         q = urllib.parse.urlencode({"msg": out.msg, "ok": "1" if out.code == 0 else "0"})
@@ -1186,9 +1233,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         """The Backlog (docs/collaboration.md §9): your projects by priority, what
         you captured, and what has gone untouched."""
         from .. import inbox
-        cols, broken = data.board(home)
+        cols, broken = await board_of()
         side = data.side(home, cols, broken)
-        return render(request, "backlog.html", bl=data.backlog(cols), side=side, here=None,
+        return await arender(request, "backlog.html", bl=data.backlog(cols), side=side, here=None,
                       inbox=data.inbox_view(home, cols))
 
     async def capture(request):
@@ -1214,7 +1261,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         if d is None or (d.get("ref") or {}).get("learn") is None:
             return not_found(request, "proposal %s" % request.path_params["iid"])
         names = [e["name"] for e in registry.entries(home)]
-        return render(request, "learn.html", d=d, ref=d["ref"], names=names,
+        return await arender(request, "learn.html", d=d, ref=d["ref"], names=names,
                       owner=is_owner(request))
 
     async def learn_post(request):
@@ -1332,11 +1379,11 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         b = await run_in_threadpool(brief.load, h, day)
         if b is None and "day" in request.path_params:
             return not_found(request, "a brief for %s" % day)
-        cols, broken = data.board(home)
+        cols, broken = await board_of()
         cards = [c for cs in cols.values() for c in cs]
         rows = await run_in_threadpool(brief.live_rows, h, b, cards) if b else None
         w = brief.writing() if day == time.strftime("%Y-%m-%d") else None
-        return render(request, "brief.html", b=b, day=day, days=brief.days(h), rows=rows,
+        return await arender(request, "brief.html", b=b, day=day, days=brief.days(h), rows=rows,
                       writing=w, now_s=time.time(),
                       html=data.md(brief.render(b, ("head", "decide", "close_out", "runs") if rows else ()))
                       if b else None, side=data.side(home, cols, broken), here=None)
@@ -1388,10 +1435,10 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         return back(local(one("back"), "/"), executor.Outcome(executor.OK, "%s: %s" % (
             one("project"), one("kind"))), poke_runner=False)
 
-    def _rhythm(request, **kw):
+    async def _rhythm(request, **kw):
         from .. import reviews
-        cols, broken = data.board(home)
-        return render(request, "rhythm.html", side=data.side(home, cols, broken), here=None,
+        cols, broken = await board_of()
+        return await arender(request, "rhythm.html", side=data.side(home, cols, broken), here=None,
                       boards=registry.boards(home), kept=reviews.kept(home or registry.home()),
                       **kw)
 
@@ -1415,7 +1462,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                 note = ("This week so far, not kept yet: the board writes the review on "
                         "[focus] review_day after review_time (Friday 16:00 unless set).")
         text = reviews.render_weekly(r)
-        return _rhythm(request, kind="review", title="Week %s · Review" % r["week"], r=r,
+        return await _rhythm(request, kind="review", title="Week %s · Review" % r["week"], r=r,
                        back_to="/review",
                        md=text, html=data.md(text), weeks=reviews.reviews(h), note=note,
                        keep_name=None)
@@ -1448,7 +1495,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         from .. import reviews
         s = await run_in_threadpool(reviews.standup, home or registry.home())
         text = reviews.render_standup(s)
-        return _rhythm(request, kind="standup", title="Standup %s" % s["day"], md=text,
+        return await _rhythm(request, kind="standup", title="Standup %s" % s["day"], md=text,
                        back_to="/standup",
                        html=data.md(text), keep_name=None)
 
@@ -1463,7 +1510,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             return not_found(request, "milestone %s on %s" % (m, b))
         s = await run_in_threadpool(lambda: reviews.status(h, b, m))
         text = reviews.render_status(s)
-        return _rhythm(request, kind="status", title="Status: %s%s" % (b, " · " + m if m else ""),
+        return await _rhythm(request, kind="status", title="Status: %s%s" % (b, " · " + m if m else ""),
                        back_to="/status/%s%s" % (urllib.parse.quote(b),
                                                  "/" + urllib.parse.quote(m) if m else ""),
                        md=text, html=data.md(text), keep_name=b + ("-" + m if m else ""))
@@ -1502,8 +1549,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         """The end of the day (docs/collaboration.md §9.5)."""
         from .. import brief
         s = await run_in_threadpool(brief.shutdown, home or registry.home())
-        cols, broken = data.board(home)
-        return render(request, "shutdown.html", s=s, side=data.side(home, cols, broken),
+        cols, broken = await board_of()
+        return await arender(request, "shutdown.html", s=s, side=data.side(home, cols, broken),
                       here=None)
 
     async def shutdown_handoff(request):
@@ -1580,13 +1627,13 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         day, the hooks switch, pushes and browser notifications."""
         from .. import ide, sessionhooks, settings
         h = home or registry.home()
-        cols, broken = data.board(home)
+        cols, broken = await board_of()
         cur = await run_in_threadpool(settings.current, home)
         rows = [{"name": "%s.%s" % (t, k), "type": typ.__name__, "label": lb,
                  "value": "" if (t, k) in settings.SECRET else cur[(t, k)],
                  "set": bool(cur[(t, k)]), "secret": (t, k) in settings.SECRET,
                  "default": d, "table": t} for t, k, typ, d, lb in settings.KEYS]
-        return render(request, "settings.html", rows=rows, owner=is_owner(request),
+        return await arender(request, "settings.html", rows=rows, owner=is_owner(request),
                       notes=registry.notes(None, home), notes_path=registry.notes_path(None, home),
                       hooks=sessionhooks.enabled(ide.load_config(h), h),
                       side=data.side(home, cols, broken), here=None)
@@ -1651,7 +1698,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Reads only."""
         from .. import attention, notify
         h = home or registry.home()
-        cols, _ = data.board(home)
+        cols, _ = await board_of()
         cfg = notify.config(registry.load_config_file(home).get("notify"))
         now = time.time()
         snz = attention.snoozes(h, who(request), now)
@@ -1704,7 +1751,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         if not d["seen"] and d["state"] != "running" and is_owner(request):
             await run_in_threadpool(jobs.mark_seen, e["path"], d["id"])
         log = await run_in_threadpool(jobs.tail, e["path"], d["id"])
-        return render(request, "job.html", e=e, j=d, log=log, cmd=jobs.quote(d["cmd"]),
+        return await arender(request, "job.html", e=e, j=d, log=log, cmd=jobs.quote(d["cmd"]),
                       live=d["state"] == "running",
                       took=views.span((d["end"] or time.time()) - d["start"]))
 
@@ -1822,7 +1869,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         """Every conversation the console has had (docs/console.md §5)."""
         rows = await run_in_threadpool(conv_rows, lambda m: True)
         cols, broken = await run_in_threadpool(data.board, home)
-        return render(request, "console_list.html", rows=rows, agent_on=agents is not None,
+        return await arender(request, "console_list.html", rows=rows, agent_on=agents is not None,
                       side=data.side(home, cols, broken))
 
     async def console_view(request):
@@ -1843,12 +1890,12 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                 props = {p["at"]: p for p in x.get("props") or []}
                 x["parts"] = [(ln, props.get(i), acted.get("%s:%d" % (x.get("id"), props[i]["i"]))
                                if i in props else None) for i, ln in enumerate(lines)]
-        return render(request, "console_view.html", m=dict(m, page=_scope_href(m)), ev=ev,
+        return await arender(request, "console_view.html", m=dict(m, page=_scope_href(m)), ev=ev,
                       scope=console.scope_of(_scope_href(m)), busy=agents.busy(m["id"]))
 
     async def project_console(request, e, now, kw):
         rows = await run_in_threadpool(conv_rows, lambda m: m.get("project") == e["name"])
-        return render(request, "project_console.html", rows=rows, agent_on=agents is not None,
+        return await arender(request, "project_console.html", rows=rows, agent_on=agents is not None,
                       **kw)
 
     async def console_commands(request):
@@ -1974,7 +2021,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         host = ide.ssh_host(cfg, name=name)
         links = {"remote": ide.desktop_url(op, host), "local": ide.desktop_url(op)}
         first = ide.desktop_choice(cfg, st.get("listener"), request.headers.get("user-agent"))
-        return render(request, "ide_open.html", e=e, op=op, wpid=wpid, paused=paused,
+        return await arender(request, "ide_open.html", e=e, op=op, wpid=wpid, paused=paused,
                       links=links, first=first, host=host)
 
     async def configure(request):
@@ -2214,7 +2261,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             c["instruction"] = request.query_params["instruction"]
         rl = await run_in_threadpool(data.review_load, home)
         from .. import split as split_mod
-        return render(request, "compose.html", e=e, c=c, settings=data.settings(e), rl=rl,
+        return await arender(request, "compose.html", e=e, c=c, settings=data.settings(e), rl=rl,
                       split_ok=c["mode"] == "next" and split_mod.allowed(e) is None,
                       shells=shells.of_project(e["name"]) if shells else [],
                       shell_ok=shells is not None and vendored.built("term"))
@@ -2449,13 +2496,14 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     async def live_view(request):
         e = entry(request)
         view = _view(request, "feed")
-        lv = data.live(e, request.path_params["wpid"], view=view) if e else None
+        lv = await run_in_threadpool(lambda: data.live(e, request.path_params["wpid"], view=view)) \
+            if e else None
         if lv is None:
             return not_found(request, "packet %s" % request.path_params["wpid"])
         await run_in_threadpool(mark_seen, request, e)
         dfm = await run_in_threadpool(dfmrun.runs, dfm_home(), wpid=request.path_params["wpid"],
                                       step=lv["step"]["n"]) if lv["step"] else []
-        return render(request, "live.html", e=e, l=lv, view=view, live=True, dfm=dfm,
+        return await arender(request, "live.html", e=e, l=lv, view=view, live=True, dfm=dfm,
                       dfm_pids={r["pid"]: r for r in dfm if r["live"] and r["pid"]},
                       refresh_ms=LIVE_MS, procs_max=PROCS_MAX)
 
@@ -2537,7 +2585,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                     q.get("open") if q.get("open") in ("all", "none") else None)
         if pl is None:
             return not_found(request, "packet %s" % wpid)
-        return render(request, "plan.html", e=e, pl=pl, MARK=plan.MARK)
+        return await arender(request, "plan.html", e=e, pl=pl, MARK=plan.MARK)
 
     async def doc(request):
         """A file or folder in the project's ``work/`` (docs/doc-markup.md)."""
@@ -2549,7 +2597,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             return not_found(request, "file %s" % rel)
         p, is_dir = hit
         if is_dir:
-            return render(request, "doc.html", e=e, wpid=None, rel=rel, html=None,
+            return await arender(request, "doc.html", e=e, wpid=None, rel=rel, html=None,
                           listing=data.doc_listing(p, rel))
         return file_page(request, e, p, rel, lambda d: data.doc_link(e, d))
 
@@ -2696,7 +2744,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         if last.get("project"):
             back = "/p/%s" % urllib.parse.quote(last["project"]) + \
                 ("/%s" % last["wpid"] if last.get("wpid") else "")
-        return render(request, "desk.html", key=k, back=back,
+        return await arender(request, "desk.html", key=k, back=back,
                       title=desktop.label(h, k, ide_backend.target(k)))
 
     async def desk_state(request):

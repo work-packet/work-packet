@@ -229,9 +229,14 @@ def _finish(card, e, buf):
     card.entries.append(e)
 
 
-def load(path):
+def _load(path):
     with open(path, encoding="utf-8", errors="replace") as fp:
         return parse(fp.read())
+
+
+def load(path):
+    """Reused while the file is unchanged (fsutil.cached); each call gets its own copy."""
+    return fsutil.cached(path, _load, "card")
 
 
 # --- writing ----------------------------------------------------------------------

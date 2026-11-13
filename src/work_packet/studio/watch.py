@@ -16,10 +16,13 @@ import hashlib
 import os
 import time
 
-INTERVAL_S = 0.5
+INTERVAL_S = 2.0
 WINDOW_S = 10.0
 EXCLUDE = (".work-packet", ".git", ".studio", "packages", "node_modules", "__pycache__",
            ".venv")
+# The watcher does not walk generated build and sim trees (cpu-plan P1.7); the
+# tree still shows them and versions still take what they hold.
+WALK_EXCLUDE = EXCLUDE + ("build", "sim_build", "obj_dir", "rundir")
 TOP_EXCLUDE = ("packets", "project.toml")      # a legacy project's runs, at its top only
 MAX_FILES = 20000
 HASH_MAX = 64 << 20         # bigger files are compared by mtime and size only
@@ -71,7 +74,7 @@ def scan(root, exclude=EXCLUDE, prefix="", folder=True):
 
 
 class Watcher:
-    def __init__(self, root, exclude=EXCLUDE, window_s=WINDOW_S, clock=time.time, extra=None):
+    def __init__(self, root, exclude=WALK_EXCLUDE, window_s=WINDOW_S, clock=time.time, extra=None):
         self.root = os.path.abspath(root)
         self.extra = {k: os.path.abspath(v) for k, v in (extra or {}).items()}
         self.exclude = exclude

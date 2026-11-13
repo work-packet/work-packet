@@ -49,10 +49,17 @@ def put(home, rec, hours):
     out = {k: rec[k] for k in WHO if rec.get(k) is not None}
     out["hours"] = clean_hours(hours)
     path = os.path.join(d, "%s-%s.json" % (rec["harness"], rec["session_id"]))
+    text = json.dumps(out, sort_keys=True)
+    try:
+        with open(path) as fp:
+            if fp.read() == text:
+                return out              # unchanged: keep its mtime, and ``cached``'s
+    except (OSError, ValueError):
+        pass
     tmp = "%s.%d.tmp" % (path, os.getpid())
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fp:
-        json.dump(out, fp, sort_keys=True)
+        fp.write(text)
     os.replace(tmp, path)
     return out
 

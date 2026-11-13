@@ -20,6 +20,8 @@ log = logging.getLogger("wpk.sched")
 
 KILL_AFTER_S = 30          # SIGTERM, then SIGKILL this much later
 FALLBACK_S = 30            # fill at least this often while jobs run
+IDE_POLL_S = 5.0           # how often to look at IDE jobs when no step job is out
+STATS_S = 60               # log the loop's pass counts this often (info; WPK_DEBUG_LOOP)
 BACKOFF_S = (30, 600)      # a failing submit: 30 s, doubling to 10 min
 LOW_CPU = 0.2              # a multi-core job that used less than this share of its cores
 
@@ -520,9 +522,13 @@ class Dispatcher:
         every ``poll``. On stop, starts nothing more and, for the local backend,
         waits for running steps (they are this process's children)."""
         self.adopt()
+        if hasattr(self.backend, "on_exit"):
+            self.backend.on_exit = poke.set    # a step's end wakes the loop, not the next poll
         events.append("wpkd_start", h=self.h, backend=self.backend.name, pid=os.getpid())
         last_fill = 0.0
         want_fill = True
+        counts = {"passes": 0, "fills": 0, "started": 0}
+        stats_at = time.monotonic()
         self.creds = credentials.Watcher(self.h)
         self.creds.add(self._creds_changed)
         from . import budget
@@ -535,15 +541,22 @@ class Dispatcher:
                 if self.budget_poll.poll(self.cfg(), self.now()):
                     want_fill = True           # a new reading may open or close gates
                 ended = self.reap()
+                counts["passes"] += 1
                 if poked or ended or want_fill or time.monotonic() - last_fill > FALLBACK_S:
                     scheduler._sync_requests(self.h)
-                    self.fill()
+                    self._filled_at = self.now()
+                    counts["started"] += len(self.fill())
+                    counts["fills"] += 1
                     last_fill = time.monotonic()
                 want_fill = False
                 wait = self.wait_s(max_wait)
             except Exception:                  # keep the pool alive; say why
                 log.exception("dispatcher pass failed")
                 wait = max_wait
+            if time.monotonic() - stats_at >= STATS_S:
+                log.info("dispatcher: %(passes)d passes, %(fills)d fills, %(started)d started", counts)
+                counts = dict.fromkeys(counts, 0)
+                stats_at = time.monotonic()
             if poke.wait(wait):
                 continue
             want_fill = self._timer_due()
@@ -561,21 +574,28 @@ class Dispatcher:
         return t is not None and t <= self.now()
 
     def wait_s(self, max_wait=60.0):
-        """How long to sleep: the backend's poll interval while jobs are out,
-        else until the next ``wake_at`` (at most ``max_wait``)."""
+        """How long to sleep: the backend's poll interval while step jobs are out
+        (IDE_POLL_S while only IDE jobs are), else until the next ``wake_at`` (at
+        most ``max_wait``). A ``wake_at`` the last fill already saw is not waited
+        for again: a sleeper held back by a hold, a cap or a gate starts on the
+        poke, job end or FALLBACK_S fill that lets it, not on a 0.5 s re-fire."""
         cfg = self.cfg()
         poll = schema.parse_duration(cfg["poll"]) if cfg.get("poll") else self.backend.poll_s
-        self._next_wake = scheduler.next_wake(self.entries())
+        self._next_wake = scheduler.next_wake(self.entries(), after=self._filled_at)
         wait = max_wait
         if self._next_wake is not None:
             wait = max(0.5, min(wait, (self._next_wake - self.now()).total_seconds() + 0.5))
-        if self.live() or jobs.all(self.h):
+        recs = jobs.all(self.h)
+        if any(r.kind != "ide" for r in recs):
             wait = min(wait, poll)
+        elif recs:
+            wait = min(wait, max(poll, IDE_POLL_S))
         if self.backoff_until is not None:
             wait = min(wait, max(0.5, self.backoff_until - self.now().timestamp()))
         return wait
 
     _next_wake = None
+    _filled_at = None                   # clock time of the last fill (its wake_at's are seen)
 
     def _drain(self, timeout):
         if self.backend.name != "local":

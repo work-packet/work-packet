@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 
 from ... import procs
 from . import DONE, PENDING, RUNNING, Backend, JobState
@@ -47,12 +48,20 @@ def step_argv(path, lost=None):
 
 class Local(Backend):
     name = "local"
-    poll_s = 0.25                         # Popen.poll is cheap
+    poll_s = 2.0                          # a child's exit calls on_exit at once; this
+                                          # catches adopted jobs (not our children)
     holds_room_while_pending = False      # nothing pends: a job starts at once
 
     def __init__(self, h=None):
         self.h = h
         self._kids = {}                   # ref -> Popen, for the jobs this process started
+        self.on_exit = None               # called (no args) when a started job exits
+
+    def _wait(self, p):
+        p.wait()
+        cb = self.on_exit
+        if cb is not None:
+            cb()
 
     def submit(self, task):
         argv = task.argv or step_argv(task.path, task.lost)
@@ -64,6 +73,7 @@ class Local(Backend):
         st = procs._stat(p.pid)
         ref = "%d:%s" % (p.pid, st["start"] if st else "")
         self._kids[ref] = p
+        threading.Thread(target=self._wait, args=(p,), name="wpk-job-wait", daemon=True).start()
         return ref
 
     def poll(self, refs):

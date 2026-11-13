@@ -20,7 +20,12 @@ def append(path, rec):
 
 
 def read(path):
-    """Read every record. A torn last line (crash mid-append) is noted, not raised."""
+    """Read every record. A torn last line (crash mid-append) is noted, not raised.
+    Reused while the file is unchanged (fsutil.cached)."""
+    return fsutil.cached(path, _read, "journal")
+
+
+def _read(path):
     j = Journal()
     try:
         with open(path, "r", encoding="utf-8") as fp:

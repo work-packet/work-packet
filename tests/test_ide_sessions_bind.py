@@ -481,3 +481,64 @@ def test_codex_sub_agents_keep_it_working(world, monkeypatch):
     rec = presence.records(proj, now, ttl=None)[0]
     assert rec["turn"] == "waiting" and rec["background"] == ""
     assert "SENTINEL" not in open(presence.path(proj, "codex-" + CID)).read()
+
+
+def _count_writes(monkeypatch):
+    n = []
+    real = os.replace
+    monkeypatch.setattr(os, "replace", lambda a, b: n.append(b) or real(a, b))
+    return n
+
+
+def test_passes_with_nothing_new_write_nothing(world, monkeypatch):
+    w = world
+    srv = w.server([w.claude(SID[0])])
+    w.write(w.claude_path(SID[0]), _fixture("claude_vscode.jsonl", sid=SID[0], cwd=w.folder))
+    w.wait_ready(1)
+    c = w.collector(srv)
+    assert c.pass_once() == 1
+    s._CACHE.clear()
+    assert s.cached_records(w.home)[0]["live"]
+    mtime = os.stat(s.sessions_dir(w.home)).st_mtime_ns
+    writes = _count_writes(monkeypatch)
+    c.pass_once()
+    assert writes == [] and os.stat(s.sessions_dir(w.home)).st_mtime_ns == mtime
+    reads = []
+    real = s.records
+    monkeypatch.setattr(s, "records", lambda h: reads.append(h) or real(h))
+    assert s.cached_records(w.home)[0]["live"] and reads == []      # the cache hits
+    # it ends: stored once as ended, then left alone
+    os.killpg(srv.pid, signal.SIGKILL)
+    srv.wait()
+    c.root = None
+    c.pass_once()
+    assert writes and _recs(w)[SID[0]]["live"] is False
+    del writes[:]
+    packets = []
+    monkeypatch.setattr(c, "_packet", lambda env: packets.append(env) or (None, None))
+    c.pass_once()
+    assert writes == [] and packets == []           # not worked out again
+    w.write(w.claude_path(SID[0]), _fixture("claude_vscode.jsonl", sid=SID[0], cwd=w.folder)[:1])
+    c.pass_once()
+    assert writes and packets                       # something new: stored again
+
+
+def test_one_proc_scan_per_pass_for_every_launch(world, monkeypatch):
+    w = world
+    key2 = "0123456789ac"
+    os.makedirs(ide_launch.server_dir(w.home, key2))
+    lids = []
+    for key, sid in ((KEY, SID[0]), (key2, SID[1])):
+        lid = ide_launch.start(w.home, key, w.folder, "local", now=T0)
+        srv = w.server([w.claude(sid)], launch_id=lid)
+        ide_launch.update(w.home, key, lid, pid=srv.pid)
+        lids.append(lid)
+    w.wait_ready(2)
+    scans = []
+    real = s.proc_children
+    monkeypatch.setattr(s, "proc_children", lambda: scans.append(1) or real())
+    cs = {}
+    assert s.local_pass(w.home, cs) == 2 and sorted(cs) == sorted(lids)
+    assert len(scans) == 1
+    s.local_pass(w.home, cs)
+    assert len(scans) == 2

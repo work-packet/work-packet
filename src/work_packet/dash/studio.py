@@ -909,6 +909,16 @@ def routes(home, agents, render, entry, who, not_found):
         if st["open"]:
             take_version(e, wpid, st, "agent", turn={"conv": cid, "t": end_t})
 
+    def _visible(msg, shown):
+        """``shown`` after a client message: ``{"type": "visible", "on": bool}``."""
+        try:
+            m = json.loads(msg.get("text") or "")
+        except ValueError:
+            return shown
+        if isinstance(m, dict) and m.get("type") == "visible":
+            return bool(m.get("on"))
+        return shown
+
     async def ws(sock):
         await sock.accept()
         try:
@@ -945,27 +955,38 @@ def routes(home, agents, render, entry, who, not_found):
                 if ev.get("t", 0) > since:
                     await sock.send_text(json.dumps(gone_marked(ev, st["folder"])))
             rx = asyncio.ensure_future(sock.receive())
+            # The tab reports {"type": "visible", "on": ...}: no scans while it is
+            # hidden, except one after an agent write (its mark lasts WINDOW_S).
+            shown, wrote = True, False
             while True:
                 get = asyncio.ensure_future(queue.get())
                 done, _ = await asyncio.wait({rx, get}, timeout=watch.INTERVAL_S,
                                              return_when=asyncio.FIRST_COMPLETED)
                 if rx in done:
                     get.cancel()
-                    if rx.result()["type"] == "websocket.disconnect":
+                    msg = rx.result()
+                    if msg["type"] == "websocket.disconnect":
                         break
                     rx = asyncio.ensure_future(sock.receive())
-                    continue
+                    was, shown = shown, _visible(msg, shown)
+                    if not shown or was:
+                        continue
+                    # shown again: scan now
                 if get in done:
                     ev = get.result()
                     if ev.get("k") == "tool" and ev.get("name") in ("Write", "Edit",
                                                                    "MultiEdit"):
                         lv.watcher.agent_wrote(ev.get("what") or "")
+                        wrote = True
                     await sock.send_text(json.dumps(ev))
                     if ev.get("k") == "end":
                         await run_in_threadpool(output_card, e, wpid, lv, cid,
                                                 ev.get("t") or time.time())
                     continue
                 get.cancel()
+                if not (shown or wrote):
+                    continue
+                wrote = False
                 for c in await run_in_threadpool(lv.poll):
                     await sock.send_text(json.dumps(dict(c, k="changed")))
             rx.cancel()

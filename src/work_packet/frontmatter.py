@@ -7,12 +7,14 @@ was written.
 
 import yaml
 
+from . import fsutil
+
 
 class FrontMatterError(ValueError):
     pass
 
 
-class _Loader(yaml.SafeLoader):
+class _Loader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):    # libyaml when built
     pass
 
 
@@ -23,7 +25,7 @@ _Loader.yaml_implicit_resolvers = {
 }
 
 
-class _Dumper(yaml.SafeDumper):
+class _Dumper(yaml.SafeDumper):     # not libyaml's: it escapes non-BMP text, so files would churn
     pass
 
 
@@ -78,6 +80,11 @@ def dump(meta, body):
     return _FENCE + "\n" + y + _FENCE + "\n" + body
 
 
-def load(path):
+def _load(path):
     with open(path, "r", encoding="utf-8") as fp:
         return parse(fp.read())
+
+
+def load(path):
+    """``(meta, body)`` of ``path``; reused while the file is unchanged (fsutil.cached)."""
+    return fsutil.cached(path, _load, "frontmatter")

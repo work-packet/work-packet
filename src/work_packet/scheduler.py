@@ -75,8 +75,9 @@ def due(entries, now=None):
     return sorted(out)
 
 
-def next_wake(entries):
-    """The earliest ``wake_at`` of a ``SLEEPING`` packet, or None."""
+def next_wake(entries, after=None):
+    """The earliest ``wake_at`` of a ``SLEEPING`` packet, or None. With ``after``,
+    only those later than it."""
     best = None
     for e in entries:
         pdir = layout.runs_dir(e["path"])
@@ -93,6 +94,8 @@ def next_wake(entries):
                     continue
                 t = schema.parse_timestamp(meta["wake_at"])
             except (OSError, frontmatter.FrontMatterError, ValueError):
+                continue
+            if after is not None and t <= after:
                 continue
             best = t if best is None or t < best else best
     return best

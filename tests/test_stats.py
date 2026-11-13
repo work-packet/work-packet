@@ -198,3 +198,38 @@ def test_cost_basis_and_mixed_mark():
     assert "priced" in lines[2] and "*" not in lines[2]
     lines = stats.rollup_report(stats.rollup(ss, "model"))
     assert "$3.50*" in lines[1] and "mixed" in lines[1] and lines[-1].startswith("* adds")
+
+
+def test_transcript_read_once_for_finished_steps(tmp_path, monkeypatch):
+    """cpu-plan P1.6: a committed step's missing fields are written back once;
+    a running step's meta.json is never written."""
+    from test_toolcost import transcript
+    from work_packet.packet import Packet
+    pkt = Packet(str(tmp_path / "w"))
+    os.makedirs(pkt.steps_dir)
+    pkt.save_status({"step": 1})
+    for name in ("0001", "0002"):                     # 0002 still runs
+        d = os.path.join(pkt.steps_dir, name)
+        os.makedirs(d)
+        transcript(os.path.join(d, "transcript.jsonl"))
+        with open(os.path.join(d, "meta.json"), "w") as fp:
+            json.dump({"cost_usd": 0.5, "extra": {"k": 1}, "tokens": {"input_tokens": 7}}, fp)
+    parsed = []
+    real = stats._from_transcript
+    monkeypatch.setattr(stats, "_from_transcript",
+                        lambda d, meta: parsed.append(os.path.basename(d)) or real(d, meta))
+    first = stats.packet_steps("p", pkt)
+    assert parsed == ["0001", "0002"]
+    with open(os.path.join(pkt.steps_dir, "0001", "meta.json")) as fp:
+        m = json.load(fp)
+    assert m[stats._FILLED] and m["extra"] == {"k": 1} and m["cost_usd"] == 0.5
+    assert m["tokens"]["input_tokens"] == 7               # kept, not overwritten
+    assert "cache_breaks" in m["context"] and "quota" in m
+    assert "thinking_tokens" not in m["tokens"]            # never reported: still not re-read
+    with open(os.path.join(pkt.steps_dir, "0002", "meta.json")) as fp:
+        assert stats._FILLED not in json.load(fp)
+    parsed.clear()
+    again = stats.packet_steps("p", pkt)
+    assert parsed == ["0002"]
+    assert [(s.calls, s.peak, s.cache_breaks, s.input_tokens) for s in again] == \
+        [(s.calls, s.peak, s.cache_breaks, s.input_tokens) for s in first]

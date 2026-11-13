@@ -360,3 +360,60 @@ def test_tick_honours_halt_and_hold(home, capsys):
     control.set_mode("drain", ME)
     assert main(["tick"]) == 0
     assert "0 steps" in capsys.readouterr().err
+
+
+# --- how long the loop sleeps (docs/cpu-plan.md P1.2, P1.3) -----------------------
+
+def _sleeper(root, wake_at):
+    meta, body = root.load_status()
+    meta.update(state="SLEEPING", wake_at=wake_at, resume_expr="later")
+    root.save_status(meta, body)
+
+
+def _counting_run(d, secs):
+    """Run the loop for ``secs``; return how many fills it made."""
+    n = [0]
+    fill = d.fill
+
+    def counted(*a, **k):
+        n[0] += 1
+        return fill(*a, **k)
+    d.fill = counted
+    stop, poke = threading.Event(), threading.Event()
+    t = threading.Thread(target=d.run, args=(stop, poke), kwargs={"max_wait": 60.0})
+    t.start()
+    time.sleep(secs)
+    stop.set()
+    poke.set()
+    t.join(10)
+    return n[0]
+
+
+def test_a_held_overdue_sleeper_does_not_refill_every_half_second(home, fakelocal):
+    _, root = new("demo")
+    _sleeper(root, "2020-01-01T00:00:00Z")
+    control.hold("demo", ME)
+    d = Dispatcher(backend=fakelocal)
+    assert _counting_run(d, 2.0) == 1                    # the first fill only
+
+
+def test_a_future_wake_at_wakes_the_loop(home, fakelocal):
+    from work_packet import clock, schema
+    import datetime
+    _, root = new("demo")
+    t0, m0 = clock.now(), time.monotonic()               # WPK_NOW is frozen: tick it
+    _sleeper(root, schema.format_timestamp(t0 + datetime.timedelta(seconds=1)))
+    d = Dispatcher(backend=fakelocal,
+                   now=lambda: t0 + datetime.timedelta(seconds=time.monotonic() - m0))
+    assert _counting_run(d, 3.0) >= 2                    # the first fill, then the wake
+
+
+def test_ide_jobs_alone_do_not_poll_at_the_step_rate(home, fakelocal):
+    d = Dispatcher(backend=fakelocal)
+    rec = jobs.JobRecord(id=jobs.new_id(), backend="local", kind="ide", project="p",
+                         wpid="w", path="/x", by=ME)
+    jobs.save(rec, home)
+    assert d.wait_s(60.0) >= 5.0
+    rec.kind = "step"
+    jobs.save(rec, home)
+    assert d.wait_s(60.0) == fakelocal.poll_s

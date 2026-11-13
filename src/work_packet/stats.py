@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from . import frontmatter, layout, schema
+from . import frontmatter, fsutil, layout, schema
 from .packet import Packet
 
 MIN_STEPS = 30          # no advice below this many steps in a group
@@ -143,10 +143,44 @@ def _from_transcript(d, meta):
     return c, res.tokens, res.quota
 
 
+_FILLED = "filled_from_transcript"   # meta.json: _fill wrote back what the transcript had
+
+
+def _committed(pkt):
+    """The last committed step (its folder is final), or 0."""
+    try:
+        return int(pkt.load_status()[0].get("step") or 0)
+    except (OSError, frontmatter.FrontMatterError, TypeError, ValueError):
+        return 0
+
+
+def _fill(d, meta, final):
+    """(context, tokens, quota) with what meta.json lacks read from the transcript.
+    A ``final`` step (committed, or a failed attempt) gets them written back once,
+    with a mark, so a field the transcript never had is not looked for again."""
+    import json
+    ctx, tok = dict(meta.get("context") or {}), dict(meta.get("tokens") or {})
+    c, t, quota = _from_transcript(d, meta)
+    for k, v in c.items():
+        ctx.setdefault(k, v)
+    for k, v in t.items():
+        tok.setdefault(k, v)
+    quota = meta["quota"] if "quota" in meta else quota or None
+    if final and (c or t or quota):     # nothing read (no transcript, or unparsable): no mark
+        m = dict(meta, tokens=tok, quota=quota, **{_FILLED: True})
+        if ctx:
+            m["context"] = ctx
+        try:
+            fsutil.atomic_write(os.path.join(d, "meta.json"), json.dumps(m, indent=2) + "\n")
+        except OSError:
+            pass
+    return ctx, tok, quota
+
+
 def packet_steps(project, pkt):
     """Every step folder of a packet that has a ``meta.json``."""
     import json
-    out = []
+    out, committed = [], None
     try:
         names = sorted(os.listdir(pkt.steps_dir))
     except OSError:
@@ -157,15 +191,18 @@ def packet_steps(project, pkt):
             continue
         d = os.path.join(pkt.steps_dir, n)
         try:
-            with open(os.path.join(d, "meta.json"), encoding="utf-8") as fp:
-                meta = json.load(fp)
+            meta = fsutil.load_json(os.path.join(d, "meta.json"))
         except (OSError, ValueError):
             continue
         ctx, tok = meta.get("context") or {}, meta.get("tokens") or {}
         quota = meta.get("quota")
-        if "cache_breaks" not in ctx or "thinking_tokens" not in tok or "quota" not in meta:
-            c, t, quota = _from_transcript(d, meta)
-            ctx, tok = c or ctx, dict(tok, **t) if t else tok
+        if not meta.get(_FILLED) and ("cache_breaks" not in ctx or "thinking_tokens" not in tok
+                                      or "quota" not in meta):
+            if committed is None:
+                committed = _committed(pkt)
+            # final: committed, or a failed attempt that _failed_meta has marked
+            ctx, tok, quota = _fill(d, meta, "failed" in meta if m.group(2)
+                                    else int(m.group(1)) <= committed)
         fired = _read(os.path.join(d, "ctxhook.fired"))
         mm = _memento(os.path.join(d, "pending-memento.md" if m.group(2) else "result.md"))
         out.append(Step(

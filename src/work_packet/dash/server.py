@@ -442,6 +442,10 @@ class Board:
         self._close = asyncio.Event()
         self.restarted = restart.restarted()
         loop = asyncio.get_running_loop()
+        if os.environ.get("WPK_DEBUG_LOOP"):   # log each callback that holds the loop
+            loop.set_debug(True)                # (docs/cpu-plan.md P0)
+            loop.slow_callback_duration = float(os.environ["WPK_DEBUG_LOOP"]) \
+                if os.environ["WPK_DEBUG_LOOP"].replace(".", "", 1).isdigit() else 0.05
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._on_stop)
         loop.add_signal_handler(signal.SIGUSR2, self._on_restart)

@@ -77,6 +77,22 @@ def test_web_sessions_are_left_to_their_launch(tmp_path, fake):
     assert ide_sessions.hook_pass(h) == 0                   # a collector has it
 
 
+def test_a_hook_pass_with_nothing_new_writes_nothing(tmp_path, fake, monkeypatch):
+    e, _ = _new("a")
+    tp = str(tmp_path / "t.jsonl")
+    shutil.copy(CLAUDE, tp)
+    h = registry.home()
+    now = time.time()
+    presence.beat(e["path"], "claude-" + SID, now, kind="claude", via="terminal",
+                  session=SID, turn="working", wpid=e["root"], transcript=tp)
+    assert ide_sessions.hook_pass(h, now) == 1
+    writes = []
+    real = os.replace
+    monkeypatch.setattr(os, "replace", lambda a, b: writes.append(b) or real(a, b))
+    assert ide_sessions.hook_pass(h, now + 5) == 1
+    assert writes == []
+
+
 # --- G3: checkpoints from sessions -------------------------------------------------
 
 def test_a_scribe_draft_is_offered_and_accepted(tmp_path, fake):

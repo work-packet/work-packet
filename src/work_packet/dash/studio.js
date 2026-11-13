@@ -401,7 +401,11 @@
     if (!root.dataset.conv) return;
     var proto = location.protocol === "https:" ? "wss://" : "ws://";
     sock = new WebSocket(proto + location.host + base + "/ws?since=" + lastT);
-    sock.onopen = function () { retry = 1000; sock.send(JSON.stringify({token: csrf})); };
+    sock.onopen = function () {
+      retry = 1000;
+      sock.send(JSON.stringify({token: csrf}));
+      shown();
+    };
     sock.onmessage = function (m) { try { show(JSON.parse(m.data)); } catch (e) { /* skip */ } };
     sock.onclose = function () {
       say("reconnecting…");
@@ -409,6 +413,12 @@
       retry = Math.min(retry * 2, 15000);
     };
   }
+
+  // The server skips its file scans while the tab is hidden.
+  function shown() {
+    if (sock && sock.readyState === 1) sock.send(JSON.stringify({type: "visible", on: !document.hidden}));
+  }
+  document.addEventListener("visibilitychange", shown);
 
   function ask() {
     var t = text.value.trim();

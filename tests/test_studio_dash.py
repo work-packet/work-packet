@@ -224,6 +224,45 @@ def test_project_page_and_console(board):
     assert "Return to the studio" in c.get("/p/a").text
 
 
+def test_socket_skips_scans_while_hidden(board, monkeypatch):
+    """cpu-plan P1.7: a tab that reports itself hidden gets no scans; shown
+    again, it gets one at once."""
+    from work_packet.studio import watch
+    c, e, pkt, ag, tok, base = board
+    _open(c, base, tok)
+    folder = layout.packet_folder(e["path"])
+    polls = []
+    real = watch.Watcher.poll
+    monkeypatch.setattr(watch.Watcher, "poll", lambda self: polls.append(1) or real(self))
+    monkeypatch.setattr(watch, "INTERVAL_S", 0.05)
+    url = "ws://127.0.0.1:7878" + base + "/ws"
+    with c.websocket_connect(url, headers={"origin": BASE}) as ws:
+        ws.send_text(json.dumps({"token": tok}))
+        assert json.loads(ws.receive_text())["k"] == "busy"
+        ws.send_text(json.dumps({"type": "visible", "on": False}))
+        time.sleep(0.3)
+        n = len(polls)
+        time.sleep(0.3)
+        assert len(polls) == n
+        with open(os.path.join(folder, "seen.md"), "w") as fp:
+            fp.write("x\n")
+        monkeypatch.setattr(watch, "INTERVAL_S", 60)
+        ws.send_text(json.dumps({"type": "visible", "on": True}))
+        ev = json.loads(ws.receive_text())
+        while ev.get("k") != "changed":
+            ev = json.loads(ws.receive_text())
+        assert ev["path"] == "seen.md"
+
+
+def test_watcher_skips_build_trees(tmp_path):
+    from work_packet.studio import watch
+    for d in ("build", "sim_build", "obj_dir", "rundir", "src"):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "f.v").write_text("x")
+    assert set(watch.Watcher(str(tmp_path)).stats) == {"src/f.v"}
+    assert len(watch.scan(str(tmp_path))) == 5          # versions still take them
+
+
 def test_cards_of_deleted_files(board):
     """Reloading the page replays the output cards; a file deleted since is
     marked gone, so the page does not load a preview of it (a 404)."""

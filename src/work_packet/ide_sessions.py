@@ -464,18 +464,27 @@ def _proc_stat(pid):
         return None
 
 
-def descendants(root):
-    """``root``'s descendant pids (not ``root``), from ``/proc``."""
+def proc_children():
+    """``{ppid: [pid]}`` over all of ``/proc``: one scan, shared by a pass's launches."""
     kids = {}
     try:
-        names = os.listdir(PROC)
+        it = os.scandir(PROC)
     except OSError:
-        return []
-    for n in names:
-        if n.isdigit():
-            st = _proc_stat(int(n))
-            if st is not None:
-                kids.setdefault(st[0], []).append(int(n))
+        return kids
+    with it:
+        for e in it:
+            if e.name.isdigit():
+                st = _proc_stat(int(e.name))
+                if st is not None:
+                    kids.setdefault(st[0], []).append(int(e.name))
+    return kids
+
+
+def descendants(root, kids=None):
+    """``root``'s descendant pids (not ``root``), from ``/proc`` (``kids``: a
+    ``proc_children`` already taken this pass)."""
+    if kids is None:
+        kids = proc_children()
     out, todo = [], [root]
     while todo:
         for k in kids.get(todo.pop(), ()):
@@ -569,12 +578,12 @@ def claude_transcript(env, sid, cwd):
     return None
 
 
-def live_sessions(root, launch_id):
+def live_sessions(root, launch_id, kids=None):
     """The harness sessions of processes under ``root`` with this launch:
     ``[{harness, session_id?, path, env, status?}]``. Codex's session id
     comes from its file."""
     out = []
-    for pid in descendants(root):
+    for pid in descendants(root, kids):
         env = proc_env(pid)
         if env.get("WPK_IDE_LAUNCH") != launch_id:
             continue
@@ -652,12 +661,27 @@ def _name(harness, sid):
     return "%s-%s" % (harness, sid)
 
 
+def _same(path, text):
+    """True when ``path`` already holds ``text``."""
+    try:
+        with open(path) as fp:
+            return fp.read() == text
+    except (OSError, ValueError):
+        return False
+
+
 def _put(path, obj):
+    """Write ``obj`` unless ``path`` already holds it: an unchanged store keeps
+    its mtimes, so ``cached_records`` keeps its records."""
+    text = json.dumps(obj, sort_keys=True)
+    if _same(path, text):
+        return False
     tmp = "%s.%d.tmp" % (path, os.getpid())
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fp:
-        json.dump(obj, fp, sort_keys=True)
+        fp.write(text)
     os.replace(tmp, path)
+    return True
 
 
 def _get(path):
@@ -807,6 +831,7 @@ class Collector:
         self._swept = None
         self._said = {}         # (harness, sid) -> (turn, beat) last put in presence
         self._dirs = {}         # project -> its folder (None: not registered)
+        self._final = {}        # (harness, sid) -> cursors when stored ended
 
     # -- packet and job of this launch
     def _packet(self, env):
@@ -905,15 +930,17 @@ class Collector:
         return out
 
     # -- one pass
-    def pass_once(self):
+    def pass_once(self, kids=None):
+        """``kids``: a ``proc_children`` the caller took for all its launches."""
         now = self.clock()
-        live = live_sessions(self.root, self.launch["launch_id"]) if self.root else []
+        live = live_sessions(self.root, self.launch["launch_id"], kids) if self.root else []
         seen = set()
         for s in live:
             sid, st = self._read(s["harness"], s.get("session_id"), s["path"])
             if not sid or sid in self._step_ids(now):
                 continue
             seen.add((s["harness"], sid))
+            self._final.pop((s["harness"], sid), None)
             self._store(s["harness"], sid, st, CONFIRMED, s["env"], s.get("status"), True,
                         pid=s.get("pid"))
         if self._swept is None or now - self._swept >= self.SWEEP_S:
@@ -926,9 +953,13 @@ class Collector:
             for path in list(files):
                 if os.path.isfile(path):
                     _, st = self._read(h, sid, path)
+            curs = {p: f.get("cur") for p, f in files.items()}
+            if self._final.get((h, sid)) == curs:
+                continue                # stored ended, and nothing new since
             m = self.meta[(h, sid)]
             self._store(h, sid, self._combined((h, sid)), m["attribution"], m["env"],
                         None, False)
+            self._final[(h, sid)] = curs
         return len(seen)
 
     def _store(self, harness, sid, st, attribution, env, status, live, pid=None):
@@ -1112,7 +1143,7 @@ def local_pass(home, collectors):
         keys = os.listdir(root)
     except OSError:
         keys = []
-    live = set()
+    live, kids = set(), None
     for key in keys:
         cur = ide_launch.current(home, key)
         if not cur or cur.get("backend") != "local" or not isinstance(cur.get("pid"), int):
@@ -1125,7 +1156,9 @@ def local_pass(home, collectors):
                 continue
             c = collectors[lid] = Collector(home, cur, root=cur["pid"])
         c.launch, c.root = cur, cur["pid"] if alive else None
-        c.pass_once()
+        if alive and kids is None:
+            kids = proc_children()              # one /proc scan for every launch
+        c.pass_once(kids)
         if alive:
             live.add(lid)
     for lid in [x for x in collectors if x not in live]:
