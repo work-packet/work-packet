@@ -244,8 +244,11 @@ Rules:
 
 VS Code sets `BROWSER` in its extension host and terminals to its own helper
 (`bin/helpers/browser.sh`, i.e. `code --openExternal`). That opens the link
-where the *client* is: on the laptop with Remote-SSH, or as a new tab of the
-web IDE, where `ide_forward.js` sends a localhost link through the board.
+where the *client* is: as a new tab of the web IDE, where `ide_forward.js`
+sends a localhost link through the board. (A Remote-SSH server is
+`~/.vscode-server`, started by the extension, not by wpk: it has no `DISPLAY`,
+so `xdg-open` goes straight to `$BROWSER` and the link reaches the laptop
+without any of this. What follows is for wpkd's web IDE.)
 
 Once `DISPLAY` is set, `xdg-open` no longer gets there. Its generic path asks
 `xdg-mime query default x-scheme-handler/http` **before** it tries `$BROWSER`,
@@ -270,9 +273,48 @@ desk; the laptop can't reach them.
 browser = "client"     # default: links go to VS Code's $BROWSER; "desk" = the node's browser
 ```
 
-Not covered: an `xfce` desk session (`wm = "xfce"`), whose own apps use
-`exo-open`; and a tool started with its own browser command (Live Server's
-`CustomBrowser` setting, for example).
+**Desktop detection (2026-11-13).** `xdg-open` only reaches its generic path,
+the one that asks `xdg-mime`, when it detects no desktop. wpkd passes on
+whatever it inherited from the login it was started in: `XDG_CURRENT_DESKTOP=XFCE`
+sends `xdg-open` to `exo-open` (GNOME to `gio open`, KDE to `kde-open`, and so
+on), which opens the desk's browser without asking the shim. With nothing set,
+`xdg-open` probes for a desktop instead, including `xprop -root` on the desk's
+display, which wakes Xvnc and finds an `xfce` desk session. So with the shim
+installed, wpk also sets `XDG_CURRENT_DESKTOP=X-Generic`, which `xdg-open` takes
+as "generic" with no probing. Apps started from the Apps menu get it too, so
+they see no desktop's `OnlyShowIn` entries or theme hints; on a VNC desk that
+is fine. A value in `[desktop.env]` overrides it, at your own risk.
+
+Each copy of the shim carries a `# wpk-xdg-mime-shim` marker line and skips any
+`xdg-mime` on `PATH` that has it, so two servers' `<priv>/bin` on one `PATH`
+(wpkd or an IDE started from a terminal inside another wpk IDE) don't call each
+other forever. A `[desktop.env] PATH` keeps `<priv>/bin` first.
+
+**Limits:**
+
+- **It takes effect when the IDE server starts.** A server started before an
+  upgrade keeps the old environment until it restarts: `which xdg-mime` shows
+  `/usr/bin/xdg-mime` there.
+- **Only processes with VS Code's environment** (extension host, integrated
+  terminals) have both the shim's `PATH` and `$BROWSER`. It breaks for a shell
+  whose startup files put something ahead of `<priv>/bin` on `PATH`, a
+  tmux/screen server started outside VS Code, or a pane that outlived a
+  reconnect or window reload (a stale `VSCODE_IPC_HOOK_CLI`). A `$BROWSER`
+  that fails doesn't fall back to the desk; `xdg-open` reports an error.
+- **Not covered:** openers that don't go through `xdg-open` with `xdg-mime` on
+  `PATH`: apps in an `xfce` desk session (`wm = "xfce"`) that call `exo-open`
+  directly; a tool with its own browser command (Live Server's
+  `CustomBrowser`, or anything that runs `firefox` itself); a tool that calls
+  `/usr/bin/xdg-mime` by absolute path.
+- **`BROWSER` doesn't belong in `[desktop.env]`.** That table also reaches the
+  window manager and the Apps menu, which have no VS Code client to open a link.
+
+**Troubleshooting.** In the terminal where a link opens in the wrong place:
+
+```sh
+which xdg-mime; echo "$BROWSER"; echo "$XDG_CURRENT_DESKTOP $DESKTOP_SESSION"
+XDG_UTILS_DEBUG_LEVEL=2 xdg-open https://example.com   # read the "Selected DE" line
+```
 
 ## 6. Noticing windows
 

@@ -88,17 +88,26 @@ def install_shims(priv, conf, src=SHIMS):
 def apply_env(environ, conf, display, xauthority, key=None, shims=None):
     """The server's environment: ``DISPLAY``, ``XAUTHORITY``, the ``shims``
     first on ``PATH``, ``[desktop.env]`` (literal values; ``{display}`` is the
-    one substitution), then ``unset``."""
+    one substitution), then ``unset``.
+
+    With shims, ``XDG_CURRENT_DESKTOP=X-Generic`` too (§5.4): an inherited
+    desktop (``XFCE`` from the login wpkd started in) sends ``xdg-open`` to
+    ``exo-open``/``gio``/``kde-open``, which never ask ``xdg-mime``; and with
+    none, ``xdg-open`` probes the display with ``xprop``. ``[desktop.env]`` can
+    still override it. A ``[desktop.env] PATH`` keeps the shims first."""
     env = dict(environ)
     env["DISPLAY"] = ":%d" % display
     env["XAUTHORITY"] = xauthority
     if shims:
         env["PATH"] = shims + (":" + env["PATH"] if env.get("PATH") else "")
+        env["XDG_CURRENT_DESKTOP"] = "X-Generic"
     if key:
         env["WPK_DESKTOP"] = "/desk/%s/" % key
     applied = {}
     for k, v in (conf.get("env") or {}).items():
         applied[k] = env[k] = str(v).replace("{display}", ":%d" % display)
+    if shims and "PATH" in applied and env["PATH"].split(":")[0] != shims:
+        env["PATH"] = shims + (":" + env["PATH"] if env["PATH"] else "")
     for k in conf.get("unset") or ():
         env.pop(k, None)
         applied.pop(k, None)

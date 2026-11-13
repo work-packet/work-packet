@@ -1,10 +1,12 @@
 #!/bin/sh
+# wpk-xdg-mime-shim
 # wpk's desk: links open in the client's browser (docs/desktop.md §5.4).
 # With a DISPLAY, xdg-open asks `xdg-mime query default x-scheme-handler/http`
 # before it tries $BROWSER, and so starts the node's browser on the desk. When
 # $BROWSER is set (VS Code sets it to its helper that opens the link where the
 # client is), there is no default for http(s): xdg-open falls through to it.
-# Everything else goes to the real xdg-mime, the next one on PATH.
+# Everything else goes to the real xdg-mime, the next one on PATH that isn't
+# a copy of this shim (another server's <priv>/bin can be on PATH too).
 if [ "$1" = query ] && [ "$2" = default ]; then
     case "$3" in
     x-scheme-handler/http|x-scheme-handler/https)
@@ -19,6 +21,7 @@ IFS=:
 for d in $PATH; do
     [ -n "$d" ] && [ -x "$d/xdg-mime" ] || continue
     [ "$(cd "$d" 2>/dev/null && pwd -P)" = "$here" ] && continue
+    grep -q '^# wpk-xdg-mime-shim$' "$d/xdg-mime" 2>/dev/null && continue
     exec "$d/xdg-mime" "$@"
 done
 echo "xdg-mime: not found" >&2

@@ -63,9 +63,16 @@ def test_env_sets_display_then_the_table_then_unsets():
 def test_shims_go_first_on_path_unless_the_desk_keeps_its_browser(tmp_path):
     shims = xproxy.install_shims(str(tmp_path), {})
     assert shims == str(tmp_path / "bin") and os.access(os.path.join(shims, "xdg-mime"), os.X_OK)
-    env, _ = xproxy.apply_env({"PATH": "/usr/bin"}, {}, 23, "/p/xauth", shims=shims)
-    assert env["PATH"] == shims + ":/usr/bin"
+    env, _ = xproxy.apply_env({"PATH": "/usr/bin", "XDG_CURRENT_DESKTOP": "XFCE"}, {}, 23,
+                              "/p/xauth", shims=shims)
+    assert env["PATH"] == shims + ":/usr/bin" and env["XDG_CURRENT_DESKTOP"] == "X-Generic"
     assert xproxy.install_shims(str(tmp_path / "d"), {"browser": "desk"}) is None
+    env, _ = xproxy.apply_env({"PATH": "/usr/bin", "XDG_CURRENT_DESKTOP": "XFCE"}, {}, 23, "/p/xauth")
+    assert env["XDG_CURRENT_DESKTOP"] == "XFCE"
+    # [desktop.env] PATH keeps the shims first; XDG_CURRENT_DESKTOP can be overridden
+    env, _ = xproxy.apply_env({"PATH": "/usr/bin"}, {"env": {"PATH": "/x", "XDG_CURRENT_DESKTOP": "GNOME"}},
+                              23, "/p/xauth", shims=shims)
+    assert env["PATH"] == shims + ":/x" and env["XDG_CURRENT_DESKTOP"] == "GNOME"
     assert schema.validate_config({"desktop": {"browser": "laptop"}})
 
 
@@ -82,6 +89,8 @@ def _fake_open(tmp_path):
         "[Desktop Entry]\nType=Application\nName=Desk\nExec=%s %%u\n" % (real / "deskbrowser"))
     tool(real / "deskbrowser", 'echo desk "$1" >> %s\n' % log)
     tool(real / "client", 'echo client "$1" >> %s\n' % log)
+    for n in ("exo-open", "gio", "kde-open", "kde-open5", "xprop"):   # a desktop's own openers
+        tool(real / n, 'echo %s "$*" >> %s\n' % (n, log))
     return real, log
 
 
@@ -90,12 +99,15 @@ XDG_OPEN = shutil.which("xdg-open")
 
 @pytest.mark.skipif(XDG_OPEN is None, reason="no xdg-open")
 @pytest.mark.parametrize("browser,want", [("client", "client"), ("", "desk")])
-def test_xdg_open_on_the_desk_uses_browser_when_set(tmp_path, browser, want):
+@pytest.mark.parametrize("inherited", [{}, {"XDG_CURRENT_DESKTOP": "XFCE", "DESKTOP_SESSION": "xfce"},
+                                       {"XDG_CURRENT_DESKTOP": "GNOME"}, {"KDE_FULL_SESSION": "true"}])
+def test_xdg_open_on_the_desk_uses_browser_when_set(tmp_path, browser, want, inherited):
     real, log = _fake_open(tmp_path)
     shims = xproxy.install_shims(str(tmp_path / "priv"), {})
-    env = {"HOME": str(tmp_path), "PATH": "%s:%s:/usr/bin:/bin" % (shims, real), "DISPLAY": ":99",
-           "XDG_DATA_HOME": str(tmp_path), "XDG_DATA_DIRS": str(tmp_path / "none"),
-           "XDG_CONFIG_HOME": str(tmp_path / "cfg"), "XDG_CONFIG_DIRS": str(tmp_path / "none")}
+    base = {"HOME": str(tmp_path), "PATH": "%s:/usr/bin:/bin" % real,
+            "XDG_DATA_HOME": str(tmp_path), "XDG_DATA_DIRS": str(tmp_path / "none"),
+            "XDG_CONFIG_HOME": str(tmp_path / "cfg"), "XDG_CONFIG_DIRS": str(tmp_path / "none")}
+    env, _ = xproxy.apply_env(dict(base, **inherited), {}, 99, str(tmp_path / "xauth"), shims=shims)
     if browser:
         env["BROWSER"] = str(real / browser)
     subprocess.run([XDG_OPEN, "http://127.0.0.1:5500/a.html"], env=env, timeout=30,
@@ -104,6 +116,17 @@ def test_xdg_open_on_the_desk_uses_browser_when_set(tmp_path, browser, want):
     out = subprocess.run([os.path.join(shims, "xdg-mime"), "query", "default", "text/html"],
                          env=env, capture_output=True, text=True).stdout
     assert out.strip() == "desk.desktop"
+
+
+def test_shim_skips_other_copies_of_itself(tmp_path):
+    """Another server's ``<priv>/bin`` on PATH too: the copies don't call each other forever."""
+    real, _ = _fake_open(tmp_path)
+    a = xproxy.install_shims(str(tmp_path / "a"), {})
+    b = xproxy.install_shims(str(tmp_path / "b"), {})
+    env = {"PATH": "%s:%s:%s:/usr/bin:/bin" % (b, a, real)}
+    r = subprocess.run([os.path.join(b, "xdg-mime"), "query", "default", "text/html"],
+                       env=env, capture_output=True, text=True, timeout=5)
+    assert r.returncode == 0 and r.stdout.strip() == "desk.desktop"
 
 
 def test_window_manager_choice():
