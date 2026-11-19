@@ -198,6 +198,12 @@ def new(name, prompt=None, path=None, model=None, tz=None, paused=False, dry_run
         raise ProjectError(str(e)) from None
     root = str(uuid.uuid4())
     extra = dict(extra or {})
+    # Whose folder it is (docs/close-remove-plan.md): only one wpk made is
+    # ever deleted by ``wpk close --delete``. A clone wpk made says so itself.
+    folder = layout.packet_folder(path)
+    fresh = not os.path.isdir(folder) or not os.listdir(folder)
+    extra["origin"] = dict(extra.get("origin") or {})
+    extra["origin"].setdefault("made", "new" if fresh else "adopted")
     model = model or extra.pop("model", None) or cfg["model"]
     extra.pop("model", None)
     perms = dict(schema.PERMISSION_DEFAULTS)

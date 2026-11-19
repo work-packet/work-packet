@@ -43,6 +43,12 @@ def test_a_running_step_finishes_first(fake):
     out = actions.claim(e, "me")
     assert out.code == 0 and executor.pause_request(pkt)["reason"] == "claimed"
     assert pkt.load_status()[0]["state"] == "RUNNABLE"
+    # When the step ends the claim lands as a claim, not "paused by me: claimed".
+    os.unlink(pkt.lease_path)
+    executor.step(pkt.path)
+    meta = pkt.load_status()[0]
+    assert meta["state"] == "PAUSED" and meta["reason"] == "claimed"
+    assert data.card(e)["ball"]["kind"] == "claimed"
 
 
 def test_handing_back_the_root_hands_back_the_rest(fake):

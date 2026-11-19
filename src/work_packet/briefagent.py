@@ -354,7 +354,8 @@ def gather(home, since, now, cards=None, cfg=None, claude_dir=None):
 def ask(prompt, home=None, model=MODEL, budget=BUDGET_USD, timeout=TIMEOUT_S):
     """One model call with no tools: ``(text, cost, error or None)``."""
     from . import scribe
-    return scribe.call_model(prompt, home, budget=budget, timeout=timeout, model=model)
+    return scribe.call_model(prompt, home, budget=budget, timeout=timeout, model=model,
+                             purpose="brief")
 
 
 def parse(text):

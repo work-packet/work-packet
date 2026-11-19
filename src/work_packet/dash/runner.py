@@ -34,6 +34,7 @@ class Runner:
         self._watcher = None
         self._sessions = None
         self._deliver = None
+        self._ledger = None
         self.watch_tick = watch_tick
         self._lease = None
         self.dispatcher = None
@@ -72,6 +73,9 @@ class Runner:
             self._deliver = threading.Thread(target=self._deliver_loop, name="wpk-deliver",
                                              daemon=True)
             self._deliver.start()
+            self._ledger = threading.Thread(target=self._ledger_loop, name="wpk-ledger",
+                                            daemon=True)
+            self._ledger.start()
 
     def poke(self):
         """Look for due packets now."""
@@ -84,7 +88,7 @@ class Runner:
         self.halt()
         if self._thread is not None:
             self._thread.join(timeout)
-        for t in (self._watcher, self._sessions, self._deliver):
+        for t in (self._watcher, self._sessions, self._deliver, self._ledger):
             if t is not None:
                 t.join(timeout)
         if self._lease is not None:
@@ -178,6 +182,26 @@ class Runner:
                 except Exception:
                     log.exception("hooked session pass failed")
             self._stopping.wait(every)
+
+    LEDGER_POLL_S = 30
+
+    def _ledger_loop(self):
+        """Every session's tokens into the ledger (docs/token-ledger.md §5): new
+        transcript lines, the session store and changed packets' steps. The first
+        pass reads what Claude Code still keeps; later ones only what changed."""
+        import time
+        from .. import ledger_collect
+        first = True
+        while not self._stopping.is_set():
+            t = time.time()
+            try:
+                got = ledger_collect.pass_once(self.home, stop=self._stopping.is_set)
+                if first or got.get("replies") > 1000:
+                    log.info("token ledger: %s in %.1f s", got, time.time() - t)
+            except Exception:                  # noqa: BLE001  keep collecting; say why
+                log.exception("token ledger pass failed")
+            first = False
+            self._stopping.wait(self.LEDGER_POLL_S)
 
     def _deliver_loop(self):
         """Packets with [deliver] that completed push their branch (or open their

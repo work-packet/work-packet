@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from work_packet import executor, ide, schema
+from work_packet import executor, ide, ide_releases, schema
 from work_packet.check import check
 from work_packet.cli import main
 
@@ -57,7 +57,8 @@ def test_after_the_seed_the_packet_opens_its_worktrees(home, source, tmp_path):
     assert st["terminal.integrated.env.linux"]["WPK_WPID"] == pkt.wpid
     assert "**/packages/**" in st["files.watcherExclude"]
     assert [t["label"] for t in ws["tasks"]["tasks"]] == ["wpk: show", "wpk: log",
-                                                         "wpk: check"]
+                                                         "wpk: check",
+                                                         "wpk: resolve questions"]
     hide = load(os.path.join(pkt.path, ".vscode", "settings.json"))["files.exclude"]
     assert {"work", "state", "steps", ".pending"} <= set(hide)
     # .vscode/ is not part of the packet format, and check says nothing about it
@@ -403,8 +404,14 @@ def _web_client(home, tmp_path, kind="loopback", ts=None, **cfg):
 def test_backend_command_line(tmp_path):
     from work_packet.dash import ide as dide
     key = dide.key_for("/w/x")
+    # VS Code's own server runs straight from wpk's release (ide-direct-server-plan §4).
     sw = dide.Backend(str(tmp_path), dict(schema.IDE_DEFAULTS), key)
-    assert sw.argv()[:2] == ["code", "serve-web"]
+    rel = {"commit": "c" * 40, "version": "1.147.0"}
+    a = sw.argv(rel)
+    assert a[0] == str(tmp_path / "ide" / "releases" / ide_releases.platform() / ("c" * 40)
+                       / "bin" / "code-server")
+    assert "serve-web" not in a
+    assert dide.backend_kind(dict(schema.IDE_DEFAULTS, backend="serve-web")) == "server"
     ov = dide.Backend(str(tmp_path), dict(schema.IDE_DEFAULTS, backend="openvscode-server"), key)
     a = ov.argv()
     assert a[0] == "openvscode-server" and "serve-web" not in a
@@ -416,12 +423,25 @@ def test_backend_command_line(tmp_path):
     assert dide.command(own) == "/opt/ovs/bin/openvscode-server"
 
 
+def test_one_server_per_packet(tmp_path):
+    from work_packet.dash import ide as dide
+    bs = dide.Backends(str(tmp_path), dict(schema.IDE_DEFAULTS, web=True))
+    w = "1234abcd-0000-4000-8000-000000000000"
+    a = bs.register("/p/.vscode/packet.code-workspace", None, "p", w)
+    b = bs.register("/p/work/repo", None, "p", w)
+    assert a == b == dide.key_for_packet(w)
+    assert bs.target(a) == "/p/work/repo"                   # what was opened last
+    assert bs.register("/elsewhere") == dide.key_for("/elsewhere")     # no packet: its path
+    assert bs.register("/p/x", None, "q", "ffff0000-0000-4000-8000-000000000000") != a
+
+
 def test_backend_availability_names_the_program():
     from work_packet.dash import ide as dide
     cfg = dict(schema.IDE_DEFAULTS, backend="openvscode-server")
     assert "'openvscode-server' is not on PATH" in dide.available(cfg, lambda n: None)
     assert dide.available(cfg, lambda n: "/usr/bin/" + n) is None
-    assert "'code'" in dide.available(dict(schema.IDE_DEFAULTS), lambda n: None)
+    # VS Code's server needs nothing on PATH: wpk gets its releases itself.
+    assert dide.available(dict(schema.IDE_DEFAULTS), lambda n: None) is None
 
 
 def test_socket_path_fits_sun_path(tmp_path):
@@ -460,7 +480,18 @@ def test_web_proxy_http(short_home, tmp_path):
         assert r.headers["content-security-policy"] == "default-src 'self' fake"
         assert "x-frame-options" not in r.headers
         assert r.headers["x-content-type-options"] == "nosniff"
-        assert r.cookies.get("vscode-cli-secret-half") == "abc"
+        assert r.cookies.get("vscode-app") == "abc"
+        # The board gives the page its secret key, as serve-web did (direct-server §5).
+        half = r.cookies.get("vscode-cli-secret-half")
+        assert r.cookies.get("vscode-secret-key-path") == "/ide/%s/_vscode-cli/mint-key" % be.key
+        import base64
+        import hashlib
+        from work_packet.dash import ide as dide
+        k = c.post("/ide/%s/_vscode-cli/mint-key" % be.key, headers=origin)
+        assert k.status_code == 200 and len(k.content) == 32
+        assert k.content == hashlib.sha256(
+            dide.server_half(short_home) + base64.urlsafe_b64decode(half)).digest()
+        assert c.post("/ide/%s/_vscode-cli/mint-key" % be.key, headers=origin).content == k.content
         # POST: no CSRF token needed under /ide/, but the Origin must match
         r = c.post("/ide/%s/echo" % be.key, headers=origin, content=b"hello")
         assert (r.status_code, r.content) == (200, b"hello")
@@ -616,15 +647,16 @@ def test_board_web_buttons(short_home, tmp_path, monkeypatch, source):
         r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "go": "web"},
                    follow_redirects=False)
         assert r.status_code == 303
-        from work_packet.dash.ide import key_for
         ws = "%s/.vscode/project.code-workspace" % proj
-        assert r.headers["location"] == "/ide/%s/?workspace=%s" % (key_for(ws), ws)
+        key = r.headers["location"].split("/")[2]
+        assert r.headers["location"] == "/ide/%s/?workspace=%s" % (key, ws)
         r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "go": "web",
                                                        "repo": "dv-solve"},
                    follow_redirects=False)
         folder = "%s/work/dv-solve" % proj
-        assert r.headers["location"] == "/ide/%s/?folder=%s" % (key_for(folder), folder)
-        assert be.mgr.target(key_for(folder)) == folder           # registered by the open
+        # One server for the packet: its clone opens in the same one (direct-server §1).
+        assert r.headers["location"] == "/ide/%s/?folder=%s" % (key, folder)
+        assert be.mgr.target(key) == folder                       # the last open
     finally:
         c.__exit__(None, None, None)
     # over the tailnet on plain http: shown, disabled, and the POST is refused
@@ -713,6 +745,21 @@ def test_max_servers_stops_the_least_recently_used_idle_one(short_home, tmp_path
         bs.stop()
 
 
+def test_server_half_reuses_serve_webs(tmp_path):
+    from work_packet.dash import ide as dide
+    sw = tmp_path / "serve-web-key-half"
+    import base64
+    want = bytes(range(250, 256)) + bytes(26)
+    sw.write_text(json.dumps(base64.urlsafe_b64encode(want).decode()))  # JSON, urlsafe base64
+    home = str(tmp_path / "home")
+    got = dide.server_half(home, str(sw))
+    assert got == want
+    sw.unlink()
+    assert dide.server_half(home, str(sw)) == got                   # kept, in wpk's home
+    assert oct(os.stat(os.path.join(home, "ide", "secret-half")).st_mode & 0o777) == "0o600"
+    assert len(dide.server_half(str(tmp_path / "fresh"), str(sw))) == 32
+
+
 def test_cookie_path_is_scoped_to_the_server():
     from work_packet.dash.ide import cookie_path
     assert cookie_path("k=v; SameSite=Strict; Path=/", "/ide/abc") == \
@@ -727,7 +774,7 @@ def test_web_button_says_when_code_is_missing(short_home, tmp_path, monkeypatch,
     c, be, origin, tok = _web_client(short_home, tmp_path)
     try:
         open(os.path.join(short_home, "config.toml"), "w").write(
-            '[ide]\nweb = true\ncode = "no-such-vscode"\n')
+            '[ide]\nweb = true\nbackend = "openvscode-server"\ncode = "no-such-vscode"\n')
         assert "is not on PATH" in c.get("/p/dvs").text
     finally:
         c.__exit__(None, None, None)
@@ -737,9 +784,14 @@ def test_doctor_reports_the_vscode_cli_only_when_web_is_on(home, monkeypatch):
     from work_packet import setup
     assert [c for c in setup._tools() if c.id == "tools.code"] == []
     os.makedirs(home, exist_ok=True)
-    open(os.path.join(home, "config.toml"), "w").write('[ide]\nweb = true\ncode = "nope-vs"\n')
+    open(os.path.join(home, "config.toml"), "w").write(
+        '[ide]\nweb = true\nbackend = "openvscode-server"\ncode = "nope-vs"\n')
     [c] = [c for c in setup._tools() if c.id == "tools.code"]
     assert c.level == "warn" and "nope-vs" in c.title
+    # VS Code's own server: what release desks get, or that the first desk gets one.
+    open(os.path.join(home, "config.toml"), "w").write('[ide]\nweb = true\n')
+    [c] = [c for c in setup._tools() if c.id == "tools.code"]
+    assert c.level == "info" and "no VS Code server downloaded yet" in c.title
     [f] = [c for c in setup._tools() if c.id == "tools.ide_forward"]
     assert f.level == "ok" and "(local)" in f.title
     open(os.path.join(home, "config.toml"), "w").write('[ide]\nweb = true\nforward = false\n')

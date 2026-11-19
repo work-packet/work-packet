@@ -156,7 +156,7 @@ def cmd_start(args) -> int:
     """docs/starters-v1.md: make a packet with a starter, or from a recipe; many
     at once with --recipes (docs/agent-dispatch.md §5.1)."""
     import json
-    from . import starters
+    from . import starters, templates
     if args.list or not (args.starter or args.recipe or args.recipes):
         for n in starters.names():
             s = starters.get(n)
@@ -169,6 +169,12 @@ def cmd_start(args) -> int:
               "gate=CMD from= model= harness= hold=no")
         for n, e in starters.broken().items():
             print("%s: did not load: %s" % (n, e))
+        board = _here_board() or None
+        ts = templates.templates(board or "main")
+        if ts:
+            print("\nTemplates (wpk start <template> key=value; `wpk template show <name>`):")
+            for t in ts:
+                print("  " + _template_line(t))
         return 0
     if args.go and args.open:
         return _err("--go hands it to the runner, --open to you: give one")
@@ -180,7 +186,7 @@ def cmd_start(args) -> int:
                 items = json.load(fp)
             if not isinstance(items, list) or not items:
                 return _err("--recipes: a JSON list of recipes")
-            recipes = [_batch_item(x) for x in items]
+            recipes = [_batch_item(x, say) for x in items]
         elif args.recipe:
             fp = sys.stdin if args.recipe == "-" else open(args.recipe, encoding="utf-8")
             with fp:
@@ -197,8 +203,11 @@ def cmd_start(args) -> int:
                         args.search, ""), vals):
                     print("%-40s %s" % (c["value"], c["label"]))
                 return 0
-            recipes = [starters.from_values(args.starter, vals)]
-    except (starters.StartError, ValueError, OSError) as e:
+            if args.starter not in starters.names() and _template_of(args.starter, vals):
+                recipes = [_from_template(args.starter, vals, say)]
+            else:
+                recipes = [starters.from_values(args.starter, vals)]
+    except (starters.StartError, templates.RenderError, ValueError, OSError) as e:
         return _err(str(e))
     refused = _dispatch_guard(recipes)
     if refused:
@@ -264,11 +273,34 @@ def cmd_start(args) -> int:
     return 0
 
 
-def _batch_item(x):
-    """One item of --recipes: ``{"starter": ..., field values}`` or a recipe."""
+def _template_of(name, vals):
+    """The template ``name`` on the board it would go on, or None."""
+    from . import registry, templates
+    return templates.get(name, vals.get("board") or _here_board() or registry.DEFAULT_BOARD)
+
+
+def _from_template(name, vals, say=print):
+    """The recipe template ``name`` makes from ``vals`` (docs/prompt-intake.md §4.3)."""
+    from . import registry, templates
+    board = vals.get("board") or _here_board() or registry.DEFAULT_BOARD
+    t = templates.get(name, board)
+    if t is None:
+        raise templates.RenderError("no template %r on board %s" % (name, board))
+    if t.spec.get("setup"):
+        say("note: template %s has setup commands; wpk does not run them yet "
+            "(docs/prompt-intake.md T5)" % name)
+    return templates.recipe(t, vals, board)
+
+
+def _batch_item(x, say=print):
+    """One item of --recipes: ``{"starter": ..., field values}``, ``{"template":
+    ..., parameters}`` or a recipe."""
     from . import starters
     if not isinstance(x, dict):
         raise starters.StartError("--recipes: each item is a JSON object")
+    if "template" in x:
+        vals = {k: v for k, v in x.items() if k != "template"}
+        return _from_template(x["template"], vals, say)
     if "starter" in x:
         vals = {k: v for k, v in x.items() if k != "starter"}
         for k in ("hold",):
@@ -528,12 +560,112 @@ def cmd_adopt(args) -> int:
 
 
 def cmd_rm(args) -> int:
-    from . import registry
-    if registry.get(args.name) is None:
+    """wpk rm: off the board, history kept (``--forget``: the registry entry only)."""
+    from . import closeout, registry
+    e = registry.get(args.name)
+    if e is None:
         return _err("no registered project named %r" % args.name)
-    registry.unregister(args.name)
-    print("Removed %s from the registry; its files are untouched" % args.name)
+    if args.forget:
+        registry.unregister(args.name)
+        print("Removed %s from the registry; its files are untouched" % args.name)
+        return 0
+    try:
+        rec = closeout.close(e, keep_lifecycle=True)
+    except closeout.CloseError as ex:
+        return _err(str(ex))
+    print("Removed %s from the board (closed as %s); its files are untouched"
+          % (args.name, rec["id"]))
     return 0
+
+
+def cmd_close(args) -> int:
+    """wpk close: off the board, and with --delete its folder too
+    (docs/close-remove-plan.md)."""
+    from . import closeout
+    e = _entry_of(args.target or os.environ.get("WPK_WPID") or ".")
+    if e is None:
+        return _err("no registered project for %r" % (args.target or "."))
+    try:
+        rec = closeout.close(e, stop=args.stop, drop=args.drop, delete=args.delete,
+                             force=args.force, note=args.message,
+                             with_children=args.with_children)
+    except closeout.CloseError as ex:
+        return _err("%s not closed: %s" % (e["name"], ex))
+    for ln in rec.get("stopped") or []:
+        print("wpk: %s" % ln, file=sys.stderr)
+    for b in rec.get("bundles") or []:
+        print("wpk: kept %d commit%s of %s in %s" % (
+            b["commits"], "" if b["commits"] == 1 else "s", b["repo"], b["file"]),
+            file=sys.stderr)
+    if rec.get("deleted"):
+        print("wpk: closed %s and deleted %s" % (e["name"], rec["folder"]), file=sys.stderr)
+    else:
+        print("wpk: closed %s; its folder stays at %s" % (e["name"], rec["folder"]),
+              file=sys.stderr)
+    return 0
+
+
+def _closed_rec(key):
+    """The closed record ``key`` names: its id, or a name (the newest)."""
+    from . import closeout
+    return closeout.get_closed(key) or next(
+        (r for r in closeout.closed() if r.get("name") == key), None)
+
+
+def cmd_closed(args) -> int:
+    """wpk closed [reopen|forget|delete ID]: the closed packets."""
+    import json
+    from . import closeout
+    if not args.op:
+        rs = closeout.closed()
+        if args.json:
+            print(json.dumps(rs, indent=2, default=str))
+            return 0
+        for r in rs:
+            where = "deleted" if r.get("deleted") else r.get("folder", "")
+            print("%-40s %s  %-8s %s" % (r["id"], r.get("closed", ""), r.get("lifecycle", ""),
+                                        where))
+        return 0
+    if not args.id:
+        return _err("which closed packet? (an id from `wpk closed`, or a name)")
+    rec = _closed_rec(args.id)
+    if rec is None:
+        return _err("no closed packet %r" % args.id)
+    try:
+        if args.op == "reopen":
+            e = closeout.reopen(rec["id"])
+            print("wpk: %s is back on board %s" % (e["name"], e.get("board") or "main"),
+                  file=sys.stderr)
+        elif args.op == "forget":
+            closeout.forget(rec["id"])
+            print("wpk: forgot %s; its runs stay in history" % rec["id"], file=sys.stderr)
+        else:
+            closeout.delete_folder(rec, force=args.force)
+            print("wpk: deleted %s" % rec["folder"], file=sys.stderr)
+    except closeout.CloseError as ex:
+        return _err(str(ex))
+    return 0
+
+
+def cmd_outstanding(args) -> int:
+    """wpk outstanding: what is outstanding in a packet (docs/close-remove-plan.md)."""
+    import json
+    from . import closeout, registry
+    if args.all or args.board:
+        es = [e for e in registry.entries() if args.all or registry.board_of(e) == args.board]
+        res = [closeout.check(e) for e in es]
+        if args.json:
+            print(json.dumps(res, indent=2, default=str))
+        else:
+            for r in res:
+                print("%-28s %s" % (r["name"], closeout.summary(r)))
+        return max([closeout.code(r) for r in res] or [0])
+    e = _entry_of(args.target or os.environ.get("WPK_WPID") or ".")
+    if e is None:
+        return _err("no registered project for %r" % (args.target or "."))
+    r = closeout.check(e)
+    print(json.dumps(r, indent=2, default=str) if args.json else closeout.render(r))
+    return closeout.code(r)
 
 
 def cmd_board(args) -> int:
@@ -614,6 +746,88 @@ def cmd_repos(args) -> int:
             if v:
                 print("    %-9s %s" % (k, v))
     return 0
+
+
+def _template_line(t):
+    key = t.key_params()
+    return "%-20s %s%s%s" % (t.name, t.title, "  [asks: %s]" % ", ".join(key) if key else "",
+                             " (board)" if t.scope == "board" else "")
+
+
+def cmd_template(args) -> int:
+    """Task templates (docs/prompt-intake.md §4)."""
+    import json
+    from . import registry, templates
+    board = getattr(args, "board", None) or _here_board() or registry.DEFAULT_BOARD
+    if args.op in (None, "list"):
+        ts, broken = templates.scan(board)
+        if args.json:
+            print(json.dumps({"board": board, "templates": [t.as_dict() for t in ts],
+                              "broken": [str(e) for e in broken]}, indent=1))
+            return 0
+        if not ts and not broken:
+            print("No templates for board %s. Put <name>%s files in %s or %s "
+                  "(docs/prompt-intake.md §4)." % (board, templates.SUFFIX,
+                                                    templates.global_dir(),
+                                                    templates.board_dir(board)))
+        for t in ts:
+            print(_template_line(t))
+        for e in broken:
+            print("broken: %s" % e, file=sys.stderr)
+        return 1 if broken else 0
+    if args.op == "show":
+        t = templates.get(args.name, board)
+        if t is None:
+            names = [x.name for x in templates.templates(board)]
+            print("wpk: no template %r on board %s%s" % (
+                args.name, board, "; there are: " + ", ".join(names) if names else ""),
+                file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(dict(t.as_dict(), spec=t.spec, prompt=t.prompt_text()),
+                             indent=1))
+            return 0
+        print("%s: %s\n  %s (%s)\n  starter: %s%s" % (
+            t.name, t.title, t.path, t.scope, t.starter,
+            "\n  board: " + t.board if t.board else ""))
+        if t.spec.get("help"):
+            print("  " + t.spec["help"])
+        if t.params:
+            print("\nParameters (* asked):")
+            key = set(t.key_params())
+            for n, d in t.params.items():
+                d = d if isinstance(d, dict) else {}
+                print("  %s %-14s %-8s%s%s" % (
+                    "*" if n in key else " ", n, d.get("kind", "text"),
+                    " default " + json.dumps(d["default"]) if "default" in d else "",
+                    "  " + d["help"] if d.get("help") else ""))
+        print("\nPrompt:\n")
+        print(t.prompt_text().rstrip("\n"))
+        return 0
+    # check
+    if args.paths:
+        files = [("global", None, p) for p in args.paths]
+    else:
+        files = templates.every_file()
+    errors = 0
+    for scope, owner, p in files:
+        try:
+            t = templates.load(p, scope, owner)
+        except templates.TemplateError as e:
+            print("%s: error: %s" % (e.path + ":" + str(e.line), e.msg))
+            errors += 1
+            continue
+        probs = templates.check(t)
+        for line in templates.report(t, probs):
+            print(line)
+        errors += sum(1 for x in probs if x.level == "error")
+    if not files:
+        print("No template files (%s, %s)." % (templates.global_dir(),
+                                               templates.board_dir("<board>")))
+    elif not errors:
+        print("%d template%s checked: no errors." % (len(files), "" if len(files) == 1
+                                                     else "s"))
+    return 1 if errors else 0
 
 
 def context(board):
@@ -730,6 +944,33 @@ def cmd_kickoff(args) -> int:
         return 0
     os.chdir(layout.packet_folder(proj))
     os.execv(exe, [exe, text])
+
+
+def cmd_resolve(args) -> int:
+    """Start a fresh session that walks you through a packet's open questions
+    (docs/question-ux-plan.md §2)."""
+    from . import ide, layout, registry, resolve
+    from .project import project_of
+    try:
+        pkt = _packet(args.target)
+    except registry.LookupFailed as ex:
+        return _err(str(ex))
+    proj = project_of(pkt.path)
+    if proj is None:
+        return _err("%s is not in a project" % pkt.wpid[:8])
+    harness, exe = resolve.harness(proj)
+    argv = resolve.argv(exe or harness, harness, pkt, proj, ide.wpk_command())
+    if argv is None:
+        print("%s has no open questions. `wpk show %s` shows where it stands."
+              % (pkt.wpid[:8], pkt.wpid[:8]))
+        return 0
+    if args.print or exe is None:
+        print(argv[-1], end="")
+        if exe is None and not args.print:
+            print("\n(%s is not on the PATH: give it the text above)" % harness, file=sys.stderr)
+        return 0
+    os.chdir(layout.packet_folder(proj))
+    os.execve(exe, argv, resolve.env(os.environ, pkt.wpid))
 
 
 def cmd_pr(args) -> int:
@@ -1764,7 +2005,11 @@ def cmd_answer(args) -> int:
         pkt = _packet(args.target)
     except registry.LookupFailed as e:
         return _err(str(e))
-    return _outcome(actions.answer(pkt, answers, note=args.message,
+    try:
+        note = _text_arg(args)
+    except OSError as ex:
+        return _err(str(ex))
+    return _outcome(actions.answer(pkt, answers, note=note,
                                    take_recommendations=args.take_recommendations))
 
 
@@ -1969,6 +2214,88 @@ def cmd_history(args) -> int:
         return 1 if bad else 0
     finally:
         con.close()
+
+
+def cmd_usage(args) -> int:
+    """The token ledger (docs/token-ledger.md): every session's tokens, runner and
+    interactive, by source, project, packet, model, client or day."""
+    import json
+    import time
+    from . import clock, cost, ledger, ledger_collect, registry
+    home = registry.home()
+    if args.action == "collect":
+        got = ledger_collect.pass_once(home)
+        print("ledger: %(replies)d new replies from %(files)d transcripts, %(packets)d "
+              "packets synced, %(console)d console conversations, %(store)d session records" % got)
+        return 0
+    if args.action == "verify":
+        return _usage_verify(home, args.json)
+    m = re.match(r"^(\d+)([hd])$", args.since or "1d")
+    if not m:
+        return _err("--since: expected a duration like 12h or 7d, got %r" % args.since)
+    secs = int(m.group(1)) * {"h": 3600, "d": 86400}[m.group(2)]
+    since = clock.now().timestamp() - secs
+    tables = cost.price_tables(home)
+    rows = []
+    for t, model, u, rec in ledger.buckets(home, since=since, runner=True):
+        rows.append((t, model, u, rec, cost.session_usd(u, cost.model_price(model, tables=tables))))
+    acc = {}
+    for t, model, u, rec, usd in rows:
+        if args.by == "model":
+            k = model
+        elif args.by == "day":
+            k = time.strftime("%Y-%m-%d", time.localtime(t))
+        elif args.by == "packet":
+            k = "%s/%s" % (rec["project"] or "-", rec["packet_name"] or (rec["wpid"] or "-")[:8])
+        else:
+            k = rec.get(args.by) or "(none)"
+        a = acc.setdefault(k, {"tokens": 0, "work": 0, "usd": 0.0, "unpriced": 0,
+                               "sessions": set()})
+        a["tokens"] += sum(u.values())
+        a["work"] += sum(v for kk, v in u.items() if kk != "cache_read_input_tokens")
+        if usd is None:
+            a["unpriced"] += sum(u.values())
+        else:
+            a["usd"] += usd
+        a["sessions"].add(rec["session_id"])
+    out = sorted(acc.items(), key=lambda kv: -kv[1]["usd"])
+    if args.json:
+        print(json.dumps([dict(v, key=k, sessions=len(v["sessions"])) for k, v in out], indent=2))
+        return 0
+    print("%-40s %8s %12s %12s %10s" % (args.by, "sessions", "tokens", "work tokens", "est. $"))
+    for k, v in out:
+        print("%-40s %8d %12s %12s %10s" % (str(k)[:40], len(v["sessions"]), "{:,}".format(
+            v["tokens"]), "{:,}".format(v["work"]), "%.2f%s" % (v["usd"], "*" if v["unpriced"]
+                                                              else "")))
+    if any(v["unpriced"] for v in acc.values()):
+        print("* some tokens have no price ([prices] in config.toml)")
+    print("runner sessions are priced from tokens here; a step's own cost is on wpk stats")
+    return 0
+
+
+def _usage_verify(home, as_json):
+    import json
+    from . import ledger_collect
+    steps = ledger_collect.check_steps(home)
+    reread = ledger_collect.check_reread(home)
+    ok = not steps["less"] and not reread["changed"]
+    if as_json:
+        print(json.dumps({"ok": ok, "steps": steps, "reread": reread}, indent=2))
+        return 0 if ok else 1
+    print("runner steps, in groups that share sessions: %(same)d match the ledger, %(more)d "
+          "have more in the ledger (sub-agents, later turns), %(none)d had no transcript left "
+          "to read, %(less)d have less" % steps)
+    for s in steps["less_steps"][:20]:
+        print("  less: %s %s step %s session %s: step %d output tokens, ledger %d"
+              % (s["project"], s["wpid"][:8], s["step"], s["session"][:8], s["step_output"],
+                 s["ledger_output"]))
+    print("re-read: %d transcripts read again from the start, %d hourly buckets compared, %d "
+          "differ" % (reread["files"], reread["rows"], len(reread["changed"])))
+    for c in reread["changed"][:20]:
+        print("  differs: session %s %s hour %s: ledger %s, transcripts %s"
+              % (c["session"][:8], c["model"], c["hour"], c["ledger"], c["transcripts"]))
+    print("ok" if ok else "MISMATCH")
+    return 0 if ok else 1
 
 
 def cmd_stats(args) -> int:
@@ -2600,9 +2927,52 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("dir")
     p.set_defaults(func=cmd_adopt)
 
-    p = sub.add_parser("rm", help="remove a project from the registry (files are kept)")
+    p = sub.add_parser("rm", help="take a project off the board, keeping its history "
+                       "(files are kept)")
     p.add_argument("name")
+    p.add_argument("--forget", action="store_true",
+                   help="only remove the registry entry: no history is kept")
     p.set_defaults(func=cmd_rm)
+
+    p = sub.add_parser("close", help="take a packet off the board (it stays in history); "
+                       "--delete removes its folder too",
+                       description="Refuses while something is busy in it, and --delete "
+                       "refuses to lose uncommitted or untracked work (commits on no remote "
+                       "are bundled into history) or a folder wpk did not make. "
+                       "`wpk outstanding` shows what is in the way "
+                       "(docs/close-remove-plan.md).")
+    p.add_argument("target", nargs="?", help="project name, WPID or directory; default "
+                   "$WPK_WPID or the current directory")
+    p.add_argument("--delete", action="store_true", help="delete the packet's folder too")
+    p.add_argument("--stop", action="store_true",
+                   help="cancel its queued work and end stranded VS Code servers first")
+    p.add_argument("--drop", action="store_true", help="mark an open packet dropped, not done")
+    p.add_argument("--with-children", action="store_true",
+                   help="close the open packets made from it first (each checked the same way)")
+    p.add_argument("--force", action="store_true",
+                   help="with --delete: delete even what is not committed")
+    p.add_argument("-m", "--message", help="a closing note, kept in the journal")
+    p.set_defaults(func=cmd_close)
+
+    p = sub.add_parser("closed", help="the closed packets: list them, reopen, forget, or "
+                       "delete a kept folder")
+    p.add_argument("op", nargs="?", choices=("reopen", "forget", "delete"))
+    p.add_argument("id", nargs="?", help="an id from `wpk closed`, or a name (the newest)")
+    p.add_argument("--force", action="store_true",
+                   help="delete: even what is not committed")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_closed)
+
+    p = sub.add_parser("outstanding", help="what is outstanding in a packet: live work, "
+                       "uncommitted files, commits on no remote",
+                       description="Changes nothing. Exit 0: clean; 1: notes only; 2: "
+                       "something busy or unsaved (docs/close-remove-plan.md).")
+    p.add_argument("target", nargs="?", help="project name, WPID or directory; default "
+                   "$WPK_WPID or the current directory")
+    p.add_argument("--board", help="every packet on this board, one line each")
+    p.add_argument("--all", action="store_true", help="every registered packet, one line each")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_outstanding)
 
     p = sub.add_parser("board", help="list, make or delete the dash's boards, or move a "
                        "project to one", description="With no operation, list the boards "
@@ -2631,6 +3001,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--board", help="with this board's own (they win by name)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_repos)
+
+    p = sub.add_parser("template", help="task templates: list, show, check",
+                       description="docs/prompt-intake.md §4. A template is <name>.wpt.md "
+                       "(YAML spec, Jinja2 prompt) in $WPK_HOME/templates or "
+                       "$WPK_HOME/boards/<board>/templates (the board's win by name).")
+    tsub = p.add_subparsers(dest="op", metavar="<op>")
+    tp = tsub.add_parser("list", help="the templates offered on a board")
+    tp.add_argument("--board", help="the board (default: this packet's, else main)")
+    tp.add_argument("--json", action="store_true")
+    tp = tsub.add_parser("show", help="a template: its parameters and prompt")
+    tp.add_argument("name")
+    tp.add_argument("--board", help="the board (default: this packet's, else main)")
+    tp.add_argument("--json", action="store_true")
+    tp = tsub.add_parser("check", help="check template files (default: all of them)")
+    tp.add_argument("paths", nargs="*", metavar="FILE")
+    p.set_defaults(func=cmd_template, json=False)
 
     p = sub.add_parser("context", help="what an agent making packets should know: your notes, "
                        "the board's notes, the repos, where packets go",
@@ -2726,6 +3112,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--history", action="store_true",
                    help="read the history store instead of the runs")
     p.set_defaults(func=cmd_stats)
+
+    p = sub.add_parser("usage", help="every session's tokens and est. cost from the token "
+                                     "ledger: runner, your sessions and wpk's own calls")
+    p.add_argument("action", nargs="?", choices=("show", "collect", "verify"), default="show",
+                   help="show (default), collect (one ledger pass now) or verify (check the "
+                   "ledger against runner steps, and that re-reading every transcript changes "
+                   "nothing)")
+    p.add_argument("--since", help="this long back, e.g. 12h or 7d (default 1d)")
+    p.add_argument("--by", default="source",
+                   choices=("source", "project", "packet", "model", "client", "day", "board",
+                            "attribution"),
+                   help="group by (default source)")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p.set_defaults(func=cmd_usage)
 
     p = sub.add_parser("migrate", help="write cards for registered v0.2 projects, link their "
                        "runs and copy their records and metrics into the history store "
@@ -3031,8 +3431,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("answers", nargs="*", metavar="id=answer")
     p.add_argument("-r", "--take-recommendations", action="store_true",
                    help="answer every question not given with its recommendation")
-    p.add_argument("-m", "--message", help="a note for the next step as well")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("-m", "--message", help="a note for the next step as well")
+    g.add_argument("--note-file", help="the note, from a file (- for stdin)")
     p.set_defaults(func=cmd_answer)
+
+    p = sub.add_parser("resolve", help="talk a packet's open questions through in a new "
+                       "Claude session, which ends by answering them",
+                       description="docs/question-ux-plan.md §2. Starts a fresh interactive "
+                       "session in the packet folder, given the questions in full and where "
+                       "the agent's notes are. It explains each question in your terms, and "
+                       "when you agree, records the answers with `wpk answer`.")
+    p.add_argument("target", nargs="?", default=None,
+                   help="WPID (or unique prefix), project name or directory (default: this "
+                   "packet, $WPK_WPID or .)")
+    p.add_argument("--print", action="store_true",
+                   help="print the opening message instead of starting a session")
+    p.set_defaults(func=cmd_resolve)
 
     for op, h in (("allow", "add tools to a project's allowed_tools"),
                   ("deny", "remove tools from a project's allowed_tools")):

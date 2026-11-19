@@ -19,7 +19,10 @@ executor; if you change one, this step is thrown away.
   `.pending/state/` too (`.pending/state/notes/5a.md`, never
   `state/notes/5a.md`); it needs no copy first. An Edit or Write of
   `state/` itself is refused.
-- Write `.pending/summary.md`: a few lines on what this step did.
+- Write `.pending/summary.md`: a few lines on what this step did. The
+  first line is for the owner, who may not have seen the code: say in
+  plain words what changed for someone using the work, without code,
+  paths or test counts. The detail goes on the lines after it.
 - Write `.pending/memento.md`: Markdown with YAML front matter. The body is
   the instruction for the next step, written for a reader who remembers
   nothing of this one. Keep it under about 2 KB: what is done, the exact
@@ -74,18 +77,54 @@ executor; if you change one, this step is thrown away.
   recommendations" means follow yours. Ask only when no work can go on
   without an answer, and ask everything at once. Never use `fail` to ask.
   For more than one question, or to offer a recommendation, give a list;
-  the owner can then answer each inline or take all your recommendations:
+  the owner can then answer each inline or take all your recommendations.
+
+  The owner has not read your notes, your plan or this session. Write
+  each question so it can be answered from the board alone:
+
+  - `q`: one decision, in the owner's terms, not your implementation's.
+    Not "SV cannot reflect X; how does rt-sv know Y?" but "When a user
+    connects two UARTs, who says the link is timed?"
+  - `context`: what the owner would write or see when this matters. A
+    short example (a few lines of their code, a command and its output)
+    beats a description.
+  - `premise`: the earlier decision this question only exists because
+    of, stated plainly, so the owner can reject it rather than pick an
+    option. Leave it out when there is none.
+  - `tradeoffs`: for each choice, what it costs the owner or rules out.
+    `why`: why you recommend the one you do.
+  - Never point at text they can't see ("§11.2", "plan K8.1", "decision
+    21"): quote the part that matters, or give the file path (the board
+    links it).
+  - Use `weight: confirm` for a question you expect a yes to (a naming
+    choice, a default). The board folds those together so the owner can
+    accept them all at once. Ask few real decisions, not many small
+    ones.
+  - Never ask a question again unchanged. If an answer didn't settle it,
+    say what is still open and why.
+
+  The owner may answer something other than your choices, or reject the
+  premise; the body then says to re-plan from their answer.
 
   ```yaml
   ask:
-    - id: bash                    # short, unique; [a-z0-9_-]
+    - id: timing                  # short, unique; [a-z0-9_-]
+      q: When a user connects two UARTs, who makes the link take one character time per byte?
+      context: |
+        The user writes:  connect(uart_a.tx, uart_b.rx)
+        and expects b to see each byte ~87 us after a sends it at 115200 baud.
+      premise: The timed channel is inserted automatically when two sockets connect (state/plan.md).
+      choices: [generated, by hand]
+      tradeoffs:
+        generated: nothing to write; the generator must see the protocol's source
+        by hand: one macro per timed protocol; easy to forget, and then the link is untimed
+      recommend: generated
+      why: users never see the macro, and hand-written protocols can still add it
+    - id: bash
       q: Allow Bash for builds and tests?
       recommend: "yes"
+      weight: confirm             # expected yes; folded with the other confirms
       grants: [Bash]              # a yes allows these tools before the next step
-    - id: cadence
-      q: One commit per item, or per sub-item?
-      recommend: per item
-      choices: [per item, per sub-item]   # optional
     - id: budget
       q: Raise the step budget to 5 USD, or split the item into smaller steps?
       recommend: raise
@@ -214,6 +253,8 @@ otherwise; the list above is shown here).
 ```
 
 All four sections are required; write "none" in one that has nothing.
+Refer to files in the body as Markdown links, e.g.
+`[state/plan.md](state/plan.md)`, so the owner can open them.
 A step that says `done` without a valid report is rejected.
 
 ## Notes from the owner
@@ -237,12 +278,31 @@ the finished outline is under `state/history/`.
 For a task of more than a few steps, keep a plan in `state/` and these
 files beside it:
 
-- **`state/outline.md`: a checklist,** one line or a few per item (`- [ ]`,
-  `- [x]`, `- [-]` for dropped). Size each item to one step that ends in a
-  commit, or split it into numbered parts that each do. Give each item the
-  command that checks it, and only commands you have run, never a
-  placeholder. Keep results out of the outline: they go in the commit
-  message, or in `state/log.md`.
+- **`state/outline.md`: a checklist** (`- [ ]`, `- [x]`, `- [-]` for
+  dropped). The owner reads it on the dashboard to follow progress, so
+  start each item with its id and a plain title: what someone can do once
+  it is done, in about 12 words, without code. Put commands, files and
+  the check that proves it in indented `- ` bullets under the title; they
+  are for the steps, and the dashboard folds them away:
+
+  ```markdown
+  ## Phase 3: run the tests in a simulator
+  The same tests run in pyvm and under Verilator, and can be debugged there.
+
+  - [x] 3.2 Tests rerun in a live simulator when the source changes
+    - `pssc test --watch --platform sim:<s>` (testing/sim_platform.py)
+    - check: `pytest tests/unit/test_sim_channel.py -k sim_platform`
+  - [ ] 3.3 A failing test stops in the debugger instead of ending the run
+  ```
+
+  Under each heading, say in one sentence what the phase delivers. Size
+  each item to one step that ends in a commit, or split it into numbered
+  parts that each do. Give each item the command that checks it, and only
+  commands you have run, never a placeholder. Keep results out of the
+  outline, including dates, step numbers and test counts (the dashboard
+  records when and which step did each item): they go in the commit
+  message, or in `state/log.md`. Ticking an item changes its box, not its
+  title.
 - **`state/env.md`: facts about the environment** that a step has seen
   work, such as paths, environment variables and build and test commands.
   Keep it short, and fix it when a fact turns out wrong. Mementos point to
@@ -253,8 +313,8 @@ files beside it:
 `env.md` and `outline.md` are shown first under "State files" while they
 are under 8 KB; keep them well under that. If the prompt lists either as
 "not shown", shrink it before anything else this step: collapse each
-finished item to one line (id, commit, one-line result) and move the
-detail to `state/notes/<item>.md` or `state/log.md`.
+finished item to its title line and move the detail to
+`state/notes/<item>.md` or `state/log.md`.
 
 Like every state file, change them only through their `.pending/state/`
 copies: a step that writes `state/` directly fails.

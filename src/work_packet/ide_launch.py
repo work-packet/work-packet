@@ -1,6 +1,6 @@
 """Who launched a web VS Code server, and where it ran (docs/vscode-monitor-plan.md §2.1).
 
-A *launch* is one lifetime of a target's server: one local ``serve-web``
+A *launch* is one lifetime of a target's server: one local VS Code server
 process or one IDE job. Each one has an id, ``L-<12 hex>``, that its process
 gets as ``WPK_IDE_LAUNCH``. Every process the editor starts inherits it,
 including the extension host, the extensions' ``claude`` and ``codex``, and

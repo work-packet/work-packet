@@ -141,6 +141,7 @@ def test_board_controls(tmp_path, fake):
     assert _state(pkt)["state"] == "PAUSED"
     html = c.get("/p/a").text
     assert ">Resume<" in html and ">Pause<" not in html
+    assert "ends at once" not in html          # Resume does not ask "Stop … now?"
     r = c.post("/p/a/run", data={"op": "resume", "back": "//evil"}, follow_redirects=False)
     assert _flash(r)[1] and r.headers["location"].startswith("/p/a?")
     assert _state(pkt)["state"] == "RUNNABLE"

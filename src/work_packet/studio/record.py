@@ -106,7 +106,7 @@ def draft_summary(entry, wpid, session, home=None, now=None):
                   ", ".join(f["deleted"]) or "none", text))
     from .. import scribe
     got, _, _ = scribe.call_model(prompt, home, budget=0.05, timeout=DRAFT_TIMEOUT_S,
-                                  wpid=wpid, project_dir=entry.get("path"))
+                                  wpid=wpid, project_dir=entry.get("path"), purpose="studio")
     if not got:
         return plain, "facts"
     return got, "model"

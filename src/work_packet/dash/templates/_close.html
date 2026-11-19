@@ -1,0 +1,61 @@
+{#- The close pages' shared bits (docs/close-remove-plan.md). -#}
+{% macro style() -%}
+<style>
+.cl-sev { margin: 14px 0 4px; font-size: 14px; }
+.cl-sev.busy { color: var(--FAILED); } .cl-sev.unsaved { color: var(--NEEDS_INPUT, #b7791f); }
+ul.cl { list-style: none; padding: 0; margin: 0; }
+ul.cl li { padding: 5px 0; border-bottom: 1px solid var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+ul.cl li .what { flex: 1; min-width: 20ch; }
+ul.cl li code.repo { color: var(--muted); }
+ul.cl details pre { margin: 4px 0 0; font-size: 12px; max-height: 14em; overflow: auto; }
+.cl-acts { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; max-width: 70ch; }
+.cl-acts .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cl-acts input[type=text] { flex: 1; min-width: 16ch; font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); }
+.cl-chip { font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.cl-chip.busy { color: var(--FAILED); border-color: var(--FAILED); }
+.cl-chip.uncommitted, .cl-chip.unpushed, .cl-chip.not-in-git { color: #b7791f; border-color: #b7791f; }
+</style>
+<script>
+document.addEventListener("submit", function (e) {
+  var b = e.submitter, f = e.target;
+  var ask = (b && b.dataset && b.dataset.confirm) || (f.dataset && f.dataset.confirm);
+  if (ask && !window.confirm(ask)) e.preventDefault();
+});
+</script>
+{%- endmacro %}
+
+{#- One severity's findings, with what fixes each where there is one. -#}
+{% macro findings(res, sev, e=None, live=True) -%}
+{% set fs = res.findings|selectattr("severity", "equalto", sev)|list %}
+{% if fs %}
+<h3 class="cl-sev {{ sev }}">{{ {"busy": "Busy: closing now would interrupt these", "unsaved": "Unsaved: deleting the folder would lose these", "note": "Notes"}[sev] }}</h3>
+<ul class="cl">
+{% for f in fs %}
+  <li><span class="what">{% if f.repo and f.repo != "." %}<code class="repo">{{ f.repo }}/</code> {% endif %}{{ f.msg }}
+    {% if f.files %}<details><summary class="muted" style="font-size:12px">show</summary><pre>{{ f.files|join("\n") }}{% if f.n > f.files|length %}
+… and {{ f.n - f.files|length }} more{% endif %}</pre></details>{% endif %}</span>
+    {% if e and live %}{% set p = "/p/" ~ (e.name|urlencode) %}
+    {% if f.kind == "running" %}<a class="mini" href="{{ p }}/{{ f.wpid }}/live">Watch it</a>
+    {% elif f.kind == "question" %}<a class="mini" href="{{ p }}#answer">Answer</a>
+    {% elif f.kind in ("presence", "taken") %}<a class="mini" href="{{ p }}/{{ e.root }}#vscode-sessions">See who</a>
+    {% elif f.kind == "job" %}<a class="mini" href="{{ p }}#jobs">Jobs</a>
+    {% elif f.kind == "children" %}{% for n in f.names %}<a class="mini" href="/p/{{ n|urlencode }}/close">Close {{ n }}</a>{% endfor %}
+    {% elif f.kind in ("queued", "stranded") %}<span class="muted" style="font-size:12px">Stop everything and close ends it</span>
+    {% elif f.severity == "unsaved" %}<a class="mini" href="{{ p }}/console" title="a shell in the packet's folder">Shell</a>{% endif %}
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+{% endif %}
+{%- endmacro %}
+
+{#- What deleting would lose, for the acknowledgement: the unsaved findings
+    but the commits, which are bundled into history. -#}
+{% macro losses(res) -%}
+{%- set ls = res.findings|selectattr("severity", "equalto", "unsaved")|rejectattr("kind", "equalto", "unpushed")|list -%}
+{%- for f in ls %}{% if f.repo and f.repo != "." %}{{ f.repo }}: {% endif %}{{ f.msg }}{{ "; " if not loop.last }}{% endfor -%}
+{%- endmacro %}
+
+{% macro chips(o) -%}
+{% if o %}{% for c in o.chips %}<span class="cl-chip {{ c.text|replace(' ', '-') }}" title="{{ c.title }}{% if o.checked %} (checked {{ o.checked|epoch }}){% endif %}">{{ c.text }}</span>{% endfor %}{% endif %}
+{%- endmacro %}

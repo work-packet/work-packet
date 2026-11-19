@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{#- One closed packet (docs/close-remove-plan.md): Reopen, Delete folder, Forget. -#}
+{% import "_close.html" as cl %}
+{% block title %}{{ r.name }} (closed){% endblock %}
+{% block crumbs %}/ <a href="/closed">closed</a> / {{ r.name }}{% endblock %}
+{% block head %}{{ cl.style() }}{% endblock %}
+{% block main %}
+<div class="titlebar"><h1>{{ r.name }}</h1><span class="muted">closed {{ r.closed }}{% if r.by %} by {{ r.by }}{% endif %} · {{ r.lifecycle }}</span></div>
+<table class="kv">
+<tr><td>Board</td><td>{{ r.board }}</td></tr>
+{% if pages %}<tr><td>History</td><td><a href="/p/{{ r.name|urlencode }}">its pages</a>, read-only: steps, tasks, cost</td></tr>{% endif %}
+<tr><td>Folder</td><td><code>{{ r.folder }}</code> · {% if r.deleted %}deleted {{ r.deleted }}{% elif r.deleting %}<span class="state running pulse">deleting…</span> <span class="muted">since {{ r.deleting }}</span>{% elif r.kept %}kept{% else %}gone (moved or deleted by hand){% endif %}</td></tr>
+{% if r.delete_error %}<tr><td>Delete</td><td class="err">{{ r.delete_error }}</td></tr>{% endif %}
+<tr><td>At close</td><td>{{ r.summary }}</td></tr>
+{% if r.note %}<tr><td>Note</td><td>{{ r.note }}</td></tr>{% endif %}
+{% if r.stopped %}<tr><td>Stopped</td><td>{{ r.stopped|join("; ") }}</td></tr>{% endif %}
+</table>
+{% if r.bundles %}
+<h2>Commits kept</h2>
+<p class="muted">They were on no remote when the folder was deleted. Each bundle restores into a clone:</p>
+<ul class="cl">{% for b in r.bundles %}
+  <li><span class="what"><code class="repo">{{ b.repo }}</code> {{ b.commits }} commit{{ "s" if b.commits != 1 }}
+    <pre>{% if b.remote %}git clone {{ b.remote }} restored && cd restored
+git fetch {{ b.file }} 'refs/heads/*:refs/heads/kept/*'{% else %}git clone {{ b.file }} restored{% endif %}</pre></span></li>
+{% endfor %}</ul>
+{% endif %}
+{% if res %}{% for s in ("busy", "unsaved", "note") %}{{ cl.findings(res, s, live=False) }}{% endfor %}{% endif %}
+{% if can %}
+{% set loss = cl.losses(res)|trim if res else "" %}
+<form class="cl-acts" method="post" action="/closed/{{ r.id|urlencode }}">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  {% if r.kept and not r.deleting %}<div class="row"><button class="go primary" name="op" value="reopen">Reopen</button>
+    <span class="muted">back on board {{ r.board }}, still {{ r.lifecycle }}</span></div>{% endif %}
+  {% if r.kept and owned and not r.deleting %}
+    {% if res %}
+    <div class="row"><button class="go" name="op" value="delete" data-confirm="Delete {{ r.folder }}? This cannot be undone.">Delete folder</button>
+      <span class="muted">commits on no remote are kept in history as a bundle</span></div>
+    {% if loss %}<div class="row"><input type="hidden" name="need_ack" value="1">
+      <label><input type="checkbox" name="ack" value="1"> I understand deleting loses: {{ loss }}</label></div>{% endif %}
+    {% else %}<div class="row"><a class="mini" href="/closed/{{ r.id|urlencode }}?delete=1">Delete folder…</a>
+      <span class="muted">checks what is in it first</span></div>{% endif %}
+  {% elif r.kept and not r.deleting %}<p class="muted">wpk did not make this folder, so it will not delete it.</p>{% endif %}
+  <div class="row"><button class="go" name="op" value="forget" data-confirm="Forget {{ r.name }}? Its runs stay in history; this page goes.">Forget</button>
+    <span class="muted">remove this record; its runs and cost stay in history</span></div>
+</form>
+{% endif %}
+{% endblock %}

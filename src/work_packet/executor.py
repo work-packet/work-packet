@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from . import (clock, docs, faults, frontmatter, fsutil, harness, journal, livecard, model,
                notes, procs, profiles, prompt, questions, registry, report, schema, spawn,
                waiting, workspace)
-from . import cost, hooks as hookmod
+from . import cost, hooks as hookmod, limits
 from .lease import Lease, LeaseHeld
 from .packet import Packet
 from .project import ProjectError, project_of, settings
@@ -335,7 +335,7 @@ def _move_failed(pkt, n):
     return r
 
 
-def _failed_meta(sd, n, a, why, start=None):
+def _failed_meta(sd, n, a, why, start=None, limited=None):
     """Mark the failed attempt's meta.json with why; write one if the run left
     none (it did not finish, or never ran), so stats can count every attempt."""
     path = os.path.join(sd, "meta.json")
@@ -350,6 +350,8 @@ def _failed_meta(sd, n, a, why, start=None):
              "model": start.get("model"),
              "session_id": start.get("session_id"), "cost_usd": None, "tokens": {}}
     m["failed"] = why
+    if limited:
+        m["limited"] = limited
     fsutil.atomic_write(path, json.dumps(m, indent=2) + "\n")
 
 
@@ -444,6 +446,40 @@ def _fail(pkt, st, n, a, why):
         _wake_parent(pkt)
     tail = "; packet is now FAILED" if a >= st.max_attempts else ""
     return Outcome(FAILED, "step %d attempt %d failed: %s%s" % (n, a, why, tail))
+
+
+def _limited(pkt, st, n, a, res, prof):
+    """A run the account's usage limit cut off: kept as ``NNNN.failed-<run>``
+    like a failure but not counted, and the packet sleeps until the limit
+    resets. The profile is held till then too, so the account's other packets
+    wait instead of running into it (limits.py)."""
+    now = clock.now()
+    tries = sum(1 for r in journal.read(pkt.journal_path).records
+                if r.get("type") == "step-failed" and r.get("step") == n and r.get("limited"))
+    until = res.limited_until or limits.reset_from_text(res.text or res.subtype, now)
+    wake = limits.hold(prof.name, limits.wake_time(until, tries, now), pkt.wpid, now)
+    why = "usage limit; resumes %s UTC (not counted as an attempt)" % wake.strftime("%H:%M")
+    r = _move_failed(pkt, n)
+    _keep_pending(pkt, pkt.step_dir(n, r))
+    _failed_meta(pkt.step_dir(n, r), n, a, why, limited=_ts(wake))
+    meta, body = pkt.load_status()
+    meta.update(state="SLEEPING", wake_at=_ts(wake), reason=why, updated=_ts())
+    pkt.save_status(meta, body)
+    journal.append(pkt.journal_path, {"type": "step-failed", "t": _ts(), "step": n,
+                                      "attempt": a, "run": r, "why": why, "counted": False,
+                                      "limited": _ts(wake), "profile": prof.name})
+    _rmtree(pkt.pending_dir)
+    return Outcome(NOT_RUNNABLE, "step %d attempt %d: %s" % (n, a, why))
+
+
+def _hold(pkt, meta, body, n, prof, until):
+    """The profile is held for a usage limit: sleep until it lifts, without running."""
+    why = "usage limit on %s; resumes %s UTC" % (prof.name, until.strftime("%H:%M"))
+    meta.update(state="SLEEPING", wake_at=_ts(until), reason=why, updated=_ts())
+    pkt.save_status(meta, body)
+    journal.append(pkt.journal_path, {"type": "limit-wait", "t": _ts(), "step": n,
+                                      "until": _ts(until), "profile": prof.name})
+    return Outcome(NOT_RUNNABLE, "packet is SLEEPING: %s" % why)
 
 
 def _due(pkt, meta, now):
@@ -638,6 +674,9 @@ def step(target, force=False, lost=None):
             prof = profiles.select(st.profiles, st.harness, meta["model"], st.profile)
         except profiles.ProfileError as e:
             return Outcome(USAGE, str(e))
+        until = None if force else limits.held(prof.name, now)
+        if until is not None:
+            return _hold(pkt, meta, body, n, prof, until)
         out = _run(pkt, st, meta, body, n, a, lease, now, prof)
         docs.after_step(pkt.path)       # stale Sphinx docs rebuild in the background
         return out
@@ -921,6 +960,8 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
             why, mm = _check(pkt, st, snap, res)
     finally:
         hooks.stop()
+    if why is not None and res.limit_hit():
+        return _limited(pkt, st, n, a, res, prof)
     if why is not None:
         return _fail(pkt, st, n, a, why)
     # 12. Resolve.
@@ -1435,8 +1476,16 @@ def _drop_pause_request(pkt):
         pass
 
 
+# Reasons the views and hand-back match exactly: a request carrying one pauses
+# with it as is, as a pause made at once would (a claim made mid-step stays a claim).
+KEPT_REASONS = (schema.REASON_CLAIMED, schema.REASON_HELD, schema.REASON_DONE,
+                schema.REASON_STUDIO)
+
+
 def pause_reason(req, n=None):
     """The PAUSED reason for a pause request."""
+    if req.get("reason") in KEPT_REASONS:
+        return req["reason"]
     why = "paused by %s%s" % (req.get("by") or "someone",
                               " after step %d" % n if n is not None else "")
     return why + (": " + req["reason"] if req.get("reason") else "")

@@ -39,6 +39,7 @@
     {% else %}<button class="go" name="action" value="reopen">Reopen</button>{% endif %}
   </form>
   {% endif %}
+  {% if not e.closed %}<a class="mini" href="/p/{{ e.name|urlencode }}/close" title="Off the board, into history; check what is outstanding first">Close…</a>{% endif %}
   {% endif %}
 </div>
 {% set sbase = "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid ~ "/studio" %}
@@ -113,6 +114,16 @@
   <button class="mini" name="action" value="hooks">{{ "Install" if p.hooks == "missing" else "Repair" }}</button>
 </form>
 {{ vsm.hooks_switch(hooks_on, "/p/" ~ (e.name|urlencode) ~ "/" ~ p.wpid, csrf) }}
+{% endif %}
+{% if desk %}
+<form class="act panel row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:12px" id="vscode-desk"{% if desk.agents %} data-confirm="Restarting VS Code ends {{ desk.agents|length }} agent session{{ 's' if desk.agents|length > 1 }} running in it. Restart?"{% endif %}>
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="key" value="{{ desk.key }}">
+  {% set ends %}{% if desk.terminals %}{{ desk.terminals }} terminal{{ "s" if desk.terminals != 1 }}{% endif %}{% if desk.terminals and desk.agents %}, {% endif %}{% for a in desk.agents %}<span title="{{ a.argv }}">{{ a.argv.split()[0] }} (pid {{ a.pid }}{% if a.since %}, running {{ a.since|age }}{% endif %})</span>{{ ", " if not loop.last }}{% endfor %}{% endset %}
+  <span title="The packet's web VS Code: one server, whatever of the packet is open in it. It keeps the VS Code release it started with (docs/ide-direct-server-plan.md)"><strong>VS Code {{ desk.version }}</strong>{% if desk.started %} running {{ desk.started|age }}{% endif %}{% if desk.terminals or desk.agents %} · {{ ends }}{% endif %}.
+  {% if desk.newer %}<strong>VS Code {{ desk.newer }} is ready</strong>: it takes effect the next time this VS Code starts.{% if desk.terminals or desk.agents %} Restarting now ends {{ ends }}.{% endif %}{% endif %}</span>
+  <button class="mini" name="action" value="ide-restart">{{ "Restart now" if desk.newer else "Restart" }}</button>
+</form>
 {% endif %}
 {% for s in strand or [] %}
 <form class="act panel row" method="post" action="/p/{{ e.name|urlencode }}/{{ p.wpid }}/act" style="margin-bottom:12px">
@@ -254,4 +265,5 @@
     {% endfor %}
   </table></div>
 </details>
+{% if resolve_ok %}<script src="/static/resolve.js?v={{ asset_v }}"></script>{% endif %}
 {% endblock %}

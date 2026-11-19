@@ -46,7 +46,7 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pane.js"), "
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Served from the package: compose.js, shell.js and the other scripts (no CDN, the CSP
 # is script-src 'self'); vendored libraries go through dash/vendored.py. Name -> media type.
-STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript", "studio_wait.js": "text/javascript", "studio_files.js": "text/javascript", "studio_edit.js": "text/javascript", "ide_forward.js": "text/javascript", "ide_presence.js": "text/javascript", "desk.js": "text/javascript", "ide_desk.js": "text/javascript", "page.js": "text/javascript", "notify.js": "text/javascript"}
+STATIC = {"board.js": "text/javascript", "packets.js": "text/javascript", "sched.js": "text/javascript", "compose.js": "text/javascript", "ide.js": "text/javascript", "new.js": "text/javascript", "shell.js": "text/javascript", "resolve.js": "text/javascript", "markup.js": "text/javascript", "console.js": "text/javascript", "studio.js": "text/javascript", "studio_chart.js": "text/javascript", "studio_wait.js": "text/javascript", "studio_files.js": "text/javascript", "studio_edit.js": "text/javascript", "ide_forward.js": "text/javascript", "ide_presence.js": "text/javascript", "desk.js": "text/javascript", "ide_desk.js": "text/javascript", "page.js": "text/javascript", "notify.js": "text/javascript"}
 REFRESH_S = 10
 STARTS = ("ide-web", "ide-desktop", "studio", "handoff", "none")   # collaboration.md W1
 LIVE_MS = 3000             # the live view refreshes faster
@@ -76,6 +76,23 @@ def _inline(text):
     return Markup(h) if h is not None else text
 
 
+class ResolveRefused(Exception):
+    """A question-resolution session that can't start, with why."""
+
+
+def _ask_links(e, wpid, text):
+    """A question's text with each packet file it names (``state/design.md``,
+    a deliverable under ``work/``) linked to the packet's file page."""
+    out = []
+    for chunk, rel in data.file_refs(e, wpid, text):
+        if rel is None:
+            out.append(Markup.escape(chunk))
+        else:
+            out.append(Markup('<a href="/p/%s/%s/file?path=%s">%s</a>') % (
+                urllib.parse.quote(e["name"]), wpid, urllib.parse.quote(rel), chunk))
+    return Markup("").join(out)
+
+
 WORKER_TITLE = {"studio": "done by a person in the studio, not by a model's step",
                 "session": "a checkpoint by a person, on the board or from their Claude or Codex session",
                 "scribe": "a checkpoint drafted from a session's transcript when it ended"}
@@ -83,6 +100,18 @@ WORKER_TITLE = {"studio": "done by a person in the studio, not by a model's step
 
 def _worker_title(w):
     return WORKER_TITLE.get(w, "done by a person in the %s, not by a model's step" % w)
+
+
+def _gone_today(home, boards):
+    """Today's runner cost of packets that are gone, on ``boards``: the token
+    ledger keeps it (docs/token-ledger.md §2.3)."""
+    from .. import ledger, schema
+    start = clock.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        steps = ledger.gone_steps(home, since=schema.format_timestamp(start))
+    except Exception:                   # noqa: BLE001  no ledger: nothing kept
+        return 0.0
+    return sum(s.cost or 0 for s in steps if (s.board or registry.DEFAULT_BOARD) in boards)
 
 
 def _money(v):
@@ -117,6 +146,17 @@ def _pct(x):
 
 def _when(dt):
     return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S") if dt else ""
+
+
+def _age(t):
+    """How long ago Unix time ``t`` was: ``40 s``, ``12 min``, ``11 h``, ``3 d``."""
+    if not isinstance(t, (int, float)):
+        return ""
+    d = max(0.0, time.time() - t)
+    for unit, n in (("d", 86400), ("h", 3600), ("min", 60)):
+        if d >= n:
+            return "%d %s" % (d // n, unit)
+    return "%d s" % d
 
 
 def _epoch(t):
@@ -166,12 +206,13 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
     without it the console runs slash commands only."""
     env = Environment(loader=FileSystemLoader(TEMPLATES),
                       autoescape=select_autoescape(["html"]))
-    env.filters.update(epoch=_epoch, inline=_inline, money=_money, secs=_secs, when=_when, bytes=_bytes, tok=_tok, pct=_pct,
+    env.filters.update(age=_age, epoch=_epoch, inline=_inline, money=_money, secs=_secs, when=_when, bytes=_bytes, tok=_tok, pct=_pct,
                        worker_title=_worker_title)
     stamp = max(os.path.getmtime(os.path.join(HERE, n)) for n in STATIC)
     env.globals.update(origin_of=data.origin, version=__about__.__version__, refresh_s=REFRESH_S,
                        asset_v="%s-%d" % (__about__.__version__, stamp),
                        columns=data.COLUMNS, column_colour=data.COLUMN_COLOUR, ask_text=ask_text,
+                       ask_links=_ask_links,
                        packet_layout=layout.is_packet_layout, packet_folder=layout.packet_folder)
 
     jobs = newjobs.CreateJobs(home)       # New task's Create, in the background
@@ -225,6 +266,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         except Exception:                 # noqa: BLE001: a banner never breaks a page
             ctx["sched_mode"] = None
         ctx.setdefault("ide", ide_config())
+        ctx.setdefault("resolve_ok", shells is not None and vendored.built("term"))
         e = ctx.get("e")                  # a packet's pages lead with its board's crumb
         if isinstance(e, dict) and e.get("name") and e.get("path") and "crumb_board" not in ctx:
             try:
@@ -304,7 +346,7 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
 
     def entry(request):
         try:
-            return archived.get(request.path_params["project"], home)
+            return archived.get_or_closed(request.path_params["project"], home)
         except (KeyError, OSError, ValueError, registry.ConfigError):
             return None
 
@@ -320,19 +362,32 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             board = None
         if board:
             cols, broken = data.only(cols, broken, board)
-        burn = await run_in_threadpool(tokens.board, archived.entries(home), days=days,
-                                       on=[b["name"] for b in side])
-        ov = data.overview(cols, broken, [b for b in side if not board or b["name"] == board],
-                           burn)
         h, me = home or registry.home(), who(request)
+        burn = await run_in_threadpool(tokens.board, archived.entries(home) +
+                                       archived.closed_entries(home), days=days,
+                                       on=[b["name"] for b in side], home=h,
+                                       sessions=is_owner(request))
+        from .. import closeout
+        outs = await run_in_threadpool(closeout.board_view,
+                                       [c["name"] for c in cols.get("Done") or []], home)
+        ov = data.overview(cols, broken, [b for b in side if not board or b["name"] == board],
+                           burn, outstanding=outs)
+        if burn.get("split"):                   # the span, like today, counts your sessions
+            ov["tiles"]["spend"] = burn["split"]["total"]
         snz = attention.snoozes(h, me)
         ov["snoozed"] = sum(1 for a in ov["attention"] if a["key"] in snz)
         ov["attention"] = [a for a in ov["attention"] if a["key"] not in snz]
         since = attention.since(h, me)          # the page's beacon records the visit
         cards = [c for v in cols.values() for c in v]
         last = await run_in_threadpool(data.since_last, cards, since) if since else []
-        ov["tiles"]["sessions"] = await run_in_threadpool(data.session_spend, h) \
+        ov["tiles"]["sessions"] = sess = await run_in_threadpool(data.session_spend, h) \
             if is_owner(request) else None
+        # "Spend today" is the runner and your sessions together; the line below splits it.
+        ov["tiles"]["runner_today"] = ov["tiles"]["spend_today"] = \
+            ov["tiles"]["spend_today"] + await run_in_threadpool(
+                _gone_today, h, [b["name"] for b in side if not board or b["name"] == board])
+        if sess and sess["usd"]:
+            ov["tiles"]["spend_today"] += sess["usd"]
         from .. import brief, inbox
         ov["cols"], ov["captured"] = cols, len(inbox.items(h)) + len(inbox.requests(h))
         ov["brief"] = brief.load(h, time.strftime("%Y-%m-%d"))
@@ -364,7 +419,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         cols, broken = await board_of()
         side = data.side(home, cols, broken)
         burn = await run_in_threadpool(
-            lambda: tokens.board(archived.entries(home), days=days_of(request),
+            lambda: tokens.board(archived.entries(home) + archived.closed_entries(home),
+                                 days=days_of(request),
                                  on=[b["name"] for b in side], home=home or registry.home(),
                                  sessions=is_owner(request)))
         return await arender(request, "stats.html", burn=burn, side=side, here=None,
@@ -429,8 +485,12 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         watchers = await run_in_threadpool(data.watchers, home, name)
         ib = await run_in_threadpool(data.inbox_view, home, cols, name)
         msv = await run_in_threadpool(data.milestones_view, home, cols, name)
+        from .. import closeout
+        outs = await run_in_threadpool(closeout.board_view,
+                                       [c["name"] for c in cols.get("Done") or []], home)
         return await arender(request, "board.html", cols=cols, broken=broken, live=True,
-                      milestones=msv,
+                      milestones=msv, outs=outs,
+                      outs_clean=[n for n, o in outs.items() if o["clean"]],
                       waiting=dsched.waiting(snap), watchers=watchers, captures=ib["entries"],
                       inbox_requests=ib["requests"], inbox_projects=ib["projects"],
                       side=side, here=here, main_board=registry.DEFAULT_BOARD,
@@ -873,6 +933,23 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
                     return None
                 held.add(project)
                 return control.hold(project, by, None, home)
+            if op == "close":                   # docs/close-remove-plan.md: clean ones only
+                if project in held:
+                    return None
+                held.add(project)
+                from .. import closeout
+                if not is_owner(request):
+                    return executor.Outcome(executor.USAGE, "%s: only the board's owner "
+                                            "can close it" % project)
+                res = closeout.check(e, home)
+                if res["counts"][closeout.BUSY] or res["counts"][closeout.UNSAVED]:
+                    return executor.Outcome(executor.USAGE, "%s skipped: %s" % (
+                        project, closeout.summary(res)))
+                try:
+                    closeout.close(e, by=who(request), fp=res["fp"], h=home)
+                except closeout.CloseError as ex:
+                    return executor.Outcome(executor.USAGE, "%s skipped: %s" % (project, ex))
+                return executor.Outcome(executor.OK, "closed %s" % project)
             if op == "board":
                 if project in held:             # a board holds projects: move each once
                     return None
@@ -1059,11 +1136,15 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         strand = await run_in_threadpool(ide_stranded.for_packet, home or registry.home(),
                                          request.path_params["wpid"]) \
             if is_owner(request) else None
+        from . import ide as dide
+        desk = await run_in_threadpool(dide.desk_view, home or registry.home(), ide_config(),
+                                       request.path_params["wpid"]) \
+            if is_owner(request) and ide_backend is not None else None
         auto = request.query_params.get("open")    # just made: open it (collaboration.md W1)
         rl = await run_in_threadpool(data.review_load, home) \
             if p["meta"].get("state") in ("PAUSED", "FAILED", "COMPLETED", "NEEDS_INPUT") else None
         return await arender(request, "packet.html", e=e, p=p, live=True, classes=CLASSES, dfm=dfm,
-                      convs=convs, docs_built=built, vsc=vsc, rl=rl, strand=strand,
+                      convs=convs, docs_built=built, vsc=vsc, rl=rl, strand=strand, desk=desk,
                       autoopen=auto if auto in ("ide-web", "ide-desktop", "studio") else None,
                       sch=dsched.packet_info(snap, e, request.path_params["wpid"]),
                       tk=await run_in_threadpool(tokens.packet, e, request.path_params["wpid"]))
@@ -1101,7 +1182,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             poke()
         q = urllib.parse.urlencode({"msg": out.msg, "ok": "1" if out.code == 0 else "0"})
         url, _, frag = url.partition("#")
-        return RedirectResponse("%s?%s%s" % (url, q, "#" + frag if frag else ""), status_code=303)
+        return RedirectResponse("%s%s%s%s" % (url, "&" if "?" in url else "?", q,
+                                              "#" + frag if frag else ""), status_code=303)
 
     def who(request):
         from .. import executor
@@ -1120,6 +1202,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         by, op, note = who(request), one("action"), one("note")
         if op in ("answer", "recommend"):
             answers = {k[2:]: v[0] for k, v in f.items() if k.startswith("a.") and v[0].strip()}
+            answers.update({k[2:]: v[0] for k, v in f.items()      # "Other" beats a choice
+                            if k.startswith("o.") and v[0].strip()})
             out = await run_in_threadpool(actions.answer, pkt, answers, note,
                                           op == "recommend", by)
         elif op == "note":
@@ -1139,6 +1223,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             out = await run_in_threadpool(executor.withdraw_pause, pkt)
         elif op in ("done", "drop", "reopen"):     # docs/collaboration.md §4.1
             out = await run_in_threadpool(executor.mark, pkt, op, by, note or None)
+            if op != "reopen" and out.code == 0:
+                check_later(e)          # the Done card's chips (docs/close-remove-plan.md)
         elif op == "hooks":                         # install or repair them (§4.3)
             from .. import ide, sessionhooks
             folder = sessionhooks.packet_folder(e)
@@ -1165,6 +1251,22 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             out = executor.Outcome(executor.OK if ok else executor.USAGE,
                                    "ended the stranded VS Code server %d" % pid if ok else
                                    "%d is not a stranded VS Code server of this packet" % pid)
+        elif op == "ide-restart" and is_owner(request) and ide_backend is not None:
+            from . import ide as dide       # docs/ide-direct-server-plan.md §6
+            view = await run_in_threadpool(dide.desk_view, home or registry.home(),
+                                           ide_config(), wpid)
+            if view is None or view["key"] != one("key"):
+                out = executor.Outcome(executor.USAGE, "this packet's VS Code is not running")
+            else:
+                try:
+                    await ide_backend.restart(view["key"])
+                    after = await run_in_threadpool(dide.desk_view, home or registry.home(),
+                                                    ide_config(), wpid)
+                    out = executor.Outcome(executor.OK, "restarted VS Code%s; reload its tab" % (
+                        " on %s" % after["version"] if after else ""))
+                except dide.IdeUnavailable as ex:
+                    out = executor.Outcome(executor.USAGE, "VS Code was ended; starting it "
+                                           "again: %s" % ex)
         elif op == "autonomy":                      # §4.4
             out = await run_in_threadpool(executor.mark, pkt, op, by, None,
                                           one("autonomy"), one("review") or None)
@@ -1736,6 +1838,219 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         except split_mod.SplitError as ex:
             return back(to, executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
         return back(to, executor.Outcome(0, msg), poke_runner=False)
+
+    # --- closing a packet (docs/close-remove-plan.md) ----------------------------
+
+    def rm_later(rec):
+        """Delete a closed packet's folder in the background: a big clone takes
+        a while. Its record says ``deleting`` until then, and ``deleted`` (or
+        ``delete_error``) after."""
+        from .. import closeout
+
+        def run():
+            try:
+                closeout.delete_folder(rec, h=home, _checked=True)
+            except closeout.CloseError as ex:
+                log.warning("delete of %s: %s", rec["folder"], ex)
+            except Exception:           # noqa: BLE001: the record says it is still deleting
+                log.exception("delete of %s", rec["folder"])
+        threading.Thread(target=run, name="rm-%s" % rec["name"], daemon=True).start()
+
+    def check_later(e):
+        """Run a packet's check in the background: git in each repo is too slow
+        for the request that marked it done."""
+        from .. import closeout
+
+        def run():
+            try:
+                closeout.check(e, home)
+                board_changed()
+            except Exception:           # noqa: BLE001: the chips just stay as they were
+                log.exception("check of %s", e["name"])
+        threading.Thread(target=run, name="check-%s" % e["name"], daemon=True).start()
+
+    async def close_page(request):
+        """What is outstanding in a packet, and Close / Close and delete folder."""
+        from .. import closeout, split as split_mod
+        e = registry.get(request.path_params["project"], home)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        res = await run_in_threadpool(closeout.check, e, home)
+        board_changed()                 # the card's chips follow the new check
+        sh = shells.of_project(e["name"]) if shells else []
+        return await arender(request, "close.html", e=e, res=res,
+                             owned=await run_in_threadpool(closeout.owned, e),
+                             split=split_mod.info(e), board=registry.board_of(e),
+                             shells=sh, can=is_owner(request),
+                             delete=request.query_params.get("delete") == "1",
+                             sev=closeout.SEVERITIES, stoppable=closeout.STOPPABLE)
+
+    async def check_json(request):
+        """``closeout.check`` of a packet as JSON (runs it: git in each repo)."""
+        from .. import closeout
+        e = registry.get(request.path_params["project"], home)
+        if e is None:
+            return JSONResponse({"error": "no project %s" % request.path_params["project"]},
+                                status_code=404)
+        res = await run_in_threadpool(closeout.check, e, home)
+        board_changed()
+        return JSONResponse(json.loads(json.dumps(res, default=str)))
+
+    async def close_post(request):
+        """Close (``mode=close``) or close and delete the folder (``mode=delete``).
+        ``fp``: the findings the page showed; a change since refuses."""
+        from .. import closeout, executor
+        e = registry.get(request.path_params["project"], home)
+        if e is None:
+            return not_found(request, "project %s" % request.path_params["project"])
+        name = e["name"]
+        page = "/p/%s/close" % urllib.parse.quote(name)
+        if not is_owner(request):
+            return back(page, executor.Outcome(executor.USAGE,
+                                               "only the board's owner can close it"),
+                        poke_runner=False)
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        delete, stop = one("mode") == "delete", one("stop") == "1"
+        if delete and one("ack") != "1" and one("need_ack") == "1":
+            return back(page + "?delete=1", executor.Outcome(
+                executor.USAGE, "tick the box: deleting loses what it lists"), poke_runner=False)
+        if stop and shells:
+            shells.close_project(name)
+        try:
+            rec = await run_in_threadpool(lambda: closeout.close(
+                e, by=who(request), stop=stop, drop=one("lifecycle") == "drop",
+                delete=delete, force=delete and one("ack") == "1", fp=one("fp") or None,
+                note=one("note") or None, rm_later=True,
+                with_children=one("with_children") == "1", h=home))
+        except closeout.CloseError as ex:
+            return back(page + ("?delete=1" if delete else ""),
+                        executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+        bits = rec.get("stopped") or []
+        if rec.get("bundles"):
+            bits.append("kept %d commit%s on no remote in history" % (
+                sum(b["commits"] for b in rec["bundles"]),
+                "" if sum(b["commits"] for b in rec["bundles"]) == 1 else "s"))
+        if rec.get("deleting"):
+            rm_later(rec)
+        msg = "closed %s%s%s" % (name, ", deleting its folder" if rec.get("deleting") else "",
+                                 "; " + "; ".join(bits) if bits else "")
+        to = local(one("back"), "/closed/%s" % urllib.parse.quote(rec["id"]))
+        return back(to, executor.Outcome(executor.OK, msg), poke_runner=False)
+
+    async def closed_list(request):
+        """The closed packets (docs/close-remove-plan.md): off every board, in history."""
+        from .. import closeout
+        cols, broken = await board_of()
+        rs = await run_in_threadpool(closeout.closed, home)
+        for r in rs:
+            r["kept"] = not r.get("deleted") and os.path.isdir(r.get("folder") or "")
+        return await arender(request, "closed.html", rs=rs, side=data.side(home, cols, broken))
+
+    async def closed_page(request):
+        """One closed packet: what it was, what the check found at close, its
+        bundles; Reopen, Delete folder, Forget."""
+        from .. import closeout
+        rec = await run_in_threadpool(closeout.get_closed, request.path_params["cid"], home)
+        if rec is None:
+            return not_found(request, "closed packet %s" % request.path_params["cid"])
+        rec["kept"] = not rec.get("deleted") and os.path.isdir(rec.get("folder") or "")
+        res = None
+        if rec["kept"] and request.query_params.get("delete") == "1":
+            res = await run_in_threadpool(closeout.check, dict(rec["entry"]), home)
+        return await arender(request, "closed_one.html", r=rec, res=res, can=is_owner(request),
+                             live=bool(rec.get("deleting")),
+                             pages=registry.get(rec["name"], home) is None and await
+                             run_in_threadpool(archived.get_closed, rec["name"], home) is not None,
+                             owned=rec.get("owned") or closeout.origin(
+                                 rec["entry"]).get("made") == "new")
+
+    async def closed_post(request):
+        from .. import closeout, executor
+        cid = request.path_params["cid"]
+        page = "/closed/%s" % urllib.parse.quote(cid)
+        if not is_owner(request):
+            return back(page, executor.Outcome(executor.USAGE, "only the board's owner can"),
+                        poke_runner=False)
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        op = one("op")
+        try:
+            if op == "reopen":
+                ent = await run_in_threadpool(closeout.reopen, cid, home)
+                return back("/p/%s" % urllib.parse.quote(ent["name"]), executor.Outcome(
+                    executor.OK, "%s is back on board %s" % (ent["name"], ent.get("board")
+                                                            or registry.DEFAULT_BOARD)),
+                    poke_runner=False)
+            if op == "forget":
+                await run_in_threadpool(closeout.forget, cid, home)
+                return back("/closed", executor.Outcome(executor.OK, "forgot %s; its runs stay "
+                                                        "in history" % cid), poke_runner=False)
+            if op == "delete":
+                rec = closeout.get_closed(cid, home)
+                if rec is None:
+                    raise closeout.CloseError("no closed packet %r" % cid)
+                if one("need_ack") == "1" and one("ack") != "1":
+                    return back(page + "?delete=1", executor.Outcome(
+                        executor.USAGE, "tick the box: deleting loses what it lists"),
+                        poke_runner=False)
+                rec = await run_in_threadpool(lambda: closeout.delete_folder(
+                    rec, one("ack") == "1", home, rm_later=True))
+                rm_later(rec)
+                return back(page, executor.Outcome(executor.OK, "deleting %s" % rec["folder"]),
+                            poke_runner=False)
+            raise closeout.CloseError("unknown action %r" % op)
+        except closeout.CloseError as ex:
+            return back(page, executor.Outcome(executor.USAGE, str(ex)), poke_runner=False)
+
+    async def checks_run(request):
+        """**Check all**: run the check of every packet on a board (or all), in
+        the background; the chips update as each ends."""
+        from .. import closeout, executor
+        f = await form(request)
+        one = lambda k: (f.get(k) or [""])[0].strip()
+        b = one("board")
+        es = [x for x in registry.entries(home) if not b or registry.board_of(x) == b]
+
+        def run_all():
+            for x in es:
+                try:
+                    closeout.check(x, home)
+                except Exception:       # noqa: BLE001: one bad packet does not stop the rest
+                    log.exception("check of %s", x["name"])
+                board_changed()
+        threading.Thread(target=run_all, name="check-all", daemon=True).start()
+        return back(local(one("back"), "/packets"), executor.Outcome(
+            executor.OK, "checking %d packet%s: the chips update as each ends"
+            % (len(es), "" if len(es) == 1 else "s")), poke_runner=False)
+
+    async def close_clean(request):
+        """**Close clean (N)** on a board's Done column: close each done packet
+        whose last check was clean, checking it again first."""
+        from .. import closeout, executor
+        name = request.path_params["board"]
+        to = "/b/%s" % urllib.parse.quote(name)
+        if not is_owner(request):
+            return back(to, executor.Outcome(executor.USAGE, "only the board's owner can"),
+                        poke_runner=False)
+        f = await form(request)
+        picks = f.get("pick") or []
+        lines, bad = [], 0
+        for n in picks:
+            ent = registry.get(n, home)
+            if ent is None:
+                continue
+            try:
+                await run_in_threadpool(lambda: closeout.close(
+                    ent, by=who(request), fp=(closeout.board_view([n], home).get(n) or {})
+                    .get("fp"), h=home))
+                lines.append("closed %s" % n)
+            except closeout.CloseError as ex:
+                bad += 1
+                lines.append("%s: %s" % (n, ex))
+        return back(to, executor.Outcome(executor.USAGE if bad else executor.OK,
+                                         "\n".join(lines) or "nothing to close"),
+                    poke_runner=False)
 
     async def job_page(request):
         """One job (docs/collaboration.md W7): its command, times, exit and the
@@ -2382,6 +2697,30 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
 
     # --- the shell (docs/dash-tasks.md §5) ------------------------------------------
 
+    def _resolve_session(e, wpid):
+        """What a question-resolution session runs (docs/question-ux-plan.md §2): the
+        server builds it, never the page. Raises ``ResolveRefused``."""
+        from .. import ide, questions, resolve
+        from ..packet import Packet
+        if not data.schema.is_wpid(wpid):
+            raise ResolveRefused("not a packet id: %r" % wpid)
+        pkt = Packet(layout.run_dir(e["path"], wpid))
+        if not os.path.isfile(pkt.status_path):
+            raise ResolveRefused("no packet %s in %s" % (wpid[:8], e["name"]))
+        p = data.packet(e, wpid) or {}
+        if p.get("running") or p.get("taken_by"):
+            raise ResolveRefused("%s is not waiting for you: it is %s" % (
+                wpid[:8], "running" if p.get("running") else "taken in the studio"))
+        if not questions.of_packet(pkt):
+            raise ResolveRefused("%s has no open questions" % wpid[:8])
+        harness, exe = resolve.harness(e["path"])
+        if exe is None:
+            raise ResolveRefused("%s is not on the PATH of the board's server" % harness)
+        return {"argv": resolve.argv(exe, harness, pkt, e["path"], ide.wpk_command()),
+                "cwd": layout.packet_folder(e["path"]), "wpid": wpid,
+                "env": resolve.env(dict(os.environ, TERM="xterm-256color", WPK_SHELL="web"),
+                                   wpid)}
+
     async def shell_ws(ws):
         import asyncio
         import hmac
@@ -2392,9 +2731,11 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         st = ws.scope.get("state", {})
         try:
             first = await asyncio.wait_for(ws.receive_text(), 5)
-            token = (json.loads(first) or {}).get("token") or ""
-        except (asyncio.TimeoutError, ValueError, KeyError, TypeError, WebSocketDisconnect):
-            token = ""
+            hello = json.loads(first) or {}
+            token = hello.get("token") or ""
+        except (asyncio.TimeoutError, ValueError, KeyError, TypeError, AttributeError,
+                WebSocketDisconnect):
+            hello, token = {}, ""
         want = st.get("csrf") or ""
         if shells is None or not want or not hmac.compare_digest(token, want):
             log.warning("refused a shell for %s: %s", ws.path_params.get("project"),
@@ -2404,7 +2745,15 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         sid = ws.path_params["sid"]
         if e is None:
             return await ws.close(1008)
-        if sid == "new":
+        if sid == "new" and hello.get("resolve"):
+            try:
+                sess = await run_in_threadpool(lambda: _resolve_session(e, str(hello["resolve"])))
+                sess = shells.open(e["name"], sess["argv"], sess["cwd"], sess["env"],
+                                   st.get("user") or "?", wpid=sess["wpid"])
+            except (ResolveRefused, shells_mod.ShellError, OSError) as ex:
+                await ws.send_text(json.dumps({"error": str(ex)}))
+                return await ws.close(1000)
+        elif sid == "new":
             c = await run_in_threadpool(data.compose, e)
             if c is None or not c["owned"]:
                 await ws.send_text(json.dumps({"error": "the runner has this task; "
@@ -2582,7 +2931,8 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
             if os.path.isdir(pkt.path):
                 pl = await run_in_threadpool(
                     plan.page, e, wpid, data.steps(pkt), q.get("v"), q.get("changes") == "1",
-                    q.get("open") if q.get("open") in ("all", "none") else None)
+                    q.get("open") if q.get("open") in ("all", "none") else None,
+                    q.get("detail") == "1")
         if pl is None:
             return not_found(request, "packet %s" % wpid)
         return await arender(request, "plan.html", e=e, pl=pl, MARK=plan.MARK)
@@ -2876,6 +3226,14 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         Route("/learn/{iid}", learn_page),
         Route("/learn/{iid}", learn_post, methods=["POST"]),
         Route("/p/{project}/split", split_post, methods=["POST"]),
+        Route("/p/{project}/close", close_page),
+        Route("/p/{project}/close", close_post, methods=["POST"]),
+        Route("/p/{project}/check", check_json),
+        Route("/closed", closed_list),
+        Route("/closed/{cid}", closed_page),
+        Route("/closed/{cid}", closed_post, methods=["POST"]),
+        Route("/checks/run", checks_run, methods=["POST"]),
+        Route("/b/{board}/close-clean", close_clean, methods=["POST"]),
         Route("/p/{project}/jobs", job_post, methods=["POST"]),
         Route("/p/{project}/jobs/{job}", job_page),
         Route("/p/{project}/status.json", status_json),
@@ -2909,12 +3267,17 @@ class ArchivedReadOnly:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http" and scope["method"] == "POST":
             parts = scope["path"].strip("/").split("/")
-            if len(parts) >= 3 and parts[0] == "p" and parts[2] != "board":
+            if len(parts) >= 3 and parts[0] == "p" and parts[2] not in ("board", "close"):
                 name = urllib.parse.unquote(parts[1])
                 try:
-                    e = await run_in_threadpool(archived.get, name, self.home)
+                    e = await run_in_threadpool(archived.get_or_closed, name, self.home)
                 except (KeyError, OSError, ValueError, registry.ConfigError):
                     e = None
+                if e is not None and e.get("closed"):
+                    resp = PlainTextResponse(
+                        "%s is closed: it is shown read-only; Reopen it from /closed/%s\n"
+                        % (name, e["closed"]), status_code=409)
+                    return await resp(scope, receive, send)
                 if e is not None and archived.is_archived(e):
                     resp = PlainTextResponse(
                         "%s is archived: its runs were removed and it is shown from"

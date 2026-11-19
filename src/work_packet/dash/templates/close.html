@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{#- Close a packet (docs/close-remove-plan.md): what is outstanding, then Close
+    or Close and delete folder. Every way in to closing ends here. -#}
+{% import "_close.html" as cl %}
+{% block title %}Close {{ e.name }}{% endblock %}
+{% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / close{% endblock %}
+{% block head %}{{ cl.style() }}{% endblock %}
+{% block main %}
+{% set c = res.counts %}
+{% set busy = c.busy > 0 %}
+{% set hard = res.findings|selectattr("severity", "equalto", "busy")|rejectattr("kind", "in", stoppable)|list %}
+{% set kids = res.findings|selectattr("kind", "equalto", "children")|list %}
+{% set onlystop = busy and hard|length == 0 %}
+{% set onlykids = busy and kids and hard|length == 1 %}
+{% set loss = cl.losses(res)|trim %}
+<div class="titlebar"><h1>Close {{ e.name }}</h1>
+  <span class="muted">board {{ board }} · {{ res.lifecycle }}</span></div>
+<table class="kv">
+<tr><td>Folder</td><td><code>{{ res.folder }}</code>
+  · {% if split %}a split wpk made{% elif owned %}made by wpk{% else %}<span title="wpk did not make this folder, so it never deletes it">yours (wpk did not make it)</span>{% endif %}</td></tr>
+<tr><td>Checked</td><td>{{ res.checked|epoch }} <a class="mini" href="/p/{{ e.name|urlencode }}/close{{ '?delete=1' if delete }}">Check again</a></td></tr>
+{% if res.repos|length > 1 %}<tr><td>Repos</td><td>{% for r in res.repos %}<code>{{ r.path }}</code>{% if r.branch %} <span class="muted">({{ r.branch }})</span>{% endif %}{{ ", " if not loop.last }}{% endfor %}</td></tr>{% endif %}
+{% if shells %}<tr><td>Board shells</td><td>{{ shells|length }} open: Stop everything and close ends them</td></tr>{% endif %}
+</table>
+
+{% for s in sev %}{{ cl.findings(res, s, e) }}{% endfor %}
+{% if not c.busy and not c.unsaved %}<p class="panel" style="margin-top:12px">Nothing outstanding: it is safe to close{% if owned %} and to delete its folder{% endif %}.</p>{% endif %}
+
+{% if can %}
+<form class="cl-acts" method="post" action="/p/{{ e.name|urlencode }}/close">
+  <input type="hidden" name="csrf" value="{{ csrf or '' }}">
+  <input type="hidden" name="fp" value="{{ res.fp }}">
+  {% if res.lifecycle == "open" %}<div class="row"><span class="muted">It is still open. Close it as</span>
+    <label><input type="radio" name="lifecycle" value="done" checked> done</label>
+    <label><input type="radio" name="lifecycle" value="drop"> dropped</label></div>{% endif %}
+  <div class="row"><input type="text" name="note" placeholder="a closing note for the journal (optional)" aria-label="closing note"></div>
+  {% if onlykids %}<div class="row"><label><input type="checkbox" name="with_children" value="1"> also close {{ kids[0].names|join(", ") }}, made from it</label>
+    <span class="muted">each is checked the same way; one that is busy stops it</span></div>{% endif %}
+  <div class="row">
+    <button class="go primary" name="mode" value="close"{% if busy and not onlykids %} disabled title="something is busy in it: see above"{% endif %}>Close</button>
+    <span class="muted">off the board, into history; the folder stays</span>
+  </div>
+  {% if busy %}<div class="row">
+    <button class="go" name="stop" value="1" {% if not onlystop %}disabled title="a person or a step is in it: that does not stop on its own"{% else %}data-confirm="Cancel its queued work{{ ', end its board shells' if shells }} and its stranded VS Code servers, then close it?"{% endif %}>Stop everything and close</button>
+    <span class="muted">{% if onlystop %}cancels queued work, ends stranded VS Code servers{{ " and board shells" if shells }}{% else %}what is busy needs you: answer, finish or leave it first{% endif %}</span>
+  </div>{% endif %}
+  {% if owned %}
+  <div class="row" id="delete">
+    <button class="go" name="mode" value="delete"{% if busy and not onlykids %} disabled title="something is busy in it: see above"{% endif %}
+      data-confirm="Delete {{ res.folder }}? This cannot be undone{{ ': commits on no remote are kept in history' if c.unsaved }}.">Close and delete folder…</button>
+    <span class="muted">the folder goes; commits on no remote are kept in history as a bundle</span>
+  </div>
+  {% if loss %}<div class="row"><input type="hidden" name="need_ack" value="1">
+    <label><input type="checkbox" name="ack" value="1"{{ " autofocus" if delete }}> I understand deleting loses: {{ loss }}</label></div>{% endif %}
+  {% else %}
+  <p class="muted">wpk did not make this folder, so it will not delete it. Close it, then delete <code>{{ res.folder }}</code> yourself if you want it gone.</p>
+  {% endif %}
+</form>
+{% else %}
+<p class="muted">Only the board's owner can close it.</p>
+{% endif %}
+{% endblock %}

@@ -195,3 +195,14 @@ def test_backfill_reads_ended_sessions_again(tmp_path, monkeypatch):
     got = session_usage.records(home)[0]
     assert _sum(got["hours"]) == {"input_tokens": 300, "output_tokens": 300}
     assert s.backfill_usage(home) == 0                  # once
+
+
+def test_overview_spend_today_adds_your_sessions(fake):
+    """The Overview's "Spend today" is the runner and your sessions together, split
+    in the line below it."""
+    e, pkt = _new("c")
+    home = os.environ["WPK_HOME"]
+    _session(home, "c", pkt.wpid, T)                       # $6 today
+    page = _client().get("/").text
+    tile = page[page.index("Spend today"):][:600]
+    assert "$6.00" in tile and "runner $0 + your sessions $6.00 · $6.00 last 7 days" in tile

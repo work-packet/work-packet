@@ -2,8 +2,9 @@
 // the All packets bulk bar's "tick all shown", and the Overview's "select all".
 (function () {
   document.addEventListener("submit", function (e) {
-    var f = e.target;
-    if (f.dataset && f.dataset.confirm && !window.confirm(f.dataset.confirm)) e.preventDefault();
+    var f = e.target, b = e.submitter;    // the button's data-confirm, else the form's
+    var ask = (b && b.dataset && b.dataset.confirm) || (f.dataset && f.dataset.confirm);
+    if (ask && !window.confirm(ask)) e.preventDefault();
   });
   document.addEventListener("change", function (e) {
     var t = e.target;

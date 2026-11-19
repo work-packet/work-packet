@@ -46,7 +46,7 @@
 <button class="go primary" name="op" value="land"{% if m.busy %} disabled title="{{ m.busy }}"{% else %} title="Commit what it left, then merge its branch into {{ m.of }}'s folder; git refuses if your own edits would be overwritten"{% endif %}>Bring it into {{ m.of }}</button>
 <button class="go" name="op" value="drop" title="Mark it dropped; its folder and branch stay">Drop the split</button>{% if m.busy %} <span class="muted">{{ m.busy }}</span>{% endif %}</form>{% endif %}
 {% if is_owner and card.lifecycle != "open" %}<form class="act" method="post" action="/p/{{ e.name|urlencode }}/split" data-confirm="Remove {{ e.name }}'s folder? Its worktree goes and it leaves the board; its journal is kept under splits/removed/. The branch {{ m.branch }} goes only if it was brought in."><input type="hidden" name="csrf" value="{{ csrf or '' }}">
-<button class="go" name="op" value="remove">Remove its folder</button> <span class="muted">it is {{ card.lifecycle }}</span></form>{% endif %}
+<button class="go" name="op" value="remove">Remove its folder</button> <a class="mini" href="/p/{{ e.name|urlencode }}/close?delete=1" title="What is outstanding in it, before it goes">Check it first…</a> <span class="muted">it is {{ card.lifecycle }}</span></form>{% endif %}
 {% endif %}
 {% if sv.splits %}<p>Splits of this project:</p><ul>{% for s in sv.splits %}<li><a href="/p/{{ s.name|urlencode }}">{{ s.name }}</a> <span class="muted">· {{ s.state }}{% if s.lifecycle != "open" %} · {{ s.lifecycle }}{% endif %} · branch <code>{{ s.branch }}</code></span></li>{% endfor %}</ul>{% endif %}
 {% endif %}
@@ -63,4 +63,5 @@
 {% endif %}
 <h2>Tasks</h2>
 {{ ptm.table(e, tasks) }}
+{% if resolve_ok %}<script src="/static/resolve.js?v={{ asset_v }}"></script>{% endif %}
 {% endblock %}

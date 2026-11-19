@@ -459,6 +459,7 @@ class Board:
             with contextlib.suppress(OSError):
                 os.unlink(ide_forward.saved_path(self.home))
         tasks, servers = [], []
+        releases = None
         try:
             if self.network:
                 servers.append(self._start_network())
@@ -498,6 +499,8 @@ class Board:
                 self.runner.start()
             self._write_state()
             tasks.append(asyncio.ensure_future(self._adopt_ide()))
+            # New VS Code releases, got ahead of time (docs/ide-direct-server-plan.md §3)
+            releases = asyncio.ensure_future(self.ide.keep_releases())
             if self.restarted is not None:
                 log.warning("restarted in place (pid %d)", os.getpid())
                 restart.set_status(self.home, self.restarted, "done")
@@ -509,6 +512,8 @@ class Board:
             self._stop.set()
             self._close.set()
             self._closing = True
+            if releases is not None:
+                releases.cancel()
             restarting = self.restart is not None
             self.shells.shutdown()
             self.agents.shutdown()

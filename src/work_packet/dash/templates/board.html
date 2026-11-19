@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_close.html" as cl %}
 {% import "_inbox.html" as ibx with context %}
 {% import "_side.html" as sidem with context %}
 {% import "_pause.html" as pz with context %}
@@ -105,6 +106,15 @@
 {% for col in columns %}
   <section class="col" id="col-{{ loop.index }}" data-follow="no" data-col="{{ col }}">
     <h2><span>{{ col }}</span><span class="muted">{{ cols[col]|length + ((captures|length + inbox_requests|length) if col == "Inbox" else 0) }}</span></h2>
+    {% if col == "Done" and cols[col] %}{% set clean = cols[col]|selectattr("name", "in", outs_clean)|list %}
+    <div class="donebar" style="display:flex;gap:6px;flex-wrap:wrap;margin:0 0 6px">
+      {% if clean %}<form class="act" method="post" action="/b/{{ here.name|urlencode }}/close-clean" data-confirm="Close {{ clean|map(attribute='name')|join(', ') }}? Each leaves the board for history; their folders stay.">
+        <input type="hidden" name="csrf" value="{{ csrf or '' }}">{% for c in clean %}<input type="hidden" name="pick" value="{{ c.name }}">{% endfor %}
+        <button class="mini" title="Close each done packet whose last check found nothing outstanding">Close clean ({{ clean|length }})</button></form>{% endif %}
+      <form class="act" method="post" action="/checks/run"><input type="hidden" name="csrf" value="{{ csrf or '' }}">
+        <input type="hidden" name="board" value="{{ here.name }}"><input type="hidden" name="back" value="/b/{{ here.name|urlencode }}">
+        <button class="mini" title="Check every packet on this board for uncommitted files, commits on no remote and live work">Check all</button></form>
+    </div>{% endif %}
     {% if col == "Inbox" %}{% for d in captures %}
     <div class="card Inbox capture">{{ ibx.row(d, inbox_projects, "/b/" ~ here.name|urlencode) }}</div>
     {% endfor %}{% for r in inbox_requests %}<div class="card Inbox capture">{{ ibx.request(r) }}</div>{% endfor %}
@@ -119,7 +129,7 @@
     <details class="card {{ c.css }}" id="card-{{ c.name }}" draggable="true" data-project="{{ c.name }}"{% if c.root %} data-root="{{ c.root.wpid }}"{% endif %}>
     <summary>
       <div class="name"><a href="{{ href }}">{{ c.name }}</a>
-        {% set tags %}{% if c.agents %}<span class="agent {{ c.agents.turn }}" title="{{ c.agents.title }}">{{ c.agents.text }}</span>{% endif %}{{ plm.chips(c.plan, c.due, c.at_risk, c.forecast) }}{% if c.autonomy != "handoff" %}<span class="auto" title="autonomy: {{ c.autonomy }}">{{ c.autonomy }}</span>{% endif %}{{ pz.badge(c, short=True) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}{% endset %}{% if tags|trim %}<span class="tags">{{ tags }}</span>{% endif %}</div>
+        {% set tags %}{% if c.agents %}<span class="agent {{ c.agents.turn }}" title="{{ c.agents.title }}">{{ c.agents.text }}</span>{% endif %}{{ plm.chips(c.plan, c.due, c.at_risk, c.forecast) }}{% if c.autonomy != "handoff" %}<span class="auto" title="autonomy: {{ c.autonomy }}">{{ c.autonomy }}</span>{% endif %}{{ pz.badge(c, short=True) }}{% if c.trouble %}<span class="badge" title="packets below the root that failed">{{ c.trouble }} failed</span>{% endif %}{% if c.column == "Done" %}{{ cl.chips(outs.get(c.name)) }}{% endif %}{% endset %}{% if tags|trim %}<span class="tags">{{ tags }}</span>{% endif %}</div>
       {#- One line, cut to fit; the whole of it is in the body. -#}
       {% if c.running %}{% set brief = (c.running.name or c.running.short) ~ " step " ~ c.running.step ~ (", " ~ c.running.for if c.running.for else "") %}
       {% elif k == "queued" %}{% set why = waiting.get(c.root.wpid) if c.root and waiting else none %}{% set brief = "waiting on: " ~ why.why if why and why.waiting else "due now" %}
@@ -174,7 +184,7 @@
         <span class="muted" style="margin-left:auto">{{ c.spend_total|money }}{% if c.spend_today %} ({{ c.spend_today|money }} today){% endif %}</span>
       </div>
       <div class="line muted">step {{ c.root.step if c.root else "?" }} · last step {{ c.last_step }}</div>
-      <div class="cardpz"><a class="mini" href="/p/{{ c.name|urlencode }}">Page</a>{{ om.menu(c) }}{{ plm.menu(c.name, c.plan, "/b/" ~ (here.name|urlencode), milestones) }}{{ pz.button(c, "/b/" ~ (here.name|urlencode)) }}{{ pz.mark(c, "/b/" ~ (here.name|urlencode)) }}</div>
+      <div class="cardpz"><a class="mini" href="/p/{{ c.name|urlencode }}">Page</a>{{ om.menu(c) }}{{ plm.menu(c.name, c.plan, "/b/" ~ (here.name|urlencode), milestones) }}{{ pz.button(c, "/b/" ~ (here.name|urlencode)) }}{{ pz.mark(c, "/b/" ~ (here.name|urlencode)) }}{% if c.column == "Done" and not c.archived %}<a class="mini" href="/p/{{ c.name|urlencode }}/close" title="Off the board, into history: shows what is outstanding first">Close…</a>{% endif %}</div>
     </div>
     </details>
     {% endfor %}

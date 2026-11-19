@@ -1248,7 +1248,8 @@ def backfill_usage(home, stop=None):
 # -- S5: what the board shows ----------------------------------------------
 
 HARNESS_LABEL = {"claude": "Claude Code", "codex": "Codex"}
-CLIENT_LABEL = {"vscode-ext": "extension", "terminal": "terminal", "unknown": ""}
+CLIENT_LABEL = {"vscode-ext": "extension", "terminal": "terminal", "unknown": "",
+                "wpk": "wpk", "sdk": "sdk", "desktop": "desktop"}
 TURN_LABEL = {WAITING: "waiting for you", BUSY: "working", FINISHED: "turn finished",
               INTERRUPTED: "interrupted"}
 TURN_KIND = {WAITING: "waiting", BUSY: "working"}

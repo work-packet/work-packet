@@ -180,14 +180,20 @@ def ask_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S, model=Non
     return text, cost
 
 
-def call_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S, model=None, **facts):
+def call_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S, model=None,
+               purpose="status", **facts):
     """``ask_model`` that also says why it failed: ``(text, cost, error or None)``.
     The child gets ``[harnesses.claude] env`` and ``env_file``, as a step does, then
-    the launch hooks (``facts``: ``wpid``, ``project_dir``)."""
+    the launch hooks (``facts``: ``wpid``, ``project_dir``). Its session id goes in
+    the token ledger first, with ``purpose``, so its tokens count as wpk's own
+    (docs/token-ledger.md §4, rule 2a)."""
+    import uuid
     from .dash import agent as agentmod
     exe = shlex.split(os.environ.get("WPK_CLAUDE") or "claude")
+    sid = str(uuid.uuid4())
+    _note_call(home, sid, purpose, facts)
     argv = exe + ["-p", "--output-format", "json", "--model",
-                  model or agentmod.config(home)["model"],
+                  model or agentmod.config(home)["model"], "--session-id", sid,
                   "--tools", "", "--strict-mcp-config", "--setting-sources", "",
                   "--disable-slash-commands", "--max-budget-usd", str(budget)]
     env = dict(os.environ)
@@ -217,6 +223,20 @@ def call_model(prompt, home=None, budget=BUDGET_USD, timeout=TIMEOUT_S, model=No
             p.stderr.strip().splitlines() or p.stdout.strip().splitlines() or [""])[-1]
         return "", cost, "claude exited %d%s" % (p.returncode, ": " + why[:300] if why else "")
     return text, cost, None
+
+
+def _note_call(home, sid, purpose, facts):
+    from . import ledger, registry
+    try:
+        con = ledger.connect(home or registry.home())
+        try:
+            ledger.note_session(con, "claude", sid, how="model-call", source="model-call",
+                                client="wpk", purpose=purpose, wpid=facts.get("wpid"))
+            con.commit()
+        finally:
+            con.close()
+    except Exception:                   # noqa: BLE001  the call goes ahead uncounted
+        pass
 
 
 def parse(text):

@@ -159,11 +159,11 @@ def _under(run_dir, r):
 
 
 def _linked_work(run_dir, rels):
-    """Files under ``work/`` that the record's reports list as deliverables
-    (the dashboard serves only those), so they can still be opened once the
-    workspace is gone: each listed file; a listed folder whole when it holds
-    at most ``LINKED_MAX`` bytes, otherwise the files in it that the reports
-    link to."""
+    """Files under ``work/`` that the record's reports list as deliverables or
+    name in their text (the dashboard serves only those), so they can still be
+    opened once the workspace is gone: each listed or named file; a listed folder
+    whole when it holds at most ``LINKED_MAX`` bytes, otherwise the files in it
+    that the reports link to."""
     from . import report as report_mod
     reps = [r for r in rels if r == report_mod.NAME
             or (r.startswith(os.path.join("state", "history", "report-")) and r.endswith(".md"))]
@@ -208,6 +208,13 @@ def _linked_work(run_dir, rels):
                         and os.path.isfile(os.path.join(run_dir, r))
                         and os.path.getsize(os.path.join(run_dir, r)) <= LINKED_MAX):
                     out.add(r)
+    # Files the reports' text names as paths (dash data.deliverable serves them too).
+    for text in texts:
+        for r in report_mod.mentions(text):
+            p = os.path.join(run_dir, r)
+            if (r.split(os.sep)[0] == "work" and _under(run_dir, r) and os.path.isfile(p)
+                    and os.path.getsize(p) <= LINKED_MAX):
+                out.add(r)
     return sorted(out)
 
 

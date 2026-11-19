@@ -5,23 +5,16 @@
   <input type="hidden" name="csrf" value="{{ csrf or '' }}">
   {% if back %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
   <h2 style="margin-top:0">{{ who ~ " asks" if who else "It asks" }}{{ " " ~ qs|length ~ " questions" if qs|length > 1 }}</h2>
-  {% for q in qs %}
-  <div class="q">
-    <div class="text">{% if qs|length > 1 %}<code>{{ q.id }}</code> {% endif %}{{ q.q }}</div>
-    {% if q.choices %}
-    <div class="opts">{% for c in q.choices %}
-      <label><input type="radio" name="a.{{ q.id }}" value="{{ c }}" {{ "checked" if c == q.recommend }}> {{ c }}</label>
-    {% endfor %}</div>
-    {% else %}
-    <input type="text" name="a.{{ q.id }}" placeholder="{{ q.recommend or 'your answer' }}" aria-label="answer to {{ q.id }}">
-    {% endif %}
-    <div class="muted" style="font-size:12px">
-      {% if q.recommend %}Recommends: <strong>{{ q.recommend }}</strong>.{% endif %}
-      {% if q.grants %}A yes allows {% for t in q.grants %}<code>{{ t }}</code>{{ ", " if not loop.last }}{% endfor %}.{% endif %}
-      {% for w, vals in (q.sets or {}).items() %}{{ "A yes" if w == "yes" and w not in q.choices else "“" ~ w ~ "”" }} sets {% for k, v in vals.items() %}<code>{{ k }} {{ v }}</code>{{ ", " if not loop.last }}{% endfor %}.{% endfor %}
-    </div>
-  </div>
-  {% endfor %}
+  {% set decide = qs|rejectattr("weight", "equalto", "confirm")|list %}
+  {% set confirm = qs|selectattr("weight", "equalto", "confirm")|list %}
+  {% for q in decide %}{{ question(e, wpid, q, qs|length > 1) }}{% endfor %}
+  {% if confirm %}
+  <details class="confirms"{{ " open" if not decide }}>
+    <summary>{{ confirm|length }} to confirm{{ ", filled in with its recommendations" if confirm|length > 1 else ", filled in with its recommendation" }}: {% for q in confirm %}<code>{{ q.id }}</code>{{ ", " if not loop.last }}{% endfor %}</summary>
+    {% for q in confirm %}{{ question(e, wpid, q, true, true) }}{% endfor %}
+  </details>
+  {% endif %}
+  {% if not resolve_ok %}<p class="muted resolve" style="font-size:12.5px">Hard to follow? Talk it through in a new Claude session that reads the agent's notes for you and answers when you agree: <code>wpk resolve {{ wpid[:8] }}</code> in a terminal (a VS Code terminal in the packet folder works).</p>{% endif %}
   <label class="muted" for="{{ id }}-note">Note for the next step (optional)</label>
   <textarea id="{{ id }}-note" name="note"></textarea>
   <div class="row">
@@ -30,4 +23,43 @@
     <span class="muted" style="font-size:12px">Blank answers are sent as unanswered, unless you take the recommendations.</span>
   </div>
 </form>
+{% if resolve_ok %}
+<div class="resolvepane panel" data-project="{{ e.name }}" data-wpid="{{ wpid }}" data-csrf="{{ csrf or '' }}" style="margin-bottom:14px">
+  <div class="row" style="margin-top:0;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">Hard to follow?</h2>
+    <span class="row" style="margin:0;gap:6px">
+      <button class="go resolve-start" type="button">Talk it through with Claude</button>
+      <button class="go resolve-end" type="button" title="End the session (SIGHUP)" hidden>End session</button>
+      <button class="go resolve-reload resolve-done" type="button" hidden>Reload</button>
+    </span>
+  </div>
+  <p class="muted resolve-status" style="font-size:12.5px;margin:6px 0">A new Claude session here reads the agent's notes, explains each question in your terms, and answers for you when you agree (<code>wpk answer</code>). Or run <code>wpk resolve {{ wpid[:8] }}</code> in a terminal.</p>
+  <div class="term" hidden style="height:28em"></div>
+</div>
+{% endif %}
+{%- endmacro %}
+
+{# One question: what is asked, the situation, what it rests on, each choice's cost.
+   ``fill``: a confirm, so a typed answer starts as the recommendation. #}
+{% macro question(e, wpid, q, show_id, fill=false) -%}
+<div class="q">
+  <div class="text">{% if show_id %}<code>{{ q.id }}</code> {% endif %}{{ ask_links(e, wpid, q.q) }}</div>
+  {% if q.context %}<div class="ctx">{{ ask_links(e, wpid, q.context) }}</div>{% endif %}
+  {% if q.premise %}<div class="premise"><strong>Rests on:</strong> {{ ask_links(e, wpid, q.premise) }} <span class="muted">If that's wrong, say so under "Other" or in the note.</span></div>{% endif %}
+  {% if q.choices %}
+  <div class="opts">{% for c in q.choices %}
+    <label><input type="radio" name="a.{{ q.id }}" value="{{ c }}" {{ "checked" if c == q.recommend }}> <span>{{ c }}{% if q.tradeoffs[c] %} <span class="muted">· {{ ask_links(e, wpid, q.tradeoffs[c]) }}</span>{% endif %}</span></label>
+  {% endfor %}
+    <label class="other"><span>Other:</span> <input type="text" name="o.{{ q.id }}" placeholder="your own answer, or why the question is wrong" aria-label="other answer to {{ q.id }}"></label>
+  </div>
+  {% else %}
+  {% if q.tradeoffs %}<ul class="tradeoffs">{% for w, t in q.tradeoffs.items() %}<li><strong>{{ w }}</strong>: {{ ask_links(e, wpid, t) }}</li>{% endfor %}</ul>{% endif %}
+  <input type="text" name="a.{{ q.id }}" {% if fill and q.recommend %}value="{{ q.recommend }}"{% endif %} placeholder="{{ q.recommend or 'your answer' }}" aria-label="answer to {{ q.id }}">
+  {% endif %}
+  <div class="muted" style="font-size:12px">
+    {% if q.recommend %}Recommends: <strong>{{ q.recommend }}</strong>{{ " because " ~ q.why if q.why }}.{% endif %}
+    {% if q.grants %}A yes allows {% for t in q.grants %}<code>{{ t }}</code>{{ ", " if not loop.last }}{% endfor %}.{% endif %}
+    {% for w, vals in (q.sets or {}).items() %}{{ "A yes" if w == "yes" and w not in q.choices else "“" ~ w ~ "”" }} sets {% for k, v in vals.items() %}<code>{{ k }} {{ v }}</code>{{ ", " if not loop.last }}{% endfor %}.{% endfor %}
+  </div>
+</div>
 {%- endmacro %}

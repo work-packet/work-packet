@@ -4,8 +4,10 @@ import json
 import os
 import shlex
 import sys
+from datetime import datetime, timezone
 
 from . import Caps, Harness, home_env
+from .. import limits
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOK = os.path.join(PKG, "ctxhook.py")
@@ -72,6 +74,16 @@ def _add_quota(quota, info):
         q["last"] = w["utilization"]
         if isinstance(w.get("resetsAt"), (int, float)):
             q["resets_at"] = int(w["resetsAt"])
+
+
+def _note_rejected(res, info):
+    """A ``rate_limit_event`` whose status is ``rejected``: the account hit its
+    usage limit; ``resetsAt`` says when it lifts."""
+    if not isinstance(info, dict) or info.get("status") != "rejected":
+        return
+    res.limited = True
+    if isinstance(info.get("resetsAt"), (int, float)):
+        res.limited_until = datetime.fromtimestamp(int(info["resetsAt"]), timezone.utc)
 
 
 def _add_usage(tokens, u):
@@ -214,6 +226,7 @@ class Claude(Harness):
                     seen.add(mid)
             if ev.get("type") == "rate_limit_event":
                 _add_quota(res.quota, ev.get("rate_limit_info"))
+                _note_rejected(res, ev.get("rate_limit_info"))
             if ev.get("type") != "result":
                 continue
             res.got_result = True
@@ -228,6 +241,9 @@ class Claude(Harness):
                 api_ms = (api_ms or 0) + ev["duration_api_ms"]
             if isinstance(ev.get("result"), str):
                 res.text = ev["result"]
+            if res.is_error and (ev.get("api_error_status") == 429
+                                 or limits.looks_limited(res.text)):
+                res.limited = True
         for u in tail.values():
             for k in ("input_tokens", "cache_creation_input_tokens",
                       "cache_read_input_tokens"):

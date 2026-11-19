@@ -16,7 +16,8 @@ import re
 import signal
 import time
 
-SERVER = re.compile(r"/serve-web/([0-9a-f]{40})/out/server-main\.js\Z")
+# serve-web's cache, or wpk's own releases (ide_releases): .../<commit>/out/server-main.js
+SERVER = re.compile(r"/(?:serve-web|releases/[a-z0-9-]+)/([0-9a-f]{40})/out/server-main\.js\Z")
 AGENTS = ("claude", "codex")
 STOP_S = 3.0
 
@@ -90,9 +91,19 @@ def is_agent(argv):
     return any(n in AGENTS for n in names)
 
 
+def _opt(argv, name):
+    """The value of ``name`` in ``argv`` (``--x v`` or ``--x=v``), or None."""
+    for i, a in enumerate(argv):
+        if a == name and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith(name + "="):
+            return a[len(name) + 1:]
+    return None
+
+
 def servers(key):
     """The VS Code servers of desk ``key`` on this host, oldest first:
-    ``[{"pid", "commit", "start", "launch"}]``."""
+    ``[{"pid", "commit", "start", "launch", "socket"}]``."""
     out = []
     for pid in _pids():
         argv = _argv(pid)
@@ -101,19 +112,33 @@ def servers(key):
             continue
         st = _stat(pid)
         out.append({"pid": pid, "commit": m.group(1), "start": st[1] if st else 0,
-                    "launch": _env(pid, "WPK_IDE_LAUNCH")})
+                    "launch": _env(pid, "WPK_IDE_LAUNCH"), "socket": _opt(argv, "--socket-path")})
     return sorted(out, key=lambda s: s["start"])
 
 
-def stranded(key, release=None, kids=None):
-    """The servers of ``key`` that no tab reaches: all but the one serving
-    ``release`` (``stable-<commit>``, the desk's pin), else all but the newest.
-    Each gets ``agents``: ``[{"pid", "argv"}]`` of the sessions under it."""
+def all_servers():
+    """Every desk's VS Code server on this host: ``[{"pid", "commit", "key"}]``."""
+    out = []
+    for pid in _pids():
+        argv = _argv(pid)
+        m = SERVER.search(argv[1]) if len(argv) > 1 else None
+        key = _env(pid, "WPK_IDE_KEY") if m else None
+        if key:
+            out.append({"pid": pid, "commit": m.group(1), "key": key})
+    return out
+
+
+def stranded(key, release=None, kids=None, keep_pid=None):
+    """The servers of ``key`` that no tab reaches: all but ``keep_pid`` (the
+    one the board proxies to), else the one serving ``release``
+    (``stable-<commit>``), else all but the newest. Each gets ``agents``:
+    ``[{"pid", "argv"}]`` of the sessions under it."""
     srv = servers(key)
     if len(srv) < 2:
         return []
     commit = (release or "").rsplit("-", 1)[-1]
-    keep = next((s for s in srv if s["commit"] == commit), srv[-1])
+    keep = next((s for s in srv if s["pid"] == keep_pid), None) or \
+        next((s for s in srv if s["commit"] == commit), srv[-1])
     kids = _children() if kids is None else kids
     out = []
     for s in srv:
@@ -160,6 +185,46 @@ def _alive(pid):
     return bool(raw) and raw.rsplit(b")", 1)[-1].split()[0] != b"Z"
 
 
+def started_at(pid):
+    """When ``pid`` started (epoch seconds), or None."""
+    st = _stat(pid)
+    raw = _read_text("/proc/stat")
+    if st is None or not raw:
+        return None
+    for ln in raw.splitlines():
+        if ln.startswith("btime "):
+            return int(ln.split()[1]) + st[1] / os.sysconf("SC_CLK_TCK")
+    return None
+
+
+def _read_text(path):
+    try:
+        with open(path) as fp:
+            return fp.read()
+    except OSError:
+        return None
+
+
+def inside(pid, kids=None):
+    """What runs in server ``pid``: ``{"agents": [{"pid", "argv", "since"}],
+    "terminals": n}`` (its terminals' shells)."""
+    kids = _children() if kids is None else kids
+    agents, terms = [], 0
+    for p in subtree(pid, kids)[1:]:
+        argv = _argv(p)
+        if is_agent(argv):
+            agents.append({"pid": p, "argv": " ".join(argv)[:120], "since": started_at(p)})
+        elif any("shellIntegration" in a for a in argv[1:3]):
+            terms += 1
+    return {"agents": agents, "terminals": terms}
+
+
+def agents_under(pid, kids=None):
+    """How many agents (claude, codex) run under ``pid``."""
+    kids = _children() if kids is None else kids
+    return sum(1 for p in subtree(pid, kids)[1:] if is_agent(_argv(p)))
+
+
 def end_server(key, pid):
     """End stranded server ``pid`` of desk ``key`` and the agents under it.
     False when ``pid`` is not one of that desk's servers."""
@@ -186,7 +251,7 @@ def for_packet(home, wpid):
     from . import ide_launch
     out = []
     for key in desk_keys(home, wpid):
-        rel = (ide_launch.current(home, key) or {}).get("release")
-        for s in stranded(key, rel):
+        cur = ide_launch.current(home, key) or {}
+        for s in stranded(key, cur.get("release"), keep_pid=cur.get("server_pid")):
             out.append(dict(s, key=key))
     return out

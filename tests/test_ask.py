@@ -131,7 +131,16 @@ def test_handoff_note_from_stdin(asker, monkeypatch):
     ({"resume": "now", "ask": [{"id": "A", "q": "x"}]}, "x", "must match"),
     ({"resume": "now", "ask": [{"id": "a"}]}, "x", "the question as a non-empty string"),
     ({"resume": "now", "ask": [{"id": "a", "q": "x", "grants": "Bash"}]}, "x", "list of strings"),
-    ({"resume": "now", "ask": [{"id": "a", "q": "x", "why": 1}]}, "x", "unknown key"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "colour": 1}]}, "x", "unknown key"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "why": 1}]}, "x", "non-empty string"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "premise": " "}]}, "x", "non-empty string"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "weight": "big"}]}, "x", "decide, confirm"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "tradeoffs": ["slow"]}]}, "x",
+     "mapping of answers"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "choices": ["up", "down"],
+                                "tradeoffs": {"left": "slow"}}]}, "x", "use one of: up, down"),
+    ({"resume": "now", "ask": [{"id": "a", "q": "x", "tradeoffs": {"maybe": "?"}}]}, "x",
+     "use one of: yes, no"),
     ({"resume": "now", "ask": [{"id": "a", "q": "x", "sets": {"model": "m"}}]}, "x",
      "cannot be set by an answer"),
     ({"resume": "now", "ask": [{"id": "a", "q": "x", "sets": {"step_budget_usd": -1}}]}, "x",
@@ -272,6 +281,19 @@ def test_structured_ask_summary_and_show(multi, capsys):
     out = capsys.readouterr().out
     assert "open questions" in out and "yes grants: Bash" in out
     assert "choices: per item / per sub-item" in out
+    assert "bash (confirm): Allow Bash" in out and "rests on:" in out
+    assert "      Every commit is reviewed on its own." in out
+    assert "    if per sub-item: twice as many commits" in out
+    assert "recommend: per item (items are small)" in out
+
+
+def test_explained_question_normalises():
+    from work_packet import questions
+    q = questions.normalise([{"id": "a", "q": "Up?", "context": " c\n", "weight": "confirm",
+                              "tradeoffs": {"yes": " fast "}}])[0]
+    assert (q["context"], q["premise"], q["why"], q["weight"], q["tradeoffs"]) == \
+        ("c", None, None, "confirm", {"yes": "fast"})
+    assert questions.normalise("Up?")[0]["weight"] == "decide"
 
 
 def test_answer_take_recommendations_grants_and_hands_off(multi):

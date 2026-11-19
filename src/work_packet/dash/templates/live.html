@@ -110,7 +110,7 @@ table.procs td.cmd code { font-size: 11px; }
     <div class="bar"><span style="width:{{ (100 * l.outline.done / l.outline.total)|round(1) }}%"></span></div>
     <ul class="tasks panel">
       {% for i in l.outline.entries %}
-      <li class="{{ i.state }} {{ 'current' if i.current }}" style="padding-left:{{ i.depth * 1.2 }}em"><span class="mark">{{ {"done": "✓", "active": "▶", "deferred": "–", "added": "+", "partial": "◐"}.get(i.state, "▶" if i.current else "○") }}</span>{{ i.text }}</li>
+      <li class="{{ i.state }} {{ 'current' if i.current }}" style="padding-left:{{ i.depth * 1.2 }}em"><span class="mark">{{ {"done": "✓", "active": "▶", "deferred": "–", "added": "+", "partial": "◐"}.get(i.state, "▶" if i.current else "○") }}</span><span title="{{ i.text }}">{{ i.title or i.text }}</span></li>
       {% endfor %}
     </ul>
     {% else %}<p class="muted">No checklist in <code>state/</code> (an <code>outline.md</code> with <code>- [ ]</code> lines shows here).</p>{% endif %}

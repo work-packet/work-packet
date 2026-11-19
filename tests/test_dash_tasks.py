@@ -510,3 +510,42 @@ def test_new_task_offers_harnesses_and_models(tmp_path, fake):
                follow_redirects=False)
     msg, ok = _flash(r)
     assert not ok and "no harness" in msg
+
+
+def test_websocket_resolve_session(tmp_path, fake, monkeypatch, guarded):
+    """Talk it through (docs/question-ux-plan.md §2): the server starts the resolve
+    session for a packet with open questions; the page names only the packet."""
+    import json
+    import stat
+    fake("multi_asker")
+    e, root = _new("rs")
+    executor.step(e["path"])
+    assert root.load_status()[0]["state"] == "NEEDS_INPUT"
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    claude = bin_ / "claude"                 # prints what it was given, then waits
+    claude.write_text("#!/bin/sh\necho \"ARGS[$1] WPID[$WPK_WPID] CC[$CLAUDECODE]\"\n"
+                      "pwd\nprintf '%s' \"$3\" | head -1\nread x\n")
+    claude.chmod(claude.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", "%s:%s" % (bin_, os.environ["PATH"]))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    c, token, shells = guarded()
+    url = "ws://127.0.0.1:7878/p/rs/shell/new"
+    for bad, why in (("nope", "not a packet id"), ("0" * 8 + "-0000-4000-8000-" + "0" * 12,
+                                                    "no packet")):
+        with c.websocket_connect(url, headers=ORIGIN) as ws:
+            ws.send_text(json.dumps({"token": token, "resolve": bad}))
+            assert why in json.loads(ws.receive_text())["error"]
+    with c.websocket_connect(url, headers=ORIGIN) as ws:
+        ws.send_text(json.dumps({"token": token, "resolve": root.wpid}))
+        hello = json.loads(ws.receive_text())
+        assert hello["cwd"] == layout.packet_folder(e["path"])
+        _, got = _ws_until(ws, lambda j, g: b"waiting for my answers" in g)
+        assert b"ARGS[--append-system-prompt] WPID[%s] CC[]" % root.wpid.encode() in got
+    s = shells.get(hello["sid"])
+    assert s.wpid == root.wpid and shells.of_project("rs") == []     # not one of compose's shells
+    shells.close(hello["sid"])
+    actions.answer(root, {}, take_recommendations=True)
+    with c.websocket_connect(url, headers=ORIGIN) as ws:
+        ws.send_text(json.dumps({"token": token, "resolve": root.wpid}))
+        assert "no open questions" in json.loads(ws.receive_text())["error"]

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{#- The closed packets (docs/close-remove-plan.md): off every board, in history. -#}
+{% import "_side.html" as sidem with context %}
+{% block title %}Closed packets{% endblock %}
+{% block crumbs %}/ <a href="/closed">closed</a>{% endblock %}
+{% block main %}
+<div class="withside">
+{{ sidem.tab(side, None, "closed") }}
+<div>
+<div class="titlebar"><h1>Closed packets</h1><span class="muted">{{ rs|length }} closed</span></div>
+{% if rs %}
+<table class="pk">
+<tr><th>Packet</th><th>Board</th><th>Closed</th><th>As</th><th>Folder</th><th>At close</th></tr>
+{% for r in rs %}
+<tr><td class="nm"><a href="/closed/{{ r.id|urlencode }}">{{ r.name }}</a></td>
+  <td>{{ r.board }}</td><td>{{ r.closed }}{% if r.by %} <span class="muted">by {{ r.by }}</span>{% endif %}</td>
+  <td>{{ r.lifecycle }}</td>
+  <td>{% if r.deleted %}<span class="muted">deleted</span>{% elif r.deleting %}deleting…{% elif r.kept %}kept{% else %}<span class="muted">gone</span>{% endif %}</td>
+  <td class="muted">{{ r.summary }}</td></tr>
+{% endfor %}
+</table>
+{% else %}<p class="muted">Nothing closed yet. Close a packet from its page, or with <code>wpk close</code>.</p>{% endif %}
+</div></div>
+{% endblock %}

@@ -1,8 +1,9 @@
 """Web VS Code under the board's ``/ide/`` (docs/vscode-plan.md §4, V3).
 
-wpkd runs one ``code serve-web`` (or the open-source ``openvscode-server``,
-``[ide] backend``) per target, each on a unix socket with no token and no port
-of its own, and proxies ``/ide/<key>/*`` to it. A target is what the board
+wpkd runs one VS Code server per target, straight from a release it keeps
+(``ide_releases``; docs/ide-direct-server-plan.md), or the open-source
+``openvscode-server`` (``[ide] backend``). Each listens on a unix socket with no
+token and no port of its own, and wpkd proxies ``/ide/<key>/*`` to it. A target is what the board
 opens: a packet's workspace file or a folder; ``key`` is a hash of its path.
 Every request has already passed the board's ``Guard`` (identity, Host,
 Origin), so the board's login is VS Code's.
@@ -10,27 +11,34 @@ Origin), so the board's login is VS Code's.
 A server starts on the first request, stops after ``[ide] idle_minutes`` with
 no open WebSocket, and stops with the board. At most ``[ide] max_servers`` run
 at once; the least recently used idle one makes room. Each runs in a session
-of its own: ``code`` is a wrapper around a tree of processes, so it is stopped
-by signalling the whole group (V0 finding 6).
+of its own: ``code-server`` is a wrapper around a tree of processes, so it is
+stopped by signalling the whole group (V0 finding 6). A server keeps the release
+it started with; a newer one is used from its next start.
 """
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import hashlib
+import html
 import json
 import logging
 import os
 import re
 import signal
+import sys
 import socket
 import subprocess
 import time
 
-from .. import ide_launch, ide_ports, ide_stranded, registry
+from .. import ide_launch, ide_ports, ide_releases, ide_stranded, registry
 
 log = logging.getLogger("wpk.dash")
 
 BASE = "/ide"
+QUALITY = ide_releases.QUALITY
+PLATFORM = "{platform}"     # in a job's argv: the exec host's platform (sched/ide_job.py)
 SUN_PATH_MAX = 100          # sockaddr_un.sun_path is 108 bytes; leave room
 START_S = 15                # for the socket to appear (the server download comes after)
 STOP_S = 5
@@ -46,6 +54,11 @@ PRESENCE_SHIM = b'<script src="/static/ide_presence.js"></script>'
 # The way to the desktop, and its "a window opened" toast (docs/desktop.md §6).
 DESK_SHIM = b'<script src="/static/ide_desk.js"></script>'
 OPEN = "/__wpk/open"
+# Secret storage for the workbench (extension sign-ins), as `code serve-web` gave it
+# (docs/ide-direct-server-plan.md §5): the page is told where to POST for its key.
+MINT = "/_vscode-cli/mint-key"
+SECRET_HALF = "vscode-cli-secret-half"
+SERVE_WEB_HALF = os.path.expanduser("~/.vscode/cli/serve-web-key-half")
 VIS = "/__wpk/vis"
 FORWARD_HOLD_S = 300        # a server whose forwarded page was used this recently is not evicted
 KEY = re.compile(r"[0-9a-f]{12}\Z")
@@ -55,12 +68,6 @@ COOKIE_ROOT = re.compile(r"(;\s*path=)/(?=\s*(;|$))", re.I)
 # one (403 "Request Forbidden"): it takes the host from a path that still starts
 # with "/", so the host is "" and never matches the gallery's. The proxy fetches
 # them itself, from the hosts the stock product.json files name.
-# A path segment naming the VS Code release a request is for. serve-web sends a
-# request without one to the newest release it knows of, so after an update a
-# page load, or an open tab's reconnect, starts a second server for the desk
-# and strands the first, with its terminals (docs/ide-split-desk-plan.md).
-RELEASE = re.compile(r"(?:stable|insider|exploration)-[0-9a-f]{40}\Z")
-PAGE_RELEASE = re.compile(rb"/((?:stable|insider|exploration)-[0-9a-f]{40})/static/")
 EXT_RESOURCE = re.compile(r"/ide/[0-9a-f]{12}/(?:[^/]+/)?web-extension-resource/([^/]+)/(.+)\Z")
 EXT_HOSTS = re.compile(r"([a-z0-9-]+\.vscode-unpkg\.net|open-vsx\.org)\Z")
 EXT_REQUEST_HEADERS = ("x-client-name", "x-client-version", "x-machine-id", "x-client-commit")
@@ -80,8 +87,14 @@ class IdeUnavailable(Exception):
 
 
 def key_for(path):
-    """The server for a target: a packet's workspace file, or a folder."""
+    """The server for a target with no packet: a hash of its path."""
     return hashlib.sha256(os.fsencode(os.path.abspath(path))).hexdigest()[:12]
+
+
+def key_for_packet(wpid):
+    """The server of a packet: one per packet, whatever of it is open (its
+    workspace, folder, worktree or clone; docs/ide-direct-server-plan.md §1)."""
+    return hashlib.sha256(("packet:%s" % wpid).encode()).hexdigest()[:12]
 
 
 def server_dir(home, key):
@@ -119,22 +132,81 @@ def private_dirs(home, key):
         private_dir(d)
 
 
-COMMANDS = {"serve-web": "code", "openvscode-server": "openvscode-server"}
+def backend_kind(cfg):
+    """``"server"`` (VS Code's server from ``ide_releases``) or
+    ``"openvscode-server"``. ``"serve-web"`` is the old name of ``"server"``."""
+    b = cfg.get("backend") or "server"
+    return "openvscode-server" if b == "openvscode-server" else "server"
 
 
 def command(cfg):
-    """The program that runs the backend: ``[ide] code``, else the backend's own."""
-    return cfg.get("code") or COMMANDS.get(cfg.get("backend") or "serve-web", "code")
+    """openvscode-server's program: ``[ide] code``, else ``openvscode-server``."""
+    return cfg.get("code") or "openvscode-server"
 
 
 def available(cfg, which=None):
     """Why web VS Code cannot run here, or None."""
     import shutil
+    if backend_kind(cfg) == "server":
+        try:
+            ide_releases.platform()
+        except ide_releases.ReleaseError as e:
+            return str(e)
+        return None
     which = which or shutil.which
     code = command(cfg)
     if which(code) is None:
-        what = "openvscode-server" if cfg.get("backend") == "openvscode-server" else "VS Code"
-        return "%r is not on PATH (install %s, or set [ide] code)" % (code, what)
+        return "%r is not on PATH (install openvscode-server, or set [ide] code)" % code
+    return None
+
+
+def release_for(home, cfg, plat=None):
+    """The release a server starting now runs: ``{commit, version, date}``.
+    None and a get started when there is none yet (raise ``IdeWaiting`` then)."""
+    r = ide_releases.current(home, cfg, plat)
+    if r is None and not cfg.get("release"):
+        with contextlib.suppress(ide_releases.ReleaseError, OSError):
+            r = ide_releases.seed(home, plat)
+    if r is None:
+        ide_releases.start_get(home, plat)
+    return r
+
+
+def waiting_for_release(cfg, plat=None):
+    """Why a server cannot start yet, with no release here."""
+    hold = cfg.get("release")
+    failed = ide_releases.last_failure(plat)
+    if failed and not ide_releases.getting(plat):
+        return "getting VS Code's server failed (%s); it is tried again" % failed[1]
+    if hold:
+        return "getting VS Code's server %s ([ide] release)" % hold
+    return "getting VS Code's server (about 70 MB; once per release)"
+
+
+def desk_view(home, cfg, wpid):
+    """Packet ``wpid``'s web VS Code, for its page: None when none runs here,
+    else ``{key, pid, commit, version, started, agents, terminals, newer}``;
+    ``newer`` is the version a restart would bring, or None."""
+    if backend_kind(cfg) != "server":
+        return None
+    own = key_for_packet(wpid)
+    for key in [own] + [k for k in ide_stranded.desk_keys(home, wpid) if k != own]:
+        srv = ide_stranded.servers(key)
+        if not srv:
+            continue
+        cur = ide_launch.current(home, key) or {}
+        kids = ide_stranded._children()
+        main = next((x for x in srv if x["pid"] == cur.get("server_pid")), None) or \
+            max(srv, key=lambda x: (ide_stranded.agents_under(x["pid"], kids), x["start"]))
+        r = ide_releases.find(home, main["commit"]) or \
+            ide_releases.info(os.path.join(ide_releases.SERVE_WEB_CACHE, main["commit"])) or {}
+        version = r.get("version") or cur.get("version") or main["commit"][:7]
+        new = ide_releases.current(home, cfg)
+        newer = new["version"] if new and new["commit"] != main["commit"] and \
+            ide_releases.vkey(new["version"]) >= ide_releases.vkey(version) else None
+        return dict(ide_stranded.inside(main["pid"], kids), key=key, pid=main["pid"],
+                    commit=main["commit"], version=version, newer=newer,
+                    started=ide_stranded.started_at(main["pid"]))
     return None
 
 
@@ -161,43 +233,137 @@ class Backend:
         self._http = None
         self._fwd_http = None
         self.forwarded = float("-inf")      # when a forwarded page was last used
-        self._pin = None            # (launch id, release) once read; None: read it
         self.stranded = []          # servers of this desk no tab reaches (ide_stranded)
+        self.server_pid = None      # the server-main we proxy to, when found in /proc
+        self._busy_logged = False
 
     # -- the process ---------------------------------------------------------
 
-    def argv(self):
+    def program(self, release):
+        """The server's program: the release's ``code-server``, or openvscode-server."""
+        if backend_kind(self.cfg) == "server":
+            return ide_releases.binary(self.home, release["commit"])
+        return command(self.cfg)
+
+    def argv(self, release=None):
         if self._argv is not None:
             return list(self._argv) + [self.sock, self.base]
-        # openvscode-server is VS Code's own server: the same flags, no subcommand.
-        sub = [] if self.cfg.get("backend") == "openvscode-server" else ["serve-web"]
-        return [command(self.cfg)] + sub + [
-            "--socket-path", self.sock, "--server-base-path", self.base,
-            "--without-connection-token", "--accept-server-license-terms",
-            "--server-data-dir", self.data]
+        return [self.program(release),
+                "--socket-path", self.sock, "--server-base-path", self.base,
+                "--without-connection-token", "--accept-server-license-terms",
+                "--server-data-dir", self.data]
+
+    def _release(self):
+        """The release to start, or raise ``IdeWaiting`` while it is got."""
+        if self._argv is not None or backend_kind(self.cfg) != "server":
+            return None
+        r = release_for(self.home, self.cfg)
+        if r is None:
+            raise IdeGetting(waiting_for_release(self.cfg))
+        return r
 
     def _connectable(self):
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            s.settimeout(0.5)
-            s.connect(self.sock)
-            return True
-        except OSError:
+        return _answers(self.sock)
+
+    # -- one server per desk (docs/ide-direct-server-plan.md §2) --------------
+
+    def _scans(self):
+        """VS Code's own server is found in /proc by its WPK_IDE_KEY; a fake
+        or openvscode-server is known by ``serve.pid`` only."""
+        return self._argv is None and backend_kind(self.cfg) == "server"
+
+    def _live(self):
+        """This desk's servers on this host, each with ``answers`` and ``agents``."""
+        if not self._scans():
+            return []
+        kids = ide_stranded._children()
+        out = []
+        for srv in ide_stranded.servers(self.key):
+            srv["answers"] = bool(srv["socket"]) and _answers(srv["socket"])
+            srv["agents"] = ide_stranded.agents_under(srv["pid"], kids)
+            out.append(srv)
+        return out
+
+    def _find(self):
+        """Take over a server of this desk that is running already: the one with
+        agents in it, else the newest. True when there is one. ``IdeStuck`` when
+        one runs but does not answer: a second is never started beside it."""
+        live = self._live()
+        up = [s for s in live if s["answers"]]
+        if not up:
+            if live:
+                raise IdeStuck("VS Code's server for this desk (pid %d) is running but "
+                               "does not answer" % live[-1]["pid"], [s["pid"] for s in live])
             return False
-        finally:
-            s.close()
+        best = max(up, key=lambda s: (s["agents"], s["start"]))
+        self._take(best)
+        return True
+
+    def _take(self, srv):
+        if srv["socket"] != self.sock:
+            log.info("VS Code's server %s: using pid %d on %s, past serve-web", self.key,
+                     srv["pid"], srv["socket"])
+        self._use_socket(srv["socket"])
+        leader = self._pidfile()
+        self.proc = leader if leader and srv["socket"] == socket_path(self.home, self.key) \
+            and _alive(leader) else srv["pid"]
+        self.server_pid = srv["pid"]
+        cur = ide_launch.current(self.home, self.key) or {}
+        rel = "%s-%s" % (QUALITY, srv["commit"])
+        if cur.get("launch_id") and cur.get("launch_id") == srv.get("launch") and \
+                not cur.get("ended"):
+            if cur.get("server_pid") != srv["pid"] or cur.get("release") != rel:
+                ide_launch.update(self.home, self.key, cur["launch_id"], server_pid=srv["pid"],
+                                  release=rel)
+        else:           # a server whose launch we have no record of: give it one
+            lid = ide_launch.start(self.home, self.key, self._target(), "local")
+            ide_launch.update(self.home, self.key, lid, pid=srv["pid"], server_pid=srv["pid"],
+                              release=rel, adopted=True)
+
+    def _use_socket(self, path):
+        if path != self.sock:
+            self.sock = path
+            self._http = None           # the client is bound to a socket
+
+    def _pidfile(self):
+        try:
+            with open(self.pid_path) as fp:
+                return int(fp.read().split()[0])
+        except (OSError, ValueError, IndexError):
+            return None
+
+    @contextlib.contextmanager
+    def _starting(self):
+        """Only one board starts this desk's server at a time (the lock is not
+        inherited: a server is found by its WPK_IDE_KEY, not by the lock)."""
+        import fcntl
+        private_dirs(self.home, self.key)
+        with open(os.path.join(self.dir, "start.lock"), "a") as fp:
+            end = time.monotonic() + START_S
+            while True:
+                try:
+                    fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() > end:
+                        raise IdeUnavailable("another board is starting this desk's server")
+                    time.sleep(0.1)
+            try:
+                yield
+            finally:
+                fcntl.flock(fp, fcntl.LOCK_UN)
 
     async def ensure(self):
         """The backend is up (started now, or already)."""
         async with self._lock:
             if self.running() and self._connectable():
                 return
-            if self.proc is None and self._adopt():
+            if self.proc is None and await asyncio.get_running_loop().run_in_executor(
+                    None, self._adopt):
                 log.info("using VS Code's server %s left by an earlier board, pid %d",
                          self.key, self.proc)
             else:
-                await asyncio.get_running_loop().run_in_executor(None, self._start)
-            self._pin = None            # a new launch: pinned to no release yet
+                await asyncio.get_running_loop().run_in_executor(None, self._start_one)
             end = self._clock() + START_S
             while not self._connectable():
                 if not self.running():
@@ -213,27 +379,43 @@ class Backend:
             if self._idle is None or self._idle.done():
                 self._idle = asyncio.ensure_future(self._idle_loop())
 
+    def _start_one(self):
+        """Start the server, unless one of this desk's is found running now."""
+        if not self._scans():
+            return self._start()
+        with self._starting():
+            if self._find():
+                return
+            self._start()
+
     def _start(self):
+        rel = self._release()
+        self._use_socket(socket_path(self.home, self.key))
+        self.server_pid = None
         private_dirs(self.home, self.key)
         private_dir(os.path.dirname(self.sock))
         with contextlib.suppress(FileNotFoundError):
             os.unlink(self.sock)
         out = open(self.log_path, "ab")
         lid = ide_launch.start(self.home, self.key, self._target(), "local")
+        argv = self.argv(rel)
         try:
-            self.proc = subprocess.Popen(self.with_desktop(self.argv()), stdin=subprocess.DEVNULL,
+            self.proc = subprocess.Popen(self.with_desktop(argv), stdin=subprocess.DEVNULL,
                                          stdout=out,
                                          stderr=subprocess.STDOUT, start_new_session=True,
                                          env=dict(os.environ, **ide_launch.env(lid, self.key)))
         except OSError as e:
             ide_launch.update(self.home, self.key, lid, ended=time.time())
-            raise IdeUnavailable("cannot start %s: %s" % (self.argv()[0], e)) from None
+            raise IdeUnavailable("cannot start %s: %s" % (argv[0], e)) from None
         finally:
             out.close()
         with open(self.pid_path, "w") as fp:
             fp.write("%d\n" % self.proc.pid)
-        ide_launch.update(self.home, self.key, lid, pid=self.proc.pid)
-        log.info("started VS Code's server %s, pid %d", self.key, self.proc.pid)
+        extra = {"release": "%s-%s" % (QUALITY, rel["commit"]), "version": rel["version"]} \
+            if rel else {}
+        ide_launch.update(self.home, self.key, lid, pid=self.proc.pid, **extra)
+        log.info("started VS Code's server %s%s, pid %d", self.key,
+                 " (%s)" % rel["version"] if rel else "", self.proc.pid)
 
     def _target(self):
         try:
@@ -284,7 +466,13 @@ class Backend:
 
     def _adopt(self):
         """A server an earlier board started (and did not stop: it crashed) is
-        still answering on our socket: take it over, so it stops when idle."""
+        still answering on our socket: take it over, so it stops when idle.
+        VS Code's own server is found by its WPK_IDE_KEY, wherever it listens
+        (one serve-web started has its own socket)."""
+        if self._scans():
+            if self._find():
+                return True
+            self._end_serve_web()
         try:
             with open(self.pid_path) as fp:
                 pid = int(fp.read().split()[0])
@@ -310,16 +498,21 @@ class Backend:
             return
         # The agents in its terminals are in sessions of their own, out of the
         # group: found now, while their servers still are, ended after it.
-        left = ide_stranded.targets([s["pid"] for s in ide_stranded.servers(self.key)]) \
-            if self.pins() else []
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(pid, signal.SIGTERM)
-        if not _wait(p, STOP_S):
+        left = ide_stranded.targets([s["pid"] for s in ide_stranded.servers(self.key)])
+        # The group wpkd started (xproxy, the server's wrapper): ours, or the one
+        # serve.pid names when the server was taken over (serve-web's launcher).
+        groups = [g for g in {pid, self._pidfile()} if g and _leads(g)]
+        for g in groups:
             with contextlib.suppress(ProcessLookupError):
-                os.killpg(pid, signal.SIGKILL)
+                os.killpg(g, signal.SIGTERM)
+        if not _wait(p, STOP_S):
+            for g in groups:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(g, signal.SIGKILL)
             _wait(p, STOP_S)
         if left:
             ide_stranded.end(left)
+        self.server_pid = None
         with contextlib.suppress(OSError):
             os.unlink(self.pid_path)
         cur = ide_launch.current(self.home, self.key)
@@ -341,7 +534,12 @@ class Backend:
         async with self._lock:
             if self.proc is not None:
                 return self.running()
-            if self._adopt():
+            try:
+                found = self._adopt()
+            except IdeUnavailable as e:         # stuck: its page offers to end it
+                log.warning("VS Code's server %s: %s", self.key, e)
+                return False
+            if found:
                 log.info("using VS Code's server %s left by an earlier board, pid %d",
                          self.key, self.proc)
                 self.last = self._clock()
@@ -350,6 +548,41 @@ class Backend:
                 return True
             self._clear_leftover()
             return False
+
+    def _end_serve_web(self):
+        """A ``code serve-web`` launcher an older wpk left, with no server under
+        it: ended, not taken over (it would start one of its own choosing)."""
+        pid = self._pidfile()
+        if not (pid and _alive(pid) and _leads(pid)):
+            return
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as fp:
+                argv = fp.read().split(b"\0")
+        except OSError:
+            return
+        if b"serve-web" not in argv:
+            return
+        log.info("VS Code's server %s: ending the old serve-web launcher %d", self.key, pid)
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pid, signal.SIGTERM)
+        if not _wait(pid, STOP_S):
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(pid, signal.SIGKILL)
+        with contextlib.suppress(OSError):
+            os.unlink(self.pid_path)
+
+    def end(self):
+        """End this desk's server(s), and the agents in them, now: Restart, or a
+        stuck server. Blocking."""
+        if self.proc is None and self._scans():
+            with contextlib.suppress(IdeUnavailable):
+                self._find()
+        self._stop_now()
+        rest = ide_stranded.servers(self.key) if self._scans() else []
+        if rest:
+            ide_stranded.end(ide_stranded.targets([s["pid"] for s in rest]))
+        with contextlib.suppress(OSError):
+            os.unlink(self.pid_path)
 
     def _clear_leftover(self):
         try:
@@ -378,52 +611,35 @@ class Backend:
         limit = 60.0 * float(self.cfg.get("idle_minutes") or 60)
         while self.proc is not None:
             await asyncio.sleep(min(30.0, limit / 4))
-            if self.pins():
+            if self._scans():
                 await asyncio.get_running_loop().run_in_executor(None, self.check_split)
             if self.clients == 0 and self._clock() - self.last > limit:
-                await asyncio.get_running_loop().run_in_executor(None, self._stop_now)
+                loop = asyncio.get_running_loop()
+                if await loop.run_in_executor(None, self._busy):
+                    continue        # an agent works in it: idle is not unused
+                await loop.run_in_executor(None, self._stop_now)
 
-    # -- the release (docs/ide-split-desk-plan.md) ----------------------------
-
-    def pins(self):
-        """serve-web, run here: it picks a server by release, and ours are local."""
-        return (self.cfg.get("backend") or "serve-web") == "serve-web" and \
-            not isinstance(self, JobBackend)
+    def _busy(self):
+        """An agent (claude, codex) runs in this desk's server: idle stop leaves
+        it be (docs/ide-direct-server-plan.md §6)."""
+        if not self._scans():
+            return False
+        kids = ide_stranded._children()
+        n = sum(ide_stranded.agents_under(s["pid"], kids) for s in ide_stranded.servers(self.key))
+        if n and not self._busy_logged:
+            log.info("VS Code's server %s is idle, but %d agent session(s) run in it: "
+                     "it keeps running", self.key, n)
+        self._busy_logged = bool(n)
+        return bool(n)
 
     def release(self):
-        """The release this launch serves (``stable-<commit>``), or None."""
-        if self._pin is None:
-            cur = ide_launch.current(self.home, self.key) or {}
-            self._pin = (cur.get("launch_id"), cur.get("release"))
-        return self._pin[1]
-
-    def pin(self, release):
-        """The first release a launch is seen to serve is the one it keeps."""
-        if not release or self.release() is not None or not self._pin[0]:
-            return
-        self._pin = (self._pin[0], release)
-        ide_launch.update(self.home, self.key, self._pin[0], release=release)
-        log.info("VS Code's server %s serves %s", self.key, release)
-
-    def route(self, path):
-        """``path`` as it goes to the server: under this launch's release when it
-        names none, so no client can start another server for the desk."""
-        if not self.pins():
-            return path
-        rest = path[len(self.base):]
-        seg = rest.lstrip("/").split("/", 1)[0]
-        if RELEASE.match(seg):
-            self.pin(seg)
-            return path
-        rel = self.release()
-        if rel is None or seg.startswith(("_vscode-cli", "__wpk")):
-            return path
-        return "%s/%s%s" % (self.base, rel, rest or "/")
+        """The release this launch runs (``stable-<commit>``), or None."""
+        return (ide_launch.current(self.home, self.key) or {}).get("release")
 
     def check_split(self):
         """Look for servers of this desk no tab reaches (``self.stranded``)."""
         try:
-            got = ide_stranded.stranded(self.key, self.release())
+            got = ide_stranded.stranded(self.key, self.release(), keep_pid=self.server_pid)
         except OSError:
             return
         new = {s["pid"] for s in got} - {s["pid"] for s in self.stranded}
@@ -481,6 +697,18 @@ class IdeWaiting(IdeUnavailable):
     """The server's job has no room or has not started yet: the page waits."""
 
 
+class IdeGetting(IdeWaiting):
+    """No VS Code release here yet: one is being got."""
+
+
+class IdeStuck(IdeUnavailable):
+    """The desk's server runs but does not answer: the page offers to end it."""
+
+    def __init__(self, msg, pids=()):
+        super().__init__(msg)
+        self.pids = list(pids)
+
+
 WAIT_S = 3                  # a job-backed server: how long a request waits before the waiting page
 
 
@@ -520,13 +748,17 @@ class JobBackend(Backend):
         """What the job needs from wpkd before it is asked for."""
         self.token()
 
-    def job_argv(self, launch_id=None):
+    def job_argv(self, launch_id=None, release=None):
         import sys
         if self._argv is not None:
             srv = list(self._argv) + self.listen_argv(True)
         else:
-            sub = [] if self.cfg.get("backend") == "openvscode-server" else ["serve-web"]
-            srv = [command(self.cfg)] + sub + self.listen_argv(False) + [
+            # The release is on the filesystem the exec host shares with wpkd
+            # (beside ide/servers/), for the host's platform: ide_job fills in
+            # {platform}, and gets that build when it is not there yet.
+            prog = ide_releases.binary(self.home, release["commit"], PLATFORM) \
+                if release else self.program(release)
+            srv = [prog] + self.listen_argv(False) + [
                 "--server-base-path", self.base, "--accept-server-license-terms",
                 "--server-data-dir", self.data]
         srv = self.with_desktop(srv)
@@ -605,8 +837,12 @@ class JobBackend(Backend):
         private_dirs(self.home, self.key)
         self._prepare()
         if not os.path.exists(ide.req_path(self.key, self.home)):    # else asked already
+            rel = self._release()
             lid = ide_launch.start(self.home, self.key, self._target(), "job")
-            ide.request(self.key, self.size(), self.job_argv(lid),
+            if rel:
+                ide_launch.update(self.home, self.key, lid, release="%s-%s" % (
+                    QUALITY, rel["commit"]), version=rel["version"])
+            ide.request(self.key, self.size(), self.job_argv(lid, rel),
                         self.by or authz.principal_cli(), self._target(), self.home,
                         launch=lid)
         self.poke()
@@ -822,17 +1058,75 @@ class Backends:
         self.servers = {}
         self._lock = asyncio.Lock()
 
+    async def restart(self, key):
+        """End desk ``key``'s server and start it again, on the newest release."""
+        be = self.get(key)
+        if be is None:
+            raise IdeUnavailable("no VS Code server %s" % key)
+        async with be._lock:
+            await asyncio.get_running_loop().run_in_executor(None, be.end)
+        await self.ensure(be)
+        return be
+
+    async def keep_releases(self, first_s=60):
+        """Get each new VS Code release ahead of time, every ``[ide] check_hours``,
+        and drop the ones no desk runs (docs/ide-direct-server-plan.md §3)."""
+        hours = float(self.cfg.get("check_hours") or 0)
+        if not self.cfg.get("web") or backend_kind(self.cfg) != "server" or hours <= 0:
+            return
+        await asyncio.sleep(first_s)
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                await loop.run_in_executor(None, self.update_releases)
+            except Exception:           # noqa: BLE001: offline, a bad archive: next time
+                log.warning("VS Code's releases: %s", sys.exc_info()[1])
+            await asyncio.sleep(hours * 3600)
+
+    def update_releases(self):
+        if not self.cfg.get("release"):
+            r = ide_releases.check(self.home)
+            log.info("VS Code's newest release is %s (%s)", r["version"], r["commit"][:7])
+        cur = ide_releases.current(self.home, self.cfg)
+        keep = {cur["commit"]} if cur else set()
+        keep |= {s["commit"] for s in ide_stranded.all_servers()}
+        gone = ide_releases.gc(self.home, keep)
+        if gone:
+            log.info("removed VS Code release(s) no desk runs: %s",
+                     " ".join(c[:7] for c in gone))
+
     def register(self, path, size=None, project=None, wpid=None, by=None):
-        """The key for ``path``, its directory made. Blocking: call it off the loop.
+        """The key of the server that opens ``path``, its directory made. Blocking:
+        call it off the loop. A packet (``wpid``) has one server, whatever of it
+        ``path`` is: the page opens ``path`` in it through its URL.
         ``size``: the job size for a server in a slot (the Open menu's choice).
         ``project``, ``wpid``, ``by``: who is opening it, kept in ``opens.jsonl``
         so a harness session in the editor can be tied to its packet."""
-        key = key_for(path)
+        key = key_for_packet(wpid) if wpid else key_for(path)
+        if wpid:
+            key = self._legacy(key, wpid) or key
         try:
             return self._register(key, path, size)
         finally:
             if project or wpid or by:
                 ide_launch.record_open(self.home, key, project, wpid, by)
+
+    def _legacy(self, key, wpid):
+        """A desk this packet opened before desks were per packet (keyed by a
+        path), whose server still runs: it keeps serving the packet until it
+        stops, so its terminals and sessions are not left behind (§7)."""
+        if self.slot or backend_kind(self.cfg) != "server" or ide_stranded.servers(key):
+            return None
+        best = None
+        for k in ide_stranded.desk_keys(self.home, wpid):
+            if k == key:
+                continue
+            srv = ide_stranded.servers(k)
+            if srv:
+                n = sum(ide_stranded.agents_under(x["pid"]) for x in srv)
+                if best is None or n > best[0]:
+                    best = (n, k)
+        return best and best[1]
 
     def _register(self, key, path, size):
         private_dirs(self.home, key)
@@ -887,11 +1181,14 @@ class Backends:
             others = [b for b in self.servers.values() if b is not be and b.running()]
             while len(others) >= limit:
                 now = self._clock()
+                loop = asyncio.get_running_loop()
                 idle = [b for b in others
-                        if b.clients == 0 and now - b.forwarded > FORWARD_HOLD_S]
+                        if b.clients == 0 and now - b.forwarded > FORWARD_HOLD_S and
+                        not await loop.run_in_executor(None, b._busy)]
                 if not idle:
-                    raise IdeUnavailable("%d VS Code servers are in use ([ide] max_servers); "
-                                         "close one and reload" % len(others))
+                    raise IdeUnavailable("%d VS Code servers are in use, by tabs or agent "
+                                         "sessions ([ide] max_servers); close one and reload"
+                                         % len(others))
                 lru = min(idle, key=lambda b: b.last)
                 log.info("stopping VS Code's server %s to make room", lru.key)
                 await asyncio.get_running_loop().run_in_executor(None, lru._stop_now)
@@ -930,6 +1227,27 @@ class Backends:
             if be is not None and await be.adopt():
                 got.append(k)
         return got
+
+
+def _leads(pid):
+    """``pid`` runs and leads its own process group (one wpkd started)."""
+    try:
+        return os.getpgid(pid) == pid
+    except OSError:
+        return False
+
+
+def _answers(path):
+    """Something accepts connections on unix socket ``path``."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.settimeout(0.5)
+        s.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
 
 
 def _alive(pid):
@@ -993,6 +1311,75 @@ def key_of(path):
     return parts[2] if len(parts) > 2 else ""
 
 
+def server_half(home, serve_web=SERVE_WEB_HALF):
+    """The server's half of the workbench's secret key: serve-web's own when it
+    left one (so what it stored still opens), else one made here. 32 bytes."""
+    p = os.path.join(home, "ide", "secret-half")
+    with contextlib.suppress(OSError, ValueError):
+        with open(p) as fp:
+            raw = base64.b64decode(fp.read().strip(), validate=True)
+        if len(raw) == 32:
+            return raw
+    raw = None
+    with contextlib.suppress(OSError, ValueError, binascii.Error):
+        with open(serve_web) as fp:
+            got = json.load(fp)
+        raw = base64.urlsafe_b64decode(got + "=" * (-len(got) % 4))
+        if len(raw) != 32:
+            raw = None
+    raw = raw or os.urandom(32)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    fd = os.open(p + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fp:
+        fp.write(base64.b64encode(raw).decode() + "\n")
+    os.replace(p + ".tmp", p)
+    return raw
+
+
+def _client_half(header):
+    """The browser's half (the HttpOnly cookie), or None."""
+    for c in (header or "").split(";"):
+        k, _, v = c.strip().partition("=")
+        if k == SECRET_HALF and v:
+            with contextlib.suppress(ValueError, binascii.Error):
+                raw = base64.urlsafe_b64decode(v + "=" * (-len(v) % 4))
+                if len(raw) == 32:
+                    return raw
+    return None
+
+
+def secret_cookies(base, half=None):
+    """The Set-Cookie values that tell the page where its key is (and give the
+    browser its half when it has none), scoped to this server."""
+    out = ["vscode-secret-key-path=%s%s; SameSite=Strict; Path=%s" % (base, MINT, base)]
+    if half is not None:
+        out.append("%s=%s; SameSite=Strict; HttpOnly; Max-Age=2592000; Path=%s"
+                   % (SECRET_HALF, base64.urlsafe_b64encode(half).decode(), base))
+    return out
+
+
+def mints(backend):
+    """The board answers ``mint-key`` for VS Code's own server (openvscode-server
+    keeps its secrets its own way)."""
+    return backend_kind(backend.cfg) == "server"
+
+
+async def mint_key(backend, request):
+    """``POST <base>/_vscode-cli/mint-key``: the 32-byte key, SHA-256 of the
+    server's half and the browser's (serve-web's recipe)."""
+    from starlette.responses import Response
+    if request.method != "POST":
+        return Response(status_code=405)
+    srv = await asyncio.get_running_loop().run_in_executor(None, server_half, backend.home)
+    half = _client_half(request.headers.get("cookie"))
+    new = half is None
+    half = half or os.urandom(32)
+    resp = Response(hashlib.sha256(srv + half).digest(), media_type="application/octet-stream")
+    resp.raw_headers += [(b"set-cookie", c.encode("latin-1"))
+                         for c in secret_cookies(backend.base, half if new else None)]
+    return resp
+
+
 def cookie_path(value, base):
     """VS Code sets its cookies on ``Path=/``; scope them to this server's
     ``/ide/<key>`` so two servers do not overwrite each other's secret half."""
@@ -1039,6 +1426,30 @@ WAITING = """<!doctype html><html><head><meta charset="utf-8">
 </body></html>
 """
 
+GETTING = """<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="5"><title>Getting VS Code</title></head>
+<body style="font: 15px system-ui, sans-serif; margin: 3em; color: #444">
+<h1 style="font-size: 20px">Getting VS Code</h1>
+<p>The board is %(why)s.</p>
+<p>The page reloads every 5 s until it is up.</p>
+</body></html>
+"""
+
+STUCK = """<!doctype html><html><head><meta charset="utf-8"><title>VS Code is not answering</title></head>
+<body style="font: 15px system-ui, sans-serif; margin: 3em; color: #444">
+<h1 style="font-size: 20px">VS Code is not answering</h1>
+<p>%(why)s. The board does not start a second one beside it: its terminals and
+agent sessions would be cut off from you.</p>
+<form method="post" action="%(base)s/__wpk/restart">
+<input type="hidden" name="back" value="%(back)s">
+<p>Ending it also ends what runs in its terminals.
+<button>End it and start VS Code again</button></p>
+</form>
+<p><a href="%(back)s">Try again</a></p>
+</body></html>
+"""
+RESTART = "/__wpk/restart"
+
 GONE = ("404 this VS Code page is not open on the board; open it again from "
         "the project's page\n")
 
@@ -1059,6 +1470,22 @@ def rewrite_workbench(body, trust_off, shim, presence=False, desk=False):
     return body
 
 
+async def restart_page(backends, backend, request):
+    """``POST <base>/__wpk/restart`` from the not-answering page: end the desk's
+    server(s), start it again, back to the page that was asked for."""
+    from starlette.responses import RedirectResponse, Response
+    if request.method != "POST":
+        return Response(status_code=405)
+    form = await request.form()
+    back = str(form.get("back") or "")
+    if not (back == backend.base or back.startswith(backend.base + "/")) or "\\" in back:
+        back = backend.base + "/"
+    async with backend._lock:
+        await asyncio.get_running_loop().run_in_executor(None, backend.end)
+    log.warning("VS Code's server %s: ended from its page, to start again", backend.key)
+    return RedirectResponse(back, status_code=303)
+
+
 async def proxy_http(backends, request):
     from starlette.background import BackgroundTask
     from starlette.responses import PlainTextResponse, Response, StreamingResponse
@@ -1070,6 +1497,10 @@ async def proxy_http(backends, request):
         return await ide_forward.open_link(backends, backend, request)
     if request.url.path == backend.base + VIS:
         return await visibility(backend, request)
+    if request.url.path == backend.base + MINT and mints(backend):
+        return await mint_key(backend, request)
+    if request.url.path == backend.base + RESTART:
+        return await restart_page(backends, backend, request)
     ext = ext_resource_url(request.scope.get("raw_path", b"").decode("latin-1")
                            or request.url.path)
     if ext and request.method in ("GET", "HEAD"):
@@ -1078,12 +1509,18 @@ async def proxy_http(backends, request):
         await backends.ensure(backend)
     except IdeWaiting as e:
         from starlette.responses import HTMLResponse
-        return HTMLResponse(WAITING % {"why": str(e).replace("<", "&lt;")}, status_code=503,
+        page = GETTING if isinstance(e, IdeGetting) else WAITING
+        return HTMLResponse(page % {"why": html.escape(str(e))}, status_code=503,
                             headers={"retry-after": "5"})
+    except IdeStuck as e:
+        from starlette.responses import HTMLResponse
+        back = request.url.path + ("?" + request.url.query if request.url.query else "")
+        return HTMLResponse(STUCK % {"why": html.escape(str(e)), "base": backend.base,
+                                     "back": html.escape(back)}, status_code=503)
     except IdeUnavailable as e:
         return PlainTextResponse("503 %s\n" % e, status_code=503)
     backend.last = backend._clock()
-    url = backend.url(backend.route(request.url.path) +
+    url = backend.url(request.url.path +
                       ("?" + request.url.query if request.url.query else ""))
     hc = backend.client()
     req = hc.build_request(request.method, url, headers=backend.headers(request.headers),
@@ -1100,6 +1537,9 @@ async def proxy_http(backends, request):
                                 "content-length")]
     trust_off = not backend.cfg.get("workspace_trust", False)
     page = request.url.path == backend.base + "/"
+    if page and mints(backend) and r.status_code == 200:
+        half = None if _client_half(request.headers.get("cookie")) else os.urandom(32)
+        out += [(b"set-cookie", c.encode("latin-1")) for c in secret_cookies(backend.base, half)]
     shim = page and backend.cfg.get("forward", True)
     from .. import sessionhooks
     beacon = page and sessionhooks.enabled(backend.cfg, backend.home)
@@ -1107,9 +1547,6 @@ async def proxy_http(backends, request):
     if r.headers.get("content-type", "").startswith("text/html") and (
             trust_off or shim or beacon or desk):
         body = await r.aread()
-        if page and backend.pins():
-            m = PAGE_RELEASE.search(body)
-            backend.pin(m and m.group(1).decode())
         body = rewrite_workbench(body, trust_off, shim, beacon, desk)
         await r.aclose()
         resp = Response(body, status_code=r.status_code)
@@ -1166,7 +1603,7 @@ async def proxy_ws(backends, websocket):
     except IdeUnavailable as e:
         log.warning("web VS Code: %s", e)
         return await websocket.close(1011)
-    path = backend.route(websocket.url.path) + \
+    path = websocket.url.path + \
         ("?" + websocket.url.query if websocket.url.query else "")
     host = websocket.headers.get("host") or "localhost"
     hdrs = [(k, v) for k, v in upstream_headers(websocket.headers)

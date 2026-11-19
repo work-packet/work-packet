@@ -295,7 +295,8 @@ def _desktop_tools(which=shutil.which):
 
 
 def _ide_tools():
-    """Web VS Code needs the VS Code CLI (docs/vscode-plan.md §4.2); only when it is on."""
+    """Web VS Code needs a VS Code server (docs/ide-direct-server-plan.md §3); only
+    when it is on."""
     from . import ide
     try:
         cfg = ide.load_config()
@@ -303,19 +304,37 @@ def _ide_tools():
         return []
     if not cfg.get("web"):
         return []
-    from .dash.ide import command
+    from .dash.ide import available, backend_kind, command
+    if backend_kind(cfg) == "server":
+        return [_ide_release(cfg), _ide_forward(cfg)]
     code = command(cfg)
-    if shutil.which(code) is None:
-        if cfg.get("backend") == "openvscode-server":
-            how, url = "openvscode-server (the open-source build)", \
-                "https://github.com/gitpod-io/openvscode-server/releases"
-        else:
-            how, url = "`code serve-web`", "https://code.visualstudio.com/download"
+    if available(cfg) is not None:
         return [Check("tools.code", "tools", "warn", "%s is not on PATH" % code,
                       "[ide] web = true serves VS Code under the board's /ide/ with "
-                      "%s; the board hides the button without it." % how, [url]),
+                      "openvscode-server (the open-source build); the board hides the "
+                      "button without it.",
+                      ["https://github.com/gitpod-io/openvscode-server/releases"]),
                 _ide_forward(cfg)]
     return [Check("tools.code", "tools", "ok", "%s (web VS Code)" % code), _ide_forward(cfg)]
+
+
+def _ide_release(cfg):
+    """The VS Code server release desks start on (docs/ide-direct-server-plan.md §3)."""
+    from . import ide_releases
+    from .dash.ide import available
+    why = available(cfg)
+    if why:
+        return Check("tools.code", "tools", "warn", why)
+    home = registry.home()
+    note = ""
+    if (cfg.get("backend") or "") == "serve-web":
+        note = " ([ide] backend = \"serve-web\" is now \"server\": wpk runs the server itself)"
+    r = ide_releases.current(home, cfg)
+    if r is None:
+        return Check("tools.code", "tools", "info",
+                     "no VS Code server downloaded yet; the first desk gets one" + note)
+    return Check("tools.code", "tools", "ok",
+                 "VS Code %s (%s) for web VS Code%s" % (r["version"], r["commit"][:7], note))
 
 
 def _ide_forward(cfg):

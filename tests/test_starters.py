@@ -111,7 +111,7 @@ def test_clone_a_path(home, source, tmp_path):
     assert plan.path == str(folder / ".work-packet")
     assert git(folder, "symbolic-ref", "--short", "HEAD") == "try-it"
     assert git(folder, "status", "--porcelain") == ""
-    assert "origin" not in project.load_project(plan.path)
+    assert project.load_project(plan.path)["origin"] == {"made": "new"}   # wpk cloned it
 
 
 def test_from_an_issue(forge, source, tmp_path):

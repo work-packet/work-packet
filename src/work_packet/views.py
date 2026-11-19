@@ -259,21 +259,7 @@ def show(pkt):
     if qs:
         out += ["", "## open questions (answer with `wpk answer`)", ""]
         for q in qs:
-            out.append("%s: %s" % (q["id"], q["q"]))
-            extra = []
-            if q["recommend"]:
-                extra.append("recommend: %s" % q["recommend"])
-            if q["choices"]:
-                extra.append("choices: %s" % " / ".join(q["choices"]))
-            if q["grants"]:
-                extra.append("yes grants: %s" % ", ".join(q["grants"]))
-            if q.get("sets"):
-                extra.append(questions.describe_sets(q))
-            if q.get("request"):
-                extra.append("yes sends request %s (state/requests/%s.md)" % (
-                    q["request"], q["request"]))
-            if extra:
-                out.append("    " + "; ".join(extra))
+            out += questions.as_text(q)
     if meta["state"] in ("COMPLETED", "FAILED"):
         rep = report.render(pkt)
         if rep is not None:

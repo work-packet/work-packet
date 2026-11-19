@@ -154,12 +154,15 @@ def _tracked(folder, n):
                           capture_output=True).returncode == 0
 
 
-def remove(entry, by=None, h=None):
-    """**Remove its folder**: a split that is done or dropped. Its journal is kept
-    at ``$WPK_HOME/splits/removed/<name>.journal.jsonl``; the worktree goes; the
-    branch goes only if it was brought in (``git branch -d`` refuses otherwise);
-    the project is unregistered. Returns a line saying what happened."""
-    from . import views
+def remove(entry, by=None, h=None, force=False):
+    """**Remove its folder**: a split that is done or dropped, closed with its
+    folder deleted (``closeout.close``: refused while something is busy, or
+    if it would lose files not committed, unless ``force``; its runs go into
+    history). Its journal is also kept at
+    ``$WPK_HOME/splits/removed/<name>.journal.jsonl``; the branch goes only if
+    it was brought in (``git branch -d`` refuses otherwise). Returns a line
+    saying what happened."""
+    from . import closeout, views
     from .hookcmd import _journal, _root
     from .packet import Packet, user
     h = h or registry.home()
@@ -171,7 +174,6 @@ def remove(entry, by=None, h=None):
     life = views.lifecycle(pkt.load_status()[0])
     if life == "open":
         raise SplitError("bring it in or drop it first")
-    tree = layout.packet_folder(entry["path"])
     keep = os.path.join(h, "splits", "removed")
     os.makedirs(keep, exist_ok=True)
     try:
@@ -180,16 +182,15 @@ def remove(entry, by=None, h=None):
                                 fp.read().decode("utf-8", "replace"))
     except OSError:
         pass
-    r = subprocess.run(["git", "-C", d["folder"], "worktree", "remove", "--force", tree],
-                       capture_output=True, text=True)
-    if r.returncode and os.path.exists(tree):
-        raise SplitError("git would not remove the worktree: %s" % (r.stderr or "").strip())
+    try:
+        closeout.close(entry, by=by, delete=True, force=force, h=h)
+    except closeout.CloseError as ex:
+        raise SplitError(str(ex)) from None
     subprocess.run(["git", "-C", d["folder"], "worktree", "prune"], capture_output=True)
     branch = "kept"
     if life == "done" and subprocess.run(["git", "-C", d["folder"], "branch", "-d",
                                           d["branch"]], capture_output=True).returncode == 0:
         branch = "deleted"
-    registry.unregister(entry["name"], h)
     try:
         orig = registry.get(d["of"], h)
         if orig:

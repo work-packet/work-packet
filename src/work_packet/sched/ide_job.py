@@ -19,6 +19,7 @@ and the launch gets this host. ``--collect S``: watch its sessions every S secon
 """
 
 import os
+import re
 import shutil
 import signal
 import socket
@@ -199,6 +200,24 @@ def run_mtls(d, rest, started):
         shutil.rmtree(ld, ignore_errors=True)
 
 
+def for_this_host(home, rest):
+    """``rest`` with ``{platform}`` filled in for this host, and that build of
+    the VS Code release got when it is not here yet (docs/ide-direct-server-plan.md
+    §3). Raises ``ide_releases.ReleaseError``."""
+    if not any("{platform}" in a for a in rest):
+        return rest
+    from .. import ide_releases
+    plat = ide_releases.platform()
+    out = [a.replace("{platform}", plat) for a in rest]
+    for a in out:
+        m = re.search(r"/releases/[^/]+/([0-9a-f]{40})/bin/code-server\Z", a)
+        if m and not os.path.exists(a):
+            print("ide_job: getting VS Code's server %s for %s" % (m.group(1)[:7], plat),
+                  file=sys.stderr, flush=True)
+            ide_releases.install(home, m.group(1), plat)
+    return out
+
+
 def main(argv):
     d, rest = argv[0], argv[argv.index("--") + 1:]
     opts = argv[1:argv.index("--")]
@@ -206,6 +225,11 @@ def main(argv):
     lid = opts[opts.index("--launch") + 1] if "--launch" in opts else None
     home, key = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(d)))), \
         os.path.basename(os.path.abspath(d))
+    try:
+        rest = for_this_host(home, rest)
+    except Exception as e:      # noqa: BLE001  ReleaseError, or no network on the node
+        print("ide_job: cannot run VS Code's server here: %s" % e, file=sys.stderr)
+        return 1
 
     def started(cmd):
         """Start the server; with ``--launch``, tell the launch and watch its sessions."""

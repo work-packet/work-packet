@@ -3,7 +3,10 @@
 from . import schema
 
 YES = ("yes", "y", "true", "ok", "approve", "approved", "grant", "granted")
-QUESTION_FIELDS = ("id", "q", "recommend", "choices", "grants", "request", "sets")
+QUESTION_FIELDS = ("id", "q", "context", "premise", "recommend", "why", "choices", "tradeoffs",
+                   "weight", "grants", "request", "sets")
+TEXT_FIELDS = ("context", "premise", "why")        # optional prose that explains a question
+WEIGHTS = ("decide", "confirm")
 SETS_KEYS = ("step_budget_usd", "step_timeout", "step_context_tokens")
 
 
@@ -34,6 +37,13 @@ def validate(ask):
             out.append(P(w + ".q", "required; the question as a non-empty string"))
         if "recommend" in q and not isinstance(q["recommend"], (str, int, float, bool)):
             out.append(P(w + ".recommend", "must be a string"))
+        for k in TEXT_FIELDS:
+            if k in q and not (isinstance(q[k], str) and q[k].strip()):
+                out.append(P("%s.%s" % (w, k), "must be a non-empty string"))
+        if "weight" in q and q["weight"] not in WEIGHTS:
+            out.append(P(w + ".weight", "must be one of: %s" % ", ".join(WEIGHTS)))
+        if "tradeoffs" in q:
+            out += _validate_tradeoffs(q["tradeoffs"], q.get("choices"), w + ".tradeoffs")
         for k in ("choices", "grants"):
             v = q.get(k)
             if v is not None and not (isinstance(v, list) and v and
@@ -43,6 +53,22 @@ def validate(ask):
             out.append(P(w + ".request", "must name a brief, state/requests/<id>.md"))
         if "sets" in q:
             out += _validate_sets(q["sets"], q.get("choices"), w + ".sets")
+    return out
+
+
+def _validate_tradeoffs(t, choices, w):
+    """``tradeoffs``: ``{answer: what it costs or rules out}``, keyed by ``choices``
+    (or yes / no for a question without them)."""
+    P = schema.Problem
+    if not isinstance(t, dict) or not t:
+        return [P(w, "must be a mapping of answers to what each costs or rules out")]
+    keys = [str(c) for c in choices] if isinstance(choices, list) and choices else ["yes", "no"]
+    out = []
+    for k, v in t.items():
+        if str(k) not in keys:
+            out.append(P("%s.%s" % (w, k), "not an answer; use one of: %s" % ", ".join(keys)))
+        elif not (isinstance(v, str) and v.strip()):
+            out.append(P("%s.%s" % (w, k), "must be a non-empty string"))
     return out
 
 
@@ -80,16 +106,21 @@ def _text(v):
 
 
 def normalise(ask):
-    """``ask:`` as a list of ``{id, q, recommend, choices, grants, request, sets}``; []
-    for None. ``sets`` becomes ``{answer: {key: value}}``, with ``"yes"`` for a plain
-    mapping."""
+    """``ask:`` as a list of ``{id, q, context, premise, recommend, why, choices, tradeoffs,
+    weight, grants, request, sets}``; [] for None. ``sets`` becomes ``{answer: {key:
+    value}}``, with ``"yes"`` for a plain mapping."""
     if ask is None:
         return []
     if isinstance(ask, str):
-        return [{"id": "q1", "q": " ".join(ask.split()), "recommend": None, "choices": [],
-                 "grants": [], "request": None, "sets": {}}]
-    return [{"id": q["id"], "q": q["q"].strip(), "recommend": _text(q.get("recommend")),
-             "choices": list(q.get("choices") or []), "grants": list(q.get("grants") or []),
+        return [{"id": "q1", "q": " ".join(ask.split()), "context": None, "premise": None,
+                 "recommend": None, "why": None, "choices": [], "tradeoffs": {},
+                 "weight": "decide", "grants": [], "request": None, "sets": {}}]
+    return [{"id": q["id"], "q": q["q"].strip(),
+             **{k: (q.get(k) or "").strip() or None for k in TEXT_FIELDS},
+             "recommend": _text(q.get("recommend")),
+             "choices": list(q.get("choices") or []),
+             "tradeoffs": {str(k): v.strip() for k, v in (q.get("tradeoffs") or {}).items()},
+             "weight": q.get("weight") or "decide", "grants": list(q.get("grants") or []),
              "request": q.get("request"), "sets": _sets(q.get("sets"), q.get("choices"))}
             for q in ask]
 
@@ -167,6 +198,30 @@ def describe_sets(q):
     if list(s) == ["yes"] and "yes" not in (q.get("choices") or []):
         return "yes sets " + kv(s["yes"])
     return "; ".join('"%s" sets %s' % (w, kv(v)) for w, v in s.items())
+
+
+def as_text(q):
+    """One question as plain-text lines, everything it says (``wpk show``, ``wpk resolve``)."""
+    out = ["%s%s: %s" % (q["id"], " (confirm)" if q["weight"] == "confirm" else "", q["q"])]
+    for k, label in (("context", "context"), ("premise", "rests on")):
+        if q[k]:
+            out += ["    %s:" % label] + ["      " + ln for ln in q[k].splitlines()]
+    for w, t in q["tradeoffs"].items():
+        out.append("    if %s: %s" % (w, t))
+    extra = []
+    if q["recommend"]:
+        extra.append("recommend: %s%s" % (q["recommend"], " (%s)" % q["why"] if q["why"] else ""))
+    if q["choices"]:
+        extra.append("choices: %s" % " / ".join(q["choices"]))
+    if q["grants"]:
+        extra.append("yes grants: %s" % ", ".join(q["grants"]))
+    if q.get("sets"):
+        extra.append(describe_sets(q))
+    if q.get("request"):
+        extra.append("yes sends request %s (state/requests/%s.md)" % (q["request"], q["request"]))
+    if extra:
+        out.append("    " + "; ".join(extra))
+    return out
 
 
 def grants(qs, answers):

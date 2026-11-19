@@ -202,6 +202,35 @@ def test_report_images_go_to_the_file_view():
     assert 'src="https://x.org/b.png"' in html
 
 
+def test_report_paths_in_text_become_links():
+    """docs/completion-report.md: a path the body names, where it exists, is a link."""
+    pytest.importorskip("markdown_it")
+    from work_packet.dash import data
+    link = data.file_link({"name": "demo"}, "w1")
+    there = {"state/x.md", "work/r/README.md"}
+    html = data.md("- plain state/x.md here\n- code `state/x.md`\n- (state/x.md)\n"
+                   "- ends state/x.md.\n- line state/x.md:12\n- [done](state/x.md)\n"
+                   "- state/missing.md and `gh run view 123`\n- work/r/README.md\n",
+                   link, exists=lambda p: p in there)
+    to = 'href="/p/demo/w1/file?path=state/x.md"'
+    assert '<a %s>state/x.md</a> here' % to in html
+    assert '<a %s><code>state/x.md</code></a>' % to in html
+    assert '(<a %s>state/x.md</a>)' % to in html
+    assert 'ends <a %s>state/x.md</a>.' % to in html
+    assert 'line <a %s>state/x.md:12</a>' % to in html
+    assert '<a %s>done</a>' % to in html and html.count(to) == 6       # not linked twice
+    assert "state/missing.md and <code>gh run view 123</code>" in html
+    assert '<a href="/p/demo/w1/file?path=work/r/README.md">work/r/README.md</a>' in html
+    assert data.md("state/x.md", link) == "<p>state/x.md</p>\n"       # no exists: as before
+
+
+def test_report_paths_found_in_text():
+    got = report.paths_in("see (state/a_b-1.0.md), work/r/x.py:3 and state/c.md#top. "
+                          "x/state/no.md state/ ../state/no.md")
+    assert [(p, f) for _, _, p, f in got] == [("state/a_b-1.0.md", None),
+                                              ("work/r/x.py", None), ("state/c.md", "top")]
+
+
 def test_done_with_open_outline_items_is_rejected(proj, monkeypatch):
     # dv-solve-simbench step 1: a design, an outline whose next item is the
     # owner's review, and resume: done. It should have asked.
@@ -289,3 +318,47 @@ def test_task_page_opens_deliverables_as_they_were(fake, tmp_path, monkeypatch):
     img = c.get("/p/rp/%s/file?path=state/chart.png" % root.wpid)
     assert img.status_code == 200 and img.headers["content-type"] == "image/png"
     assert "attachment" not in img.headers.get("content-disposition", "")
+
+
+def test_task_page_links_paths_to_the_copy_or_the_file_now(fake, tmp_path, monkeypatch):
+    """A step report's body: a file the step kept opens its copy, one it did not opens
+    the file as it is now, and a work/ file it names is served (docs/packet-page.md)."""
+    pytest.importorskip("starlette")
+    pytest.importorskip("httpx")
+    from starlette.testclient import TestClient
+    from work_packet import project, registry, scheduler
+    from work_packet.dash.app import create_app
+    fake("reporter")
+    monkeypatch.chdir(tmp_path)
+    made = project.new("rp", "Write the plan.")
+    e = registry.get("rp")
+    root = Packet(os.path.join(made.path, "packets", made.root))
+    scheduler.tick([e], until_idle=True)
+    assert executor.admin(root, "continue", instruction="Again.").code == 0
+    scheduler.tick([e], until_idle=True)
+    with open(os.path.join(root.state_dir, "reply.md"), "w") as fp:
+        fp.write("# Reply\n\nDraft.\n")
+    os.makedirs(os.path.join(root.path, "work", "repo"))
+    for n in ("README.md", "other.md"):
+        with open(os.path.join(root.path, "work", "repo", n), "w") as fp:
+            fp.write("# %s\n" % n)
+    rp = os.path.join(root.steps_dir, "0001", "report.md")
+    meta, body = load(rp)
+    with open(rp, "w") as fp:
+        fp.write(dump(meta, body + "\n## Open items\n- See `state/plan.md`, "
+                      "state/reply.md and work/repo/README.md.\n"))
+    c = TestClient(create_app())
+    page = c.get("/p/rp/tasks/1").text
+    base = "/p/rp/%s/file?path=" % root.wpid
+    assert 'href="%sstate/plan.md&amp;step=0001"><code>' % base in page
+    assert 'href="%sstate/reply.md">state/reply.md</a>' % base in page
+    assert 'href="%swork/repo/README.md">work/repo/README.md</a>.' % base in page
+    assert "Draft." in c.get(base + "state/reply.md").text
+    assert "README.md" in c.get(base + "work/repo/README.md").text
+    assert c.get(base + "work/repo/other.md").status_code == 404
+    assert c.get(base + "work/repo/../../status.md").status_code == 404
+    # The step's copy of a file links on to the file now where the step kept none.
+    with open(os.path.join(root.steps_dir, "0001", report.SNAP, "state", "plan.md"), "a") as fp:
+        fp.write("\nSee [the reply](reply.md).\n")
+    then = c.get(base + "state/plan.md&step=0001").text
+    assert 'href="%sstate/reply.md"' % base in then

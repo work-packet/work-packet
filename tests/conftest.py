@@ -32,6 +32,15 @@ def _no_user_skills(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _no_host_transcripts(monkeypatch):
+    """The token ledger's collector never reads the host's ~/.claude and ~/.codex
+    transcripts or its live processes."""
+    monkeypatch.setenv("WPK_LEDGER_CLAUDE_DIR", "")
+    monkeypatch.setenv("WPK_LEDGER_CODEX_DIR", "")
+    monkeypatch.setenv("WPK_LEDGER_PROC", "")
+
+
+@pytest.fixture(autouse=True)
 def _no_brief_model(monkeypatch):
     """No test asks a model for the focus brief: the model "fails" and the scored
     brief stands, unless a test passes its own ``ask``."""

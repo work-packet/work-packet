@@ -57,6 +57,22 @@ def test_parse_nests_by_indent_and_inline():
     assert plan.current(t)["id"] == "3b"
 
 
+def test_split_takes_the_date_and_detail_off_the_title():
+    assert plan.split("(2026-11-19) `pssc test` (sim.py) — test_sim.py (14); unit 3759.") == \
+        ("2026-11-19", "`pssc test` (sim.py)", "test_sim.py (14); unit 3759.")
+    assert plan.split("(2026-11-18; build_cmd.py) image build -- `t.py`") == \
+        ("2026-11-18", "image build", "(build_cmd.py) `t.py`")
+    assert plan.split("Tests rerun in a live simulator") == \
+        (None, "Tests rerun in a live simulator", "")
+    t = plan.parse("- [x] P3.6c2 (2026-11-19) Tests rerun live — `pssc test --watch`\n"
+                   "  - check: `pytest -k sim`\n")
+    n = t["children"][0]
+    assert (n["id"], n["date"], n["lead"], n["tail"], n["details"]) == \
+        ("P3.6c2", "2026-11-19", "Tests rerun live", "`pssc test --watch`", ["check: `pytest -k sim`"])
+    assert data._plan_title("P3.6c2 (2026-11-19) Tests rerun live — `x` (14)") == \
+        "P3.6c2 Tests rerun live"
+
+
 def test_compare_marks_changes():
     old = plan.parse("- [ ] 1 a\n- [ ] 2 b\n- [ ] 3 c\n")
     new = plan.parse("- [x] 1 a\n- [ ] 2 b, longer\n  - [ ] 2a sub\n")
@@ -168,6 +184,9 @@ def test_plan_page_and_state_files(planned):
     r = c.get(base + "/plan", params={"v": "s3", "changes": "1", "open": "all"})
     assert r.status_code == 200 and "Survey the code" not in r.text and "parser" in r.text
     assert c.get(base + "/plan").status_code == 200
+    r = c.get(base + "/plan", params={"open": "all"})
+    assert "show detail" in r.text and "Step 4." in r.text     # a done item says what its step did
+    assert "titles only" in c.get(base + "/plan", params={"open": "all", "detail": "1"}).text
     assert "/plan" in c.get(base).text
     r = c.get(base + "/file", params={"path": "state/history/outline-1.md"})
     assert r.status_code == 200 and 'id="mk-doc"' in r.text

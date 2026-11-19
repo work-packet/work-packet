@@ -8,9 +8,13 @@ import common  # noqa: E402
 
 ASK = [
     {"id": "bash", "q": "Allow Bash for builds and tests?", "recommend": "yes",
-     "grants": ["Bash"]},
+     "grants": ["Bash"], "weight": "confirm"},
     {"id": "cadence", "q": "One commit per item, or per sub-item?", "recommend": "per item",
-     "choices": ["per item", "per sub-item"]},
+     "choices": ["per item", "per sub-item"],
+     "context": "You review with: git log --oneline state/outline.md",
+     "premise": "Every commit is reviewed on its own.",
+     "tradeoffs": {"per item": "fewer, larger commits", "per sub-item": "twice as many commits"},
+     "why": "items are small"},
 ]
 
 

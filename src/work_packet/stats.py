@@ -43,6 +43,7 @@ class Step:
     cache_breaks: Optional[int] = None
     duration_s: Optional[float] = None
     api_s: Optional[float] = None
+    limited: bool = False                    # a failed run the usage limit cut off: not counted
     item: Optional[str] = None   # the plan item, from the memento's ``item``
     hook: tuple = ()             # levels the context hook sent
     resume: Optional[str] = None
@@ -208,7 +209,7 @@ def packet_steps(project, pkt):
         out.append(Step(
             project=project, wpid=os.path.basename(pkt.path), step=int(m.group(1)),
             attempt=int(m.group(2)) if m.group(2) else meta.get("attempt"),
-            failed=m.group(2) is not None,
+            failed=m.group(2) is not None, limited=bool(meta.get("limited")),
             harness=meta.get("harness") or "claude", model=meta.get("model") or "?",
             profile=meta.get("profile") or "-", carried=bool(meta.get("carried_from")),
             cost=meta.get("cost_usd"), calls=ctx.get("calls"),
@@ -304,12 +305,14 @@ class Group:
 
     def figures(self):
         ok = [s for s in self.steps if not s.failed]
-        failed = [s for s in self.steps if s.failed]
+        failed = [s for s in self.steps if s.failed and not s.limited]
+        limited = [s for s in self.steps if s.limited]
         fresh = [s.cost for s in ok if not s.carried and s.cost is not None]
         carried = [s for s in ok if s.carried and s.cost is not None]
         f = {
-            "steps": len(ok), "failed_attempts": len(failed),
-            "retry_rate": len(failed) / float(len(self.steps)) if self.steps else 0.0,
+            "steps": len(ok), "failed_attempts": len(failed), "limited_runs": len(limited),
+            "retry_rate": (len(failed) / float(len(self.steps) - len(limited))
+                           if len(self.steps) > len(limited) else 0.0),
             "calls_median": _pct([s.calls for s in ok], 50),
             "calls_p90": _pct([s.calls for s in ok], 90),
             "output_tokens_median": _pct([s.output_tokens for s in ok], 50),
@@ -526,8 +529,10 @@ def report(gs, min_steps=MIN_STEPS):
     for g in gs:
         f = g.figures()
         lines.append("%s / %s / %s" % g.key)
-        lines.append("  steps %d, failed attempts %d (%.0f%%)"
-                     % (f["steps"], f["failed_attempts"], 100 * f["retry_rate"]))
+        lines.append("  steps %d, failed attempts %d (%.0f%%)%s"
+                     % (f["steps"], f["failed_attempts"], 100 * f["retry_rate"],
+                        "; usage-limit runs %d, not counted" % f["limited_runs"]
+                        if f["limited_runs"] else ""))
         lines.append("  calls/step median %s, p90 %s; output tokens median %s"
                      % (_k(f["calls_median"]), _k(f["calls_p90"]),
                         _k(f["output_tokens_median"])))

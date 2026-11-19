@@ -313,6 +313,29 @@ def test_answer_form_with_typed_answers(acting):
     assert _journal(root, "config") == []
 
 
+def test_answer_form_explains_each_question(acting):
+    e, root, client = acting
+    r = client.get("/p/q/" + root.wpid)
+    t = r.text
+    assert 'class="ctx"' in t and "git log --oneline" in t
+    assert "Rests on:" in t and "Every commit is reviewed on its own." in t
+    assert "twice as many commits" in t and "because items are small" in t
+    assert 'name="o.cadence"' in t
+    assert '<details class="confirms">' in t and 'name="a.bash" value="yes"' in t
+    assert t.index('name="a.cadence"') < t.index('name="a.bash"')     # decisions first
+    assert "wpk resolve %s" % root.wpid[:8] in t
+
+
+def test_answer_other_beats_the_choice(acting):
+    e, root, client = acting
+    r = client.post("/p/q/%s/act" % root.wpid,
+                    data={"action": "answer", "a.bash": "yes", "a.cadence": "per item",
+                          "o.cadence": "neither: squash at the end"})
+    assert r.status_code == 200 and "answered 2 of 2" in r.text
+    assert _journal(root, "handoff")[-1]["answers"] == {
+        "bash": "yes", "cadence": "neither: squash at the end"}
+
+
 def test_answer_nothing_is_refused(acting):
     e, root, client = acting
     r = client.post("/p/q/%s/act" % root.wpid, data={"action": "answer"})
@@ -568,3 +591,30 @@ def test_live_view_shows_the_steps_dfm_runs(live_pkt):
         dfm.kill()
         dfm.wait()
         os.unlink(os.path.join(d, sid + ".jsonl"))
+
+
+def test_question_links_the_files_it_names(acting):
+    from work_packet.dash import app as appmod, data
+    e, root, client = acting
+    with open(os.path.join(root.state_dir, "design.md"), "w") as f:
+        f.write("# Design\n")
+    text = "Please review state/design.md (not state/gone.md) & <b>approve</b>?"
+    assert [rel for _, rel in data.file_refs(e, root.wpid, text) if rel] == ["state/design.md"]
+    h = str(appmod._ask_links(e, root.wpid, text))
+    assert '<a href="/p/q/%s/file?path=state/design.md">state/design.md</a>' % root.wpid in h
+    assert "state/gone.md" in h and "&amp; &lt;b&gt;approve" in h
+    assert client.get("/p/q/%s/file?path=state/design.md" % root.wpid).status_code == 200
+
+
+def test_answer_form_offers_resolve_when_shells_run(acting):
+    from starlette.testclient import TestClient
+    from work_packet.dash.app import create_app
+    from work_packet.dash import vendored
+    e, root, client = acting
+    t = client.get("/p/q/" + root.wpid).text           # no shells here: the CLI hint
+    assert "wpk resolve %s" % root.wpid[:8] in t and 'class="resolvepane' not in t
+    if not vendored.built("term"):
+        pytest.skip("xterm is not vendored here")
+    t = TestClient(create_app(shells=object())).get("/p/q/" + root.wpid).text
+    assert 'class="resolvepane panel"' in t and 'data-wpid="%s"' % root.wpid in t
+    assert "Talk it through with Claude" in t and "/static/resolve.js" in t

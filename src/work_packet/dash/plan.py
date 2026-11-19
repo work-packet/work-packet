@@ -23,7 +23,11 @@ _LIST = re.compile(r"^([ \t]*)(?:[-*+]|\d+[.)])[ \t]+(.*)$")
 _BOX = re.compile(r"^\[([ xX>+\-~])\][ \t]*(.*)$")
 _HEAD = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$")
 _ID = re.compile(r"^(\**)([A-Za-z]?\d+(?:[.\-]?[A-Za-z0-9]+)*)[.:)]?(\1)?(?=[\s,;]|$)")
-# a sub-item written into its parent's text: "...; [x] 3b harness ..."
+# "(2026-11-18)" or "(2026-11-18; build_cmd.py)" at the start of an item
+_DATE = re.compile(r"^\((\d{4}-\d{2}-\d{2})(?:[;,][ \t]*([^)]*))?\)[ \t]*")
+# where an item's title ends and its detail starts: "Title — `cmd` (file)"
+_SEP = re.compile(r"[ \t]+(?:—|–|--)[ \t]+")
+# a sub-item written into its parent's text: "...; [x] 3b harness ...
 _INLINE = re.compile(r"(?:(?<=^)|(?<=[\s;,(]))\[([ xX>+\-~])\][ \t]+(?=\**[A-Za-z]?\d)")
 
 
@@ -122,6 +126,22 @@ def _finish(n):
         n["text"] = n["text"][mo.end():].strip()
         if mo.group(1) and not mo.group(3) and n["text"].endswith(mo.group(1)):  # **4 Title**
             n["text"] = mo.group(1) + n["text"]
+    n["date"], n["lead"], n["tail"] = split(n["text"])
+
+
+def split(text):
+    """``(date, lead, tail)`` of an item's text (its id taken off): a leading
+    "(2026-11-18; ...)", the title up to the first " — ", and the detail after
+    it, which also gets what else the date's parentheses held."""
+    date, extra = None, None
+    mo = _DATE.match(text)
+    if mo:
+        date, extra, text = mo.group(1), (mo.group(2) or "").strip(), text[mo.end():]
+    parts = _SEP.split(text, maxsplit=1)
+    lead, tail = parts[0].strip(), parts[1].strip() if len(parts) > 1 else ""
+    if extra:
+        tail = "(%s)%s" % (extra, " " + tail if tail else "")
+    return date, lead or text.strip(), tail
 
 
 def walk(n, depth=0):
@@ -358,10 +378,11 @@ def ids_of(item):
 
 # --- the page ------------------------------------------------------------------------------
 
-def page(entry, wpid, steps, v=None, changes=False, opened=None):
+def page(entry, wpid, steps, v=None, changes=False, opened=None, detail=False):
     """What /p/<project>/<wpid>/plan shows; None if there is no such packet.
     ``v``: a version key (default the newest); ``changes``: only what changed in
-    it; ``opened``: "all" or "none" to open or close every node."""
+    it; ``opened``: "all" or "none" to open or close every node; ``detail``: show
+    each item's detail (its tail, detail bullets and date), not only its title."""
     if not schema.is_wpid(wpid):
         return None
     pkt = Packet(layout.run_dir(entry["path"], wpid))
@@ -371,7 +392,7 @@ def page(entry, wpid, steps, v=None, changes=False, opened=None):
     i = next((k for k, x in enumerate(vs) if x["key"] == v), len(vs) - 1)
     out = {"wpid": wpid, "short": wpid[:8], "versions": vs, "v": vs[i] if vs else None,
            "latest": i == len(vs) - 1, "changes": changes, "tree": None, "gone": [],
-           "children": []}
+           "children": [], "detail": detail}
     if not vs:
         return out
     tree = parse(vs[i]["text"])
@@ -402,6 +423,8 @@ def _decorate(n, by_id, cur, opened, upto):
     if n["kind"] == "item" and n["id"]:
         n["steps"] = [s for s in by_id.get(n["id"], ()) if upto is None or s["n"] <= upto]
         cost += sum(s["share"] for s in n["steps"])
+        ok = [s for s in n["steps"] if s.get("summary") and s.get("outcome") != "failed"]
+        n["said"] = ok[-1]["summary"] if ok and n["state"] == "done" else None
     for c in n["children"]:
         h, k = _decorate(c, by_id, cur, opened, upto)
         has, cost = has or h, cost + k

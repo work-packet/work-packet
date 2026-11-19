@@ -87,6 +87,19 @@ def test_archived_project_is_read_only(tmp_path, fake, client_for):
     assert r.status_code == 409 and "archived" in r.text
 
 
+def test_an_archived_project_can_still_be_closed(tmp_path, fake, client_for):
+    from work_packet import closeout, registry
+    proj, root, kid = finished(tmp_path)
+    migrate.migrate()
+    shutil.rmtree(os.path.join(proj, "packets"))
+    c = client_for()
+    assert "Close" in c.get("/p/demo/close").text
+    fp = closeout.cached("demo")["fp"]
+    r = c.post("/p/demo/close", data={"mode": "close", "fp": fp}, follow_redirects=False)
+    assert r.status_code == 303 and "ok=1" in r.headers["location"], r.headers["location"]
+    assert registry.get("demo") is None and closeout.closed()[0]["name"] == "demo"
+
+
 def test_deliverables_in_work_that_reports_link_to_are_kept(tmp_path, fake, client_for):
     proj, root, kid = finished(tmp_path)
     os.makedirs(os.path.join(root.path, "work", "repo", "docs"))
@@ -129,3 +142,23 @@ def test_cache_is_rebuilt_when_out_of_date(tmp_path, fake):
     # A project with its runs is read from them, not the cache.
     os.makedirs(os.path.join(proj, "packets"))
     assert not archived.is_archived(archived.view(registry.get("demo")))
+
+
+def test_work_files_reports_name_are_kept(tmp_path, fake, client_for):
+    proj, root, kid = finished(tmp_path)
+    os.makedirs(os.path.join(root.path, "work", "repo"))
+    for n in ("README.md", "other.md"):
+        with open(os.path.join(root.path, "work", "repo", n), "w") as fp:
+            fp.write("# %s\n" % n)
+    from work_packet import frontmatter
+    meta, body = frontmatter.load(os.path.join(root.path, "report.md"))
+    with open(os.path.join(root.path, "report.md"), "w") as fp:
+        fp.write(frontmatter.dump(meta, body + "\nSee `work/repo/README.md`.\n"))
+    migrate.migrate()
+    con = history.connect()
+    tiers = dict(con.execute("SELECT path, tier FROM file WHERE packet = ?", (root.wpid,)))
+    con.close()
+    assert tiers["work/repo/README.md"] == "deliverables" and "work/repo/other.md" not in tiers
+    shutil.rmtree(os.path.join(proj, "packets"))
+    url = "/p/demo/%s/file?path=work/repo/README.md" % root.wpid
+    assert "README.md" in client_for().get(url).text

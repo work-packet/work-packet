@@ -8,6 +8,7 @@ import collections
 import json
 import os
 import pickle
+import re
 import shlex
 import socket
 import threading
@@ -20,6 +21,7 @@ from .. import archived, fsutil, layout, planning, views
 from ..packet import Packet
 from ..project import ProjectError, load_project
 from ..views import packets, relative
+from . import plan as plan_mod
 
 # Board columns, in display order: by whose move it is (docs/collaboration.md §8.2).
 COLUMNS = views.COLUMNS
@@ -740,9 +742,8 @@ def session_spend(home, now=None):
     §7.5), and their estimated cost where the model has a price: ``{"tokens", "usd"}``.
     Only what was spent since local midnight counts (docs/session-cost-plan.md S4).
     Budgets stay on the runner's spend; this is shown beside it."""
-    import time
     from . import tokens as tokmod
-    now = time.time() if now is None else now
+    now = clock.now().timestamp() if now is None else now
     start = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0,
                                                 microsecond=0).timestamp()
     bs = tokmod.session_buckets(home, since=start)
@@ -782,10 +783,11 @@ def since_last(cards, since, per=3, cap=30):
     return out[:cap]
 
 
-def overview(cols, broken, side, burn, now=None, coming=8):
+def overview(cols, broken, side, burn, now=None, coming=8, outstanding=None):
     """The Overview (docs/overview.md) from ``board()``, ``side()`` and
     ``tokens.board()``: headline ``tiles``, the ``attention`` list, a row per
-    board, what is running, and the next wake-ups."""
+    board, what is running, and the next wake-ups. ``outstanding``: the last
+    check of Done packets (``closeout.board_view``)."""
     now = now or clock.now()
     cards = [c for v in cols.values() for c in v]
     ago = lambda t: relative(-(now - t).total_seconds()).replace(" ago", "") if t else ""
@@ -817,13 +819,24 @@ def overview(cols, broken, side, burn, now=None, coming=8):
             c["rot"]["days"], c["plan"].get("priority"), c["rot"]["limit"])}}
         for c in cards if c.get("rot") and c["column"] == "Parked"
         and c.get("lifecycle") == "open"]
+    # Done and checked (docs/close-remove-plan.md): nothing outstanding, so it can
+    # close; or work that is nowhere else (files not committed, commits on no remote).
+    for c in cols.get("Done") or ():
+        o = (outstanding or {}).get(c["name"])
+        if not o or (not o["clean"] and not any(x["text"] != "busy" for x in o["chips"])):
+            continue
+        attention.append({"kind": "closeable", "card": c, "item": {
+            "type": "closeable", "source": "clean" if o["clean"] else "unsaved",
+            "since": o.get("checked") or 0, "clean": o["clean"],
+            "text": "done, nothing outstanding: close it" if o["clean"] else
+            "done, but: " + ", ".join(x["text"] for x in o["chips"] if x["text"] != "busy")}})
     # Finished (to review) or stopped by a limit since anyone looked.
     unread = sorted((c for c in cards if c["unread"]), key=lambda c: c["unread"]["at"],
                     reverse=True)
     attention += [{"kind": c["unread"]["kind"], "card": c} for c in unread]
     order = {"needs": 0, "failed": 0, "blocked": 0, "trouble": 1, "stalled": 1, "stuck": 1,
              "atrisk": 1,
-             "done": 2, "stopped": 2, "yourturn": 3, "stale": 3, "rot": 4}
+             "done": 2, "stopped": 2, "yourturn": 3, "stale": 3, "rot": 4, "closeable": 4}
     attention.sort(key=lambda a: order.get(a["kind"], 2) if a["kind"] != "job" else
                    1 if a["item"]["failed"] else 2)       # stable: in-kind order kept
     for a in attention:
@@ -1021,11 +1034,14 @@ def packet(entry, wpid, now=None):
     }
 
 
-def md(text, link=None, lines=False):
+def md(text, link=None, lines=False, exists=None):
     """Markdown to HTML, raw HTML in it escaped; None without markdown-it-py
     (the page then shows the text as it is). `link` maps each relative link
     or image target (no scheme, not absolute, not an anchor) to the URL to use. With
-    `lines`, blocks carry their source lines, for marking up (docs/doc-markup.md)."""
+    `exists` too, a path under ``state/`` or ``work/`` named in plain text or a code
+    span (report.paths_in) becomes a link where ``exists(path)`` says it is there
+    (docs/completion-report.md). With `lines`, blocks carry their source lines,
+    for marking up (docs/doc-markup.md)."""
     try:
         from markdown_it import MarkdownIt
     except ImportError:
@@ -1041,21 +1057,76 @@ def md(text, link=None, lines=False):
                     if href and not href.startswith(("/", "#")) and ":" not in href.split("/")[0]:
                         t.attrSet(attr, link(href))
         m.core.ruler.push("relative_links", core)
+        if exists is not None:
+            m.core.ruler.push("path_links", lambda state: _path_links(state, link, exists))
     return m.render(text or "")
+
+
+def _path_links(state, link, exists):
+    """md()'s rule: paths in text and code spans outside links become links."""
+    from markdown_it.token import Token
+
+    def wrap(path, frag, inner):
+        a = Token("link_open", "a", 1)
+        a.attrSet("href", link(path + ("#" + frag if frag else "")))
+        return [a] + inner + [Token("link_close", "a", -1)]
+
+    for tok in state.tokens:
+        if not tok.children:
+            continue
+        out, depth = [], 0
+        for t in tok.children:
+            depth += t.type == "link_open"
+            depth -= t.type == "link_close"
+            if depth or t.type not in ("text", "code_inline"):
+                out.append(t)
+                continue
+            hits = [h for h in report_mod.paths_in(t.content) if exists(h[2])]
+            if t.type == "code_inline":
+                whole = hits and hits[0][0] == 0 and hits[0][1] == len(t.content)
+                out += wrap(hits[0][2], hits[0][3], [t]) if whole else [t]
+                continue
+            at = 0
+            for s, e, path, frag in hits:
+                if s > at:
+                    out.append(_text_token(t.content[at:s]))
+                out += wrap(path, frag, [_text_token(t.content[s:e])])
+                at = e
+            out.append(t if at == 0 else _text_token(t.content[at:]))
+        tok.children = [x for x in out if x.type != "text" or x.content]
+
+
+def _text_token(content):
+    from markdown_it.token import Token
+    t = Token("text", "", 0)
+    t.content = content
+    return t
 
 
 def file_link(entry, wpid, rel_dir="", step=None):
     """A md() `link` that sends a relative target, taken from inside the packet
     folder `rel_dir`, to the report's file view (app.deliverable); with `step`,
-    to that step's copy of the files."""
+    to that step's copy of the files where it kept one (``snapshot_kept``), and to
+    the file as it is now otherwise, as the report's deliverables list does."""
     base = "/p/%s/%s/file?path=" % (urlquote(entry["name"]), wpid)
-    tail = "&step=" + urlquote(step) if step else ""
+    idx = None
+    if step and schema.is_wpid(wpid) and schema.parse_step_dir(step) is not None:
+        pkt = Packet(layout.run_dir(entry["path"], wpid))
+        idx = report_mod.snapshot_index(os.path.join(pkt.steps_dir, step))
 
     def link(href):
         path, _, frag = href.partition("#")
         path = os.path.normpath(os.path.join(rel_dir, path)) if path else rel_dir
+        tail = "&step=" + urlquote(step) if snapshot_kept(idx, path) else ""
         return base + urlquote(path) + tail + ("#" + frag if frag else "")
     return link
+
+
+def snapshot_kept(idx, rel):
+    """Whether a step's ``deliverables.json`` ``idx`` says it copied ``rel``
+    (normalized), itself or a folder holding it."""
+    return any(how == "copied" and (rel == top or rel.startswith(top + os.sep))
+               for top, how in (idx or {}).items())
 
 
 def doc_link(entry, rel_dir=""):
@@ -1150,15 +1221,22 @@ def report(entry, pkt, _seen=None, path=None, kids=None, step=None):
             continue
         rel = os.path.normpath(str(d.get("path") or ""))
         snap = idx.get(rel) if idx is not None else None
+        kept = snapshot_kept(idx, rel)
         dl.append({"path": d.get("path"), "what": d.get("what"), "commit": d.get("commit"),
                    "abs": os.path.join(pkt.steps_dir, step, report_mod.SNAP, rel)
-                   if snap == "copied" else os.path.join(pkt.path, d.get("path") or ""),
+                   if kept else os.path.join(pkt.path, d.get("path") or ""),
                    "snap": snap, "href": base + urlquote(d.get("path") or "")
-                   + ("&step=" + urlquote(step) if snap == "copied" else "")})
+                   + ("&step=" + urlquote(step) if kept else "")})
     link = file_link(entry, pkt.wpid, step=step if idx else None)
+
+    def exists(rel):        # the step's copy, or the packet's file now
+        return ((snapshot_kept(idx, rel) and os.path.lexists(
+                    os.path.join(pkt.steps_dir, step, report_mod.SNAP, rel)))
+                or _live_file(pkt, rel) is not None)
     secs = []
     for name, text in report_mod.sections(body).items():
-        secs.append({"name": name, "text": text, "html": md(text, link) if text else None})
+        secs.append({"name": name, "text": text,
+                     "html": md(text, link, exists=exists) if text else None})
     names = spawn_names(pkt)
     kids = []
     for w, state in report_mod._kids(pkt):
@@ -1188,36 +1266,58 @@ def deliverable(entry, wpid, rel, step=None):
         if not isinstance(step, str) or schema.parse_step_dir(step) is None:
             return None
         sd = os.path.join(pkt.steps_dir, step)
-        for top, how in (report_mod.snapshot_index(sd) or {}).items():
-            if how == "copied" and (want == top or want.startswith(top + os.sep)):
-                p = os.path.join(sd, report_mod.SNAP, want)
-                if os.path.lexists(p):
-                    rp = os.path.realpath(p)
-                    if rp.startswith(os.path.realpath(sd) + os.sep):
-                        return rp, os.path.isdir(rp)
+        if snapshot_kept(report_mod.snapshot_index(sd), want):
+            p = os.path.join(sd, report_mod.SNAP, want)
+            if os.path.lexists(p):
+                rp = os.path.realpath(p)
+                if rp.startswith(os.path.realpath(sd) + os.sep):
+                    return rp, os.path.isdir(rp)
         return None
-    for d in _deliverables(pkt):
-        top = os.path.normpath(str((d or {}).get("path") or ""))
-        if top.split(os.sep)[0] not in report_mod.ROOTS:
-            continue
-        if want == top or want.startswith(top + os.sep):
-            p = os.path.join(pkt.path, want)
-            if os.path.exists(p):
-                return os.path.realpath(p), os.path.isdir(p)
+    reps = _reports(pkt)
+    for rep in reps:
+        for d in rep[0].get("deliverables") or ():
+            top = os.path.normpath(str((d or {}).get("path") or ""))
+            if top.split(os.sep)[0] not in report_mod.ROOTS:
+                continue
+            if want == top or want.startswith(top + os.sep):
+                p = os.path.join(pkt.path, want)
+                if os.path.exists(p):
+                    return os.path.realpath(p), os.path.isdir(p)
+    # A work/ file a report's body names (links to, or mentions as a path).
+    if want.split(os.sep)[0] == "work" and any(want in report_mod.mentions(r[1]) for r in reps):
+        p = _live_file(pkt, want)
+        if p is not None:
+            return p, os.path.isdir(p)
     return None
 
 
-def _deliverables(pkt):
-    """What the packet's reports list: its current one, then those hand-offs archived
-    (``state/history/report-*.md``), so an earlier task's results stay reachable."""
+def _live_file(pkt, rel):
+    """Real path of ``rel`` (normalized, under state/ or work/) in the packet now,
+    or None if it is not there or leads out of that folder."""
+    top = rel.split(os.sep)[0]
+    if top not in report_mod.ROOTS or os.path.isabs(rel) or ".." in rel.split(os.sep):
+        return None
+    root = os.path.realpath(os.path.join(pkt.path, top))
+    p = os.path.realpath(os.path.join(pkt.path, rel))
+    if not p.startswith(root + os.sep) or not os.path.exists(p):
+        return None
+    return p
+
+
+def _reports(pkt):
+    """The packet's reports, (meta, body) each: its current one, then those hand-offs
+    archived (``state/history/report-*.md``) and the steps that wrote them kept
+    (``steps/NNNN/report.md``), so an earlier task's results stay reachable."""
     reps = [report_mod.of_packet(pkt)]
     hist = os.path.join(pkt.state_dir, "history")
     if os.path.isdir(hist):
         reps += [report_mod.load(os.path.join(hist, n)) for n in sorted(os.listdir(hist))
                  if n.startswith("report-") and n.endswith(".md")]
-    for rep in reps:
-        for d in (rep[0].get("deliverables") or ()) if rep else ():
-            yield d
+    if os.path.isdir(pkt.steps_dir):
+        reps += [report_mod.load(os.path.join(pkt.steps_dir, n, report_mod.NAME))
+                 for n in sorted(os.listdir(pkt.steps_dir))
+                 if os.path.isfile(os.path.join(pkt.steps_dir, n, report_mod.NAME))]
+    return [r for r in reps if r]
 
 
 def task(entry, tasks, n):
@@ -1242,6 +1342,23 @@ def task(entry, tasks, n):
     return {"task": t, "report": rep, "children": rows,
             "text_html": md(t["text"]) if t["text"] else None,
             "prev": n - 1 if n > 1 else None, "next": n + 1 if n < len(roots) else None}
+
+
+FILE_REF = re.compile(r"(?<![\w/.-])(?:%s)/[\w./-]*[\w/]" % "|".join(report_mod.ROOTS))
+
+
+def file_refs(entry, wpid, text):
+    """``text`` split into (chunk, rel) pieces: ``rel`` is the packet file a chunk
+    names, one the file page serves (a deliverable or in ``state/``), else None."""
+    out, at = [], 0
+    for m in FILE_REF.finditer(text or ""):
+        rel = m.group(0).rstrip("/") or m.group(0)
+        if entry is None or not (deliverable(entry, wpid, rel) or state_file(entry, wpid, rel)):
+            continue
+        out += [(text[at:m.start()], None), (m.group(0), rel)]
+        at = m.end()
+    out.append(((text or "")[at:], None))
+    return [c for c in out if c[0]]
 
 
 def state_file(entry, wpid, rel):
@@ -1624,6 +1741,14 @@ def log_text(lg):
     return "\n".join(out) + "\n"
 
 
+def _plan_title(text):
+    """An outline line without its date and detail: "2a Parser done" from
+    "2a (2026-11-18) Parser done — `pytest` (14)" (docs/plan-readability-plan.md)."""
+    mo = plan_mod._ID.match(text)
+    head, rest = (mo.group(0).strip() + " ", text[mo.end():].strip()) if mo else ("", text)
+    return head + plan_mod.split(rest)[1]
+
+
 def outline(pkt):
     """Checklist items from the packet's outline, newest copy first (.pending/ while a
     step runs). ``state/outline.md``, else the first state ``.md`` with a checklist."""
@@ -1643,8 +1768,10 @@ def outline(pkt):
         for ln in text.splitlines():
             m = _BOX.match(ln)
             if m:
+                text = m.group(3).strip()
                 items.append({"depth": len(m.group(1).expandtabs(2)) // 2,
-                              "state": BOX_STATE[m.group(2)], "text": m.group(3).strip()})
+                              "state": BOX_STATE[m.group(2)], "text": text,
+                              "title": _plan_title(text)})
         if len(items) >= 2:
             cur = next((i for i in items if i["state"] == "active"), None) or \
                 next((i for i in items if i["state"] in ("pending", "added")), None)

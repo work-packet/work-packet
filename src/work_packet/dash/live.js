@@ -14,6 +14,7 @@
   });
   function busy() {
     if (document.documentElement.classList.contains("wpk-dragging")) return true;   // board.js
+    if (document.querySelector("#main [data-live-hold]")) return true;   // resolve.js: a live session
     var a = document.activeElement, sel = window.getSelection && window.getSelection();
     if (sel && !sel.isCollapsed && document.getElementById("main").contains(sel.anchorNode)) return true;
     return !!document.querySelector("#main form[data-dirty]") ||

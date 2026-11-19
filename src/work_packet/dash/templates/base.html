@@ -116,6 +116,12 @@ button:disabled, button:disabled:hover { opacity: .45; cursor: not-allowed; filt
 .q { margin: 10px 0 14px; } .q .text { font-weight: 600; margin-bottom: 4px; }
 .q .opts { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 4px 0; }
 .q .opts label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+.q .ctx { white-space: pre-wrap; font-family: var(--mono, monospace); font-size: 12.5px; background: var(--hunk, rgba(127,127,127,.08)); border-radius: 6px; padding: 6px 8px; margin: 4px 0 6px; overflow-x: auto; }
+.q .premise { font-size: 13px; margin: 4px 0 6px; }
+.q .opts label.other { width: 100%; } .q .opts label.other input { flex: 1; }
+.q .tradeoffs { margin: 4px 0 6px; padding-left: 18px; font-size: 13px; }
+.ask .confirms { margin: 8px 0 12px; } .ask .confirms summary { cursor: pointer; }
+.resolvepane [hidden] { display: none; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 /* Scroll panes (pane.js) and the CI-style log (_log.html). */
 .pane { max-height: 72vh; overflow: auto; overscroll-behavior: contain; }

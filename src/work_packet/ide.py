@@ -185,7 +185,10 @@ def _tasks(pkt):
             {"label": "wpk: log", "type": "shell", "command": "wpk log %s" % w,
              "problemMatcher": []},
             {"label": "wpk: check", "type": "shell", "command": "wpk check %s"
-             % shlex.quote(pkt.path), "problemMatcher": []}]
+             % shlex.quote(pkt.path), "problemMatcher": []},
+            {"label": "wpk: resolve questions", "type": "shell",     # question-ux-plan.md §2
+             "command": "wpk resolve %s" % w, "problemMatcher": [],
+             "presentation": {"reveal": "always", "panel": "dedicated", "focus": True}}]
 
 
 def packet_name(tg, pkt):

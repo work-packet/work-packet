@@ -105,7 +105,7 @@ async def page(request):
                         '<pre id="seen">%s</pre><script>/* workbench */</script>'
                         % seen.replace("<", "&lt;"),
                         headers={"content-security-policy": "default-src 'self' fake",
-                                 "set-cookie": "vscode-cli-secret-half=abc; Path=/"})
+                                 "set-cookie": "vscode-app=abc; Path=/"})
 
 
 async def echo(request):

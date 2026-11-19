@@ -306,7 +306,10 @@ def preview(recipe, h=None):
         out.append("input state/%s (%d lines)" % (i["name"], i["text"].count("\n") + 1))
     if r.get("origin"):
         o = r["origin"]
-        out.append("from %s" % (o.get("url") or o.get("title") or o.get("kind")))
+        if o.get("kind") != "template":
+            out.append("from %s" % (o.get("url") or o.get("title") or o.get("kind")))
+        if o.get("template"):
+            out.append("from template %s" % o["template"])
     dl = _deliver_check(r, folder, clone)
     if dl:
         out.append(dl)
@@ -503,6 +506,7 @@ def make(recipe, h=None, progress=None):
         if clone:
             made = "new" if not os.path.lexists(folder) else "empty"
             _clone(rep, folder, clone, h)
+            extra["origin"] = dict(extra.get("origin") or {}, made="new")
         with rep.step("files", "Packet files"):
             obj = r.get("objective") or None
             held = r["hold"] or not obj

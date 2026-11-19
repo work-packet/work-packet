@@ -6,6 +6,7 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 
@@ -56,9 +57,23 @@ class StepResult:
     duration_s: float = 0.0
     text: Optional[str] = None
     account: Optional[str] = None    # how the run paid: "subscription", "key", ...; never the key
+    limited: bool = False            # the account's usage limit cut the run off (limits.py)
+    limited_until: Optional[datetime] = None      # ... and when it resets, if the harness said
 
     def failure(self):
         """Why the run failed, or None if it succeeded."""
+        why = self._failure()
+        if self.limit_hit():
+            when = self.limited_until.strftime(" (resets %H:%M UTC)") if self.limited_until else ""
+            return "usage limit%s" % when
+        return why
+
+    def limit_hit(self):
+        """The run failed because the account hit its usage limit. A limit
+        event in a run that still finished, or ran out of time, is not that."""
+        return self.limited and self._failure() not in (None, "timeout")
+
+    def _failure(self):
         if self.timed_out:
             return "timeout"
         if self.exit_code != 0:

@@ -20,6 +20,7 @@ import os
 import shlex
 
 from . import Caps, Harness, home_env
+from .. import limits
 
 # A fixed list, as for Claude: Codex cannot list what an account may use.
 MODELS = (
@@ -117,6 +118,8 @@ class Codex(Harness):
                 res.is_error = True
                 err = ev.get("error") if isinstance(ev.get("error"), dict) else ev
                 res.subtype = str(err.get("message") or t)[:200]
+                if limits.looks_limited(res.subtype) or "429" in res.subtype:
+                    res.limited = True
             elif t == "item.completed":
                 item = ev.get("item") or {}
                 if item.get("type") == "agent_message" and isinstance(item.get("text"), str):

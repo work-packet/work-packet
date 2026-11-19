@@ -4,8 +4,9 @@
 (function () {
   var h = document.documentElement;
   document.addEventListener("submit", function (e) {
-    var f = e.target;
-    if (f.dataset && f.dataset.confirm && !window.confirm(f.dataset.confirm)) e.preventDefault();
+    var f = e.target, b = e.submitter;    // the button's data-confirm, else the form's
+    var ask = (b && b.dataset && b.dataset.confirm) || (f.dataset && f.dataset.confirm);
+    if (ask && !window.confirm(ask)) e.preventDefault();
   });
 
   // Cards are compact <details>; which are open is remembered per browser. live.js

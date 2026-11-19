@@ -15,6 +15,12 @@ Runs the behaviour named by ``WPK_FAKE_BEHAVIOR`` (a module in
   bad-resume   resume: every monday
   forgetful    end the turn without writing .pending/, unless nudged
   silent       never write .pending/
+  limit        hit the usage limit: a rejected ``rate_limit_event`` (``resetsAt``
+               from ``WPK_FAKE_RESETS``, epoch seconds, if set), then a 429 result
+               "You've hit your session limit · resets 6:40pm (UTC)" and exit 1
+  limit-text   the same without the event: the reset time is only in the text
+  limit-bare   a 429 result "Rate limit exceeded", no reset time anywhere
+  limit-passed a rejected event, but the run still finishes normally
 
 A behaviour returns the reply's text, or ``{"text": ..., "writes": [(path,
 content)]}``: each write is a Write tool call, passed through the
@@ -75,6 +81,11 @@ def main():
         return 1
     if fault == "hang":
         time.sleep(3600)
+    if fault in ("limit", "limit-text", "limit-bare"):
+        return hit_limit(args, fault)
+    if fault == "limit-passed":
+        emit({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected",
+                                                              "rateLimitType": "five_hour"}})
     nudged = prompt.startswith("wpk: your turn ended")
     if fault == "silent" or (fault == "forgetful" and not nudged):
         emit({"type": "assistant", "session_id": args.session_id, "parent_tool_use_id": None,
@@ -117,6 +128,22 @@ def main():
           "result": text,
           "usage": {"input_tokens": 1500, "output_tokens": 120}})
     return 0
+
+
+def hit_limit(args, fault):
+    """The run Claude Code makes when the account's usage limit is reached
+    (as seen in pssc-debug step 110)."""
+    if fault == "limit":
+        info = {"status": "rejected", "rateLimitType": "five_hour", "overageStatus": "rejected"}
+        if os.environ.get("WPK_FAKE_RESETS"):
+            info["resetsAt"] = int(os.environ["WPK_FAKE_RESETS"])
+        emit({"type": "rate_limit_event", "rate_limit_info": info})
+    text = ("Rate limit exceeded" if fault == "limit-bare"
+            else "You've hit your session limit \u00b7 resets 6:40pm (UTC)")
+    emit({"type": "result", "subtype": "success", "is_error": True, "api_error_status": 429,
+          "terminal_reason": "api_error", "session_id": args.session_id, "num_turns": 1,
+          "total_cost_usd": 0.01, "result": text})
+    return 1
 
 
 def write(args, tid, path, content):

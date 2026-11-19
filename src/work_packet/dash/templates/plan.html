@@ -2,8 +2,8 @@
 {# The packet's plan as a tree, and the versions of it (docs/plan-tree.md). #}
 {% set q = e.name|urlencode %}
 {% set base = "/p/" ~ q ~ "/" ~ pl.wpid %}
-{% macro href(v=None, changes=None, open=None) -%}
-?{{ ("v=" ~ v|urlencode ~ "&") if v }}{{ "changes=1&" if changes }}{{ ("open=" ~ open) if open }}
+{% macro href(v=None, changes=None, open=None, detail=pl.detail) -%}
+?{{ ("v=" ~ v|urlencode ~ "&") if v }}{{ "changes=1&" if changes }}{{ "detail=1&" if detail }}{{ ("open=" ~ open) if open }}
 {%- endmacro %}
 {% block title %}plan · {{ pl.short }} · {{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ q }}">{{ e.name }}</a> / <a href="{{ base }}"><code>{{ pl.short }}</code></a> / plan{% endblock %}
@@ -36,6 +36,8 @@
 .tree .det { list-style: disc; margin: 0 0 2px 1.3em; padding: 0; font-size: 13px; color: var(--muted); }
 .tree .note { font-size: 13px; color: var(--muted); margin: 2px 0 4px 1em; }
 .tree code { font-size: 12px; }
+.tree .tail { color: var(--muted); font-size: 13px; }
+.tree .said { display: block; margin: 0 0 2px 2.6em; font-size: 12.5px; color: var(--muted); font-weight: 400; }
 .planbar { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin: 0 0 10px; }
 .bar { height: 6px; background: var(--code); border-radius: 3px; overflow: hidden; margin: 4px 0 10px; }
 .bar span { display: block; height: 100%; background: var(--COMPLETED); }
@@ -51,22 +53,24 @@ ul.gone { list-style: none; padding: 8px 12px; }
 {% endblock %}
 
 {% macro row(n) -%}
-<span class="pr">{% if n.kind == "group" %}{{ n.text|inline }}{% else %}<span class="mark" title="{{ n.state }}">{{ MARK.get(n.state, "○") }}</span>{% if n.id %}<span class="id">{{ n.id }}</span>{% endif %}<span class="txt">{{ n.text|inline }}</span>{% endif %}
+<span class="pr">{% if n.kind == "group" %}{{ n.text|inline }}{% else %}<span class="mark" title="{{ n.state }}">{{ MARK.get(n.state, "○") }}</span>{% if n.id %}<span class="id">{{ n.id }}</span>{% endif %}<span class="txt" title="{{ n.text }}">{{ (n.lead or n.text)|inline }}{% if pl.detail and n.tail %}<span class="tail"> — {{ n.tail|inline }}</span>{% endif %}</span>{% endif %}
 {%- if n.change == "new" %}<span class="chg c-new">new</span>{% elif n.change == "state" %}<span class="chg c-state">was {{ n.was }}</span>{% elif n.change == "edited" %}<span class="chg c-edited">edited</span>{% endif %}
 {%- set d, t = n.count %}{% if t %}<span class="pm">{{ d }}/{{ t }}</span>{% endif %}
 {%- if n.steps %}<span class="pm">step{{ "s" if n.steps|length > 1 }} {% for s in n.steps %}<a href="{{ base }}/{{ s.dir }}" title="{{ s.summary or '' }}">{{ s.n }}{% if s.outcome == "failed" %}✗{% endif %}</a>{{ " " if not loop.last }}{% endfor %}</span>{% endif %}
 {%- if n.cost %}<span class="pm">{{ n.cost|money }}</span>{% endif %}
 {%- if n.id and n.id in pl.notes %}<span class="pm"><a href="{{ base }}/file?path={{ ('state/notes/' ~ n.id ~ '.md')|urlencode }}">notes</a></span>{% endif %}
+{%- if pl.detail and n.date %}<span class="pm">{{ n.date }}</span>{% endif %}
 </span>
+{%- if n.said %}<span class="said">{{ n.said|truncate(160) }}</span>{% endif %}
 {%- endmacro %}
 
 {% macro node(n) -%}
 {% if not pl.changes or n.change or n.changed %}
 {% set cls = ("pt-" ~ n.kind ~ " " ~ (n.state or "") ~ (" cur" if n.current else ""))|trim %}
-{% if n.children or n.details or n.notes %}
+{% if n.children or (pl.detail and n.details) or n.notes %}
 <details class="{{ cls }}"{{ " open" if n.open }}><summary>{{ row(n) }}</summary>
 <div class="kids">
-{% if n.details %}<ul class="det">{% for d in n.details %}<li>{{ d|inline }}</li>{% endfor %}</ul>{% endif %}
+{% if pl.detail and n.details %}<ul class="det">{% for d in n.details %}<li>{{ d|inline }}</li>{% endfor %}</ul>{% endif %}
 {% for t in n.notes %}<div class="note">{{ t|inline }}</div>{% endfor %}
 {% for c in n.children %}{{ node(c) }}{% endfor %}
 </div></details>
@@ -84,8 +88,9 @@ ul.gone { list-style: none; padding: 8px 12px; }
 <div class="planbar muted">
   <span><strong>{{ d }}</strong> of {{ t }} done</span>
   <span>{{ pl.v.label }}{% if pl.v.step and pl.v.dir %} · <a href="{{ base }}/{{ pl.v.dir }}">step {{ pl.v.step }}</a>{% endif %}{% if pl.v.item %} · item {{ pl.v.item }}{% endif %}</span>
-  {% if pl.current %}<span>now: <strong>{{ pl.current.id or "" }}</strong> {{ pl.current.text|truncate(60) }}</span>{% endif %}
+  {% if pl.current %}<span>now: <strong>{{ pl.current.id or "" }}</strong> {{ (pl.current.lead or pl.current.text)|truncate(60) }}</span>{% endif %}
   <span><a href="{{ href(pl.v.key if not pl.latest, pl.changes, 'all') }}">expand all</a> · <a href="{{ href(pl.v.key if not pl.latest, pl.changes, 'none') }}">collapse all</a>
+  · {% if pl.detail %}<a href="{{ href(pl.v.key if not pl.latest, pl.changes, None, False) }}">titles only</a>{% else %}<a href="{{ href(pl.v.key if not pl.latest, pl.changes, None, True) }}">show detail</a>{% endif %}
   · {% if pl.changes %}<a href="{{ href(pl.v.key if not pl.latest) }}">whole plan</a>{% else %}<a href="{{ href(pl.v.key if not pl.latest, True, 'all') }}">changes only</a>{% endif %}</span>
   {% if pl.latest %}<a href="{{ base }}/file?path={{ 'state/outline.md'|urlencode }}">outline.md</a>{% endif %}
 </div>

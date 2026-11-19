@@ -86,8 +86,10 @@ SERVER_DEFAULTS = {                   # server.md §6
 IDE_DEFAULTS = {                      # docs/vscode-plan.md §6
     "desktop": False,                  # vscode:// buttons (opt in)
     "web": False,                      # VS Code under the board's /ide/
-    "backend": "serve-web",
-    "code": "",                        # empty: `code` (serve-web) or `openvscode-server`
+    "backend": "server",               # VS Code's server, from wpk's releases (serve-web: same)
+    "code": "",                        # openvscode-server's program; empty: `openvscode-server`
+    "release": "",                     # hold desks on this commit (prefix) or version; empty: newest
+    "check_hours": 24,                 # look for a new VS Code release this often; 0: never
     "ssh_host": "",                    # empty: you@ the board's name or MagicDNS name
     "desktop_link": "auto",            # auto | remote | local: the vscode:// link to follow
     "idle_minutes": 60,
@@ -207,7 +209,8 @@ SCHED_BACKEND_KEYS = {
 }
 _MEM_RX = re.compile(r"^(\d+)([KMGT]?)$")
 IDE_TRANSPORTS = ("tcp-token", "mtls")    # docs/scheduler.md §8.1
-IDE_BACKENDS = ("serve-web", "openvscode-server")   # docs/vscode-plan.md §4.4
+# "serve-web" is the old name of "server" (docs/ide-direct-server-plan.md)
+IDE_BACKENDS = ("server", "serve-web", "openvscode-server")   # docs/vscode-plan.md §4.4
 SERVER_AUTH = ("tailscale", "unix", "none")    # unix: docs/unix-login.md
 SERVER_TLS = ("off", "tailscale", "self-signed", "files")   # server.md §2.3
 SERVER_LISTEN = ("", "unix", "network")
@@ -223,6 +226,7 @@ JOURNAL_TYPES = {
     "step-start": ("step", "attempt", "model", "session_id"),
     "step-failed": ("step", "attempt", "why"),
     "step-nudge": ("step", "attempt", "why"),
+    "limit-wait": ("step", "until"),  # the profile is held for a usage limit (limits.py)
     "commit-begin": ("step", "decision"),
     "commit-end": ("step",),
     "admin": ("op", "by"),
@@ -684,14 +688,15 @@ def _validate_ide(d):
               "hooks"):
         if k in t and not isinstance(t[k], bool):
             out.append(_err("ide." + k, "must be true or false"))
-    for k in ("code", "ssh_host"):
+    for k in ("code", "ssh_host", "release"):
         if k in t and not isinstance(t[k], str):
             out.append(_err("ide." + k, "must be a string"))
     if t.get("desktop_link", "auto") not in ("auto", "remote", "local"):
         out.append(_err("ide.desktop_link", "must be auto, remote or local"))
-    if t.get("backend", "serve-web") not in IDE_BACKENDS:
+    if t.get("backend", "server") not in IDE_BACKENDS:
         out.append(_err("ide.backend", "must be one of %s" % ", ".join(IDE_BACKENDS)))
     for k, dflt in (("idle_minutes", 60), ("max_servers", 8), ("sessions_poll_s", 5),
+                    ("check_hours", 24),
                     ("sessions_keep_days", 30), ("scribe_idle_s", 1800), ("presence_ttl", 600),
                     ("idle_escalate", 900)):
         m = t.get(k, dflt)

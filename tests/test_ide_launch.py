@@ -102,7 +102,7 @@ def test_a_local_server_gets_its_launch(short_home, tmp_path):
 
 def test_open_in_vs_code_records_who_opened_it(short_home, tmp_path, monkeypatch, source):
     from test_ide import _web_client
-    from work_packet.dash.ide import key_for
+    from work_packet.dash.ide import key_for_packet
     monkeypatch.chdir(tmp_path)
     proj, pkt = setup_root(tmp_path, source)
     c, be, origin, tok = _web_client(short_home, tmp_path)
@@ -110,8 +110,9 @@ def test_open_in_vs_code_records_who_opened_it(short_home, tmp_path, monkeypatch
         r = c.post("/p/dvs/ide", headers=origin, data={"csrf": tok, "go": "web"},
                    follow_redirects=False)
         assert r.status_code == 303
-        key = key_for("%s/.vscode/project.code-workspace" % proj)
+        key = r.headers["location"].split("/")[2]
         [o] = ide_launch.opens(short_home, key)
+        assert key == key_for_packet(o["wpid"])
         assert o["project"] == "dvs" and o["wpid"] and o["by"] and o["t"] <= time.time()
         assert ide_launch.packet_of(short_home, key) == ("dvs", o["wpid"])
     finally:

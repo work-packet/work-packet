@@ -62,8 +62,9 @@ def _presence(s, gone=False):
 
 
 class Session:
-    def __init__(self, sid, project, cwd, by, pid, fd):
+    def __init__(self, sid, project, cwd, by, pid, fd, wpid=None):
         self.sid, self.project, self.cwd, self.by = sid, project, cwd, by
+        self.wpid = wpid             # a packet's question-resolution session; None: a shell
         self.pid, self.fd = pid, fd
         self.started = clock.now()
         self.buf = bytearray()
@@ -75,6 +76,7 @@ class Session:
 
     def info(self):
         return {"sid": self.sid, "project": self.project, "cwd": self.cwd, "by": self.by,
+                "wpid": self.wpid,
                 "started": schema.format_timestamp(self.started),
                 "attached": self.queue is not None}
 
@@ -89,15 +91,18 @@ class Shells:
     # -- queries (any thread) ---------------------------------------------------
 
     def of_project(self, project):
-        return [s.info() for s in list(self.sessions.values()) if s.project == project]
+        """The project's shells (not its question-resolution sessions)."""
+        return [s.info() for s in list(self.sessions.values())
+                if s.project == project and s.wpid is None]
 
     def get(self, sid):
         return self.sessions.get(sid)
 
     # -- life ---------------------------------------------------------------------
 
-    def open(self, project, argv, cwd, env, by, log_path=None):
-        """Start ``argv`` on a new pty. Call on the event loop."""
+    def open(self, project, argv, cwd, env, by, log_path=None, wpid=None):
+        """Start ``argv`` on a new pty. Call on the event loop. ``wpid``: it is that
+        packet's question-resolution session (docs/question-ux-plan.md §2)."""
         if len(self.sessions) >= self.max_sessions:
             raise ShellError("%d shells are open already; close one first" % self.max_sessions)
         self.loop = asyncio.get_running_loop()
@@ -112,7 +117,7 @@ class Shells:
                 os.write(2, ("wpk: cannot start %s: %s\n" % (argv[0], e)).encode())
             os._exit(127)
         fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_NONBLOCK)
-        s = Session(secrets.token_urlsafe(12), project, cwd, by, pid, fd)
+        s = Session(secrets.token_urlsafe(12), project, cwd, by, pid, fd, wpid)
         self.sessions[s.sid] = s
         self.loop.add_reader(fd, self._readable, s)
         path = log_path or self.log_path

@@ -1,5 +1,5 @@
-"""A desk keeps the VS Code release it started with; stranded servers and
-second sessions are found (docs/ide-split-desk-plan.md)."""
+"""Stranded servers and second sessions are found (docs/ide-split-desk-plan.md;
+the release pin it had is gone: docs/ide-direct-server-plan.md)."""
 
 from work_packet import hookcmd, ide_launch, ide_stranded, presence, schema
 from work_packet.dash import ide as dide
@@ -13,45 +13,6 @@ def backend(home, **cfg):
     be = dide.Backend(str(home), dict(schema.IDE_DEFAULTS, **cfg), KEY)
     dide.private_dirs(str(home), KEY)
     return be
-
-
-def test_requests_go_to_the_release_the_launch_first_served(tmp_path):
-    be = backend(tmp_path)
-    lid = ide_launch.start(str(tmp_path), KEY, "/w/x", "local")
-    base = "/ide/" + KEY
-    assert be.route(base + "/") == base + "/"                     # nothing pinned yet
-    assert be.route(base + "/%s/static/x.js" % C1) == base + "/%s/static/x.js" % C1
-    assert ide_launch.current(str(tmp_path), KEY)["release"] == C1
-    assert be.route(base + "/") == "%s/%s/" % (base, C1)
-    assert be.route(base) == "%s/%s/" % (base, C1)
-    assert be.route(base + "/?reconnectionToken=t") == "%s/%s/?reconnectionToken=t" % (base, C1)
-    # a client that names its release gets it; the pin stays
-    assert be.route(base + "/%s/static/y.js" % C2) == base + "/%s/static/y.js" % C2
-    assert be.release() == C1
-    # serve-web's own paths and ours are left alone
-    assert be.route(base + "/_vscode-cli/mint-key") == base + "/_vscode-cli/mint-key"
-    assert be.route(base + dide.VIS) == base + dide.VIS
-    # a board that restarts reads the pin back
-    again = backend(tmp_path)
-    assert again.route(base + "/") == "%s/%s/" % (base, C1)
-    # a new launch is pinned to nothing
-    ide_launch.start(str(tmp_path), KEY, "/w/x", "local")
-    again._pin = None
-    assert again.route(base + "/") == base + "/"
-    assert lid != ide_launch.current(str(tmp_path), KEY)["launch_id"]
-
-
-def test_openvscode_server_is_not_routed(tmp_path):
-    be = backend(tmp_path, backend="openvscode-server")
-    ide_launch.start(str(tmp_path), KEY, "/w/x", "local")
-    base = "/ide/" + KEY
-    be.route(base + "/%s/static/x.js" % C1)
-    assert be.route(base + "/") == base + "/"
-
-
-def test_the_page_names_its_release():
-    page = b'<link href="/ide/k/%s/static/out/w.css">' % C1.encode()
-    assert dide.PAGE_RELEASE.search(page).group(1).decode() == C1
 
 
 def test_stranded_keeps_the_pinned_server_and_lists_its_agents(monkeypatch):

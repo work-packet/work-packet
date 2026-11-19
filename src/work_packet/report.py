@@ -24,6 +24,38 @@ SNAP_SKIP = (".git",)           # a repo's history is not a result
 SECTIONS = ("Outcome", "Decisions", "Deliverables", "Open items")
 ROOTS = ("state", "work")       # where a deliverable may be
 _HEAD = re.compile(r"^##\s+(.+?)\s*$", re.M)
+# A path under ROOTS in running text: not inside a longer word or path, up to
+# the next space or bracket; trailing punctuation is the sentence's, not the path's.
+_PATH = re.compile(r"(?<![\w/.~-])((?:%s)/[^\s()\[\]<>\"'`|*]+)" % "|".join(ROOTS))
+_TAIL = re.compile(r"(?::\d+(?:[:-]\d+)?|#[\w.-]*)$")     # :line, :line:col, #anchor
+
+
+def paths_in(text):
+    """[(start, end, path, fragment)] for each path under ROOTS that ``text``
+    mentions, e.g. ``state/plan.md``, ``work/r/a.py:12`` (fragment None) or
+    ``state/x.md#s`` (fragment ``s``). Not checked to exist."""
+    out = []
+    for m in _PATH.finditer(text or ""):
+        s, e = m.span(1)
+        while e > s and text[e - 1] in ".,:;!?":
+            e -= 1
+        tail = _TAIL.search(text, s, e)
+        cut = tail.start() if tail else e
+        while cut > s and text[cut - 1] in ".,:;!?":
+            cut -= 1
+        path = os.path.normpath(text[s:cut])
+        if cut == s or ".." in path.split(os.sep) or path.split(os.sep)[0] not in ROOTS \
+                or path in ROOTS:
+            continue
+        frag = text[tail.start() + 1:e] if tail and text[tail.start()] == "#" else None
+        out.append((s, e, path, frag))
+    return out
+
+
+def mentions(text):
+    """The set of paths under ROOTS that ``text`` names, in plain text, code
+    spans or link targets."""
+    return {p for _, _, p, _ in paths_in(text)}
 
 
 def sections(body):

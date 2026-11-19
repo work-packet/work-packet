@@ -79,7 +79,7 @@ ul.list button.x:hover { color: var(--FAILED); }
   <a class="tile{{ ' bad' if t.failed }}" href="#attention"><div class="k">Failed</div><div class="v">{{ t.failed }}</div>
     <div class="s">{% if t.newest_fail %}newest {{ t.newest_fail }} ago{% endif %}</div></a>
   <a class="tile" href="/stats?days={{ burn.days }}"><div class="k">Spend today</div><div class="v">{{ t.spend_today|money or "$0" }}</div>
-    <div class="s">{% if t.sessions and t.sessions.tokens %}runner; your sessions {{ t.sessions.usd|money if t.sessions.usd is not none else t.sessions.tokens|tok ~ " tokens" }}{% if burn.days > 1 %} · {% endif %}{% endif %}{% if burn.days > 1 %}{{ t.spend|money or "$0" }} {{ span }}{% endif %}</div></a>
+    <div class="s">{% if t.sessions and t.sessions.tokens %}runner {{ t.runner_today|money if t.runner_today else "$0" }} + your sessions {{ t.sessions.usd|money if t.sessions.usd is not none else t.sessions.tokens|tok ~ " tokens" }}{% if burn.days > 1 %} · {% endif %}{% endif %}{% if burn.days > 1 %}{{ t.spend|money or "$0" }} {{ span }}{% endif %}</div></a>
   {% if t.quota %}
   <a class="tile{{ ' bad' if t.quota.used >= 0.8 and not t.quota.reset }}" href="/stats?days={{ burn.days }}"><div class="k">Weekly quota</div>
     <div class="v">{{ t.quota.used|pct }}</div>
@@ -164,6 +164,7 @@ ul.list button.x:hover { color: var(--FAILED); }
     {% elif a.kind == "job" %}<a class="state {{ 'FAILED' if a.item.failed else 'COMPLETED' }}" href="/p/{{ c.name|urlencode }}/jobs/{{ a.item.job }}" title="A command you ran for it ended">JOB</a>
     {% elif a.kind == "atrisk" %}<span class="state PAUSED" title="It may miss its due date: decide what gives">AT RISK</span>
     {% elif a.kind == "rot" %}<span class="state PAUSED" title="Parked and untouched for longer than its priority allows: pick it up, lower it, or drop it">STALE</span>
+    {% elif a.kind == "closeable" %}{% if a.item.clean %}<span class="state COMPLETED" title="Done, and its last check found nothing outstanding">READY TO CLOSE</span>{% else %}<span class="state PAUSED" title="Done, but its folder holds work that is nowhere else">NOT SAVED</span>{% endif %}
     {% else %}<span class="state FAILED">FAILED</span>{% endif %}
     <a href="/p/{{ c.name|urlencode }}"><strong>{{ c.name }}</strong></a>
     {% if side|length > 1 %}<a class="bd" href="/b/{{ c.board|urlencode }}">{{ c.board }}</a>{% endif %}
@@ -178,7 +179,7 @@ ul.list button.x:hover { color: var(--FAILED); }
       <span class="muted">· nobody is working on it</span>
     {% elif a.kind == "stuck" %}{% set k = a.pkt %}<code>{{ k.name or k.short }}</code> sleeps, but
       {% for ch in k.children %}<code>{{ ch.short }}</code> is {{ ch.state }}{{ ", " if not loop.last }}{% endfor %}
-    {% elif a.kind in ("atrisk", "rot") %}<span class="ell" title="{{ a.item.text }}">{{ a.item.text }}</span>
+    {% elif a.kind in ("atrisk", "rot", "closeable") %}<span class="ell" title="{{ a.item.text }}">{{ a.item.text }}</span>
     {% elif a.kind == "job" %}<span class="ell{{ ' err' if a.item.failed }}">{{ a.item.text }}</span>
       <span class="muted">· {{ a.item.since|epoch }}</span>
     {% elif a.kind in ("blocked", "yourturn", "stale") %}{{ a.item.text }}
@@ -193,9 +194,11 @@ ul.list button.x:hover { color: var(--FAILED); }
     {% elif a.kind == "stuck" %}<button class="mini" form="act-{{ loop.index }}" title="Run it now">Wake</button>
     {% elif a.kind in ("done", "stopped") %}<a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>{% if a.kind == "done" and c.lifecycle == "open" %}
       <button class="mini" form="act-{{ loop.index }}" title="It is finished: take it off the active views (Reopen brings it back)">Done</button>
+      <a class="mini" href="/p/{{ c.name|urlencode }}/close" title="Off the board, into history: shows what is outstanding first">Close…</a>
       <a class="mini" href="/p/{{ c.name|urlencode }}/compose" title="Hand the runner the next thing to do">Next…</a>
       {{ om.menu(c, key="att-") }}{% endif %}
       <button class="x" form="seen-one" name="project" value="{{ c.name }}" title="Take it off the list without opening it" aria-label="dismiss {{ c.name }}">×</button>
+    {% elif a.kind == "closeable" %}<a class="mini" href="/p/{{ c.name|urlencode }}/close" title="Off the board, into history: shows what is outstanding first">Close…</a>
     {% elif a.kind == "atrisk" %}<a class="mini" href="/p/{{ c.name|urlencode }}/compose" title="Give the runner more of it now">Hand it off now</a>
       {{ plm.menu(c.name, c.plan, "/") }}
       <a class="mini" href="/p/{{ c.name|urlencode }}">Open</a>

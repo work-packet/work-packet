@@ -229,10 +229,14 @@ def c_questions(args, scope, ctx):
     lines = []
     for q in qs:
         lines.append({"text": "%s: %s" % (q["id"], q["q"])})
+        for k, label in (("context", "context"), ("premise", "rests on")):
+            if q[k]:
+                lines.append({"text": "    %s: %s" % (label, " ".join(q[k].split()))})
         if q["choices"]:
             lines.append({"text": "    choices: %s" % ", ".join(map(str, q["choices"]))})
         if q["recommend"]:
-            lines.append({"text": "    recommended: %s" % q["recommend"]})
+            lines.append({"text": "    recommended: %s%s" % (
+                q["recommend"], " (%s)" % q["why"] if q["why"] else "")})
     lines.append({"text": "answer with /answer id=text …, or /answer -r to take the"
                           " recommendations"})
     return {"ok": True, "cmd": "questions", "href": _href(e, wpid),

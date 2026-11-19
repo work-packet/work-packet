@@ -83,12 +83,29 @@ def _local_day(s, tz):
 
 
 def project_steps(entry):
-    return stats.collect([(entry["name"], entry["path"])])[0]
+    """The project's steps, with those of packets that are gone kept by the
+    token ledger (docs/token-ledger.md §2.3)."""
+    from .. import ledger, registry
+    steps = stats.collect([(entry["name"], entry["path"])])[0]
+    have = {s.wpid for s in steps}
+    try:
+        gone = ledger.gone_steps(registry.home(), entry["name"])
+    except Exception:                   # noqa: BLE001  no ledger: what the packets hold
+        gone = []
+    return steps + [s for s in gone if s.wpid not in have]
 
 
 def _names(entry):
+    from .. import ledger, registry
     from .data import tree
-    return {n["wpid"]: n["name"] or n["short"] for n in tree(entry)}
+    try:
+        out = ledger.packet_names(registry.home(), entry["name"])
+    except Exception:                   # noqa: BLE001
+        out = {}
+    for n in tree(entry):               # a packet that is gone keeps the ledger's name
+        if n["name"] or n["wpid"] not in out:
+            out[n["wpid"]] = n["name"] or n["short"]
+    return out
 
 
 def rows(steps, by, names=None):
@@ -152,10 +169,10 @@ TOKEN_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_t
 def session_buckets(home, since=None, until=None, project=None):
     """Session tokens by hour and model, priced: ``[{t, model, usage, rec, tokens,
     usd}]`` (``usd`` None for a model with no price)."""
-    from .. import cost, registry, session_usage
+    from .. import cost, ledger, registry
     home = home or registry.home()
     tables, prices, out = cost.price_tables(home), {}, []
-    for t, m, u, r in session_usage.rows(home, since, until, project):
+    for t, m, u, r in ledger.buckets(home, since, until, project):
         if m not in prices:
             prices[m] = cost.model_price(m, tables=tables)
         out.append({"t": t, "model": m, "usage": u, "rec": r,
@@ -198,6 +215,88 @@ def spend_split(steps, buckets, dates, tz):
                              d.isoformat(), _usd(day), _usd(v["runner"]), _usd(v["sessions"]))
                          if day else "%s: none" % d})
         out["chart"] = chart(cols, SOURCES, height=90, unit="usd")
+    return out
+
+
+# docs/token-ledger.md §6: activity by source, from the ledger. Console and studio
+# conversations are one source here.
+ACTIVITY = (("runner", "sp0", "runner"), ("interactive", "sp1", "your sessions"),
+            ("console", "sp2", "console and studio"), ("model-call", "sp3", "wpk's own calls"))
+# "Work tokens" (§6.1): what a model was given new and what it wrote. Cache reads
+# (a long session re-reading its context) would swamp them.
+WORK_KEYS = ("input_tokens", "cache_creation_input_tokens", "output_tokens")
+
+
+def _activity_key(rec):
+    src = rec.get("source") or "interactive"
+    return "console" if src == "studio" else src if src in dict(
+        (k, 1) for k, _, _ in ACTIVITY) else "interactive"
+
+
+def activity(home, now=None, days=7):
+    """Work tokens per hour over the last 24 hours (``days`` 1), else per local
+    day, stacked by source: runner, your sessions, console and studio, wpk's own
+    calls. One read of the ledger covers them all. None when nothing ran."""
+    from datetime import datetime
+    from .. import ledger, registry
+    home = home or registry.home()
+    now = now or clock.now()
+    end = now.timestamp()
+    if days == 1:
+        first = ledger.hour_of(end) - 23 * 3600
+        keys = [first + i * 3600 for i in range(24)]
+        since = first
+    else:
+        today = now.astimezone().date()
+        keys = [today - timedelta(days=days - 1 - i) for i in range(days)]
+        since = datetime.combine(keys[0], datetime.min.time()).astimezone().timestamp()
+    at = {k: i for i, k in enumerate(keys)}
+    vals = [dict.fromkeys((k for k, _, _ in ACTIVITY), 0) for _ in keys]
+    reads = [0] * len(keys)
+    for t, _, u, rec in ledger.buckets(home, since=since, runner=True):
+        i = at.get(t if days == 1 else datetime.fromtimestamp(t).date())
+        if i is None:
+            continue
+        vals[i][_activity_key(rec)] += sum(u.get(k, 0) for k in WORK_KEYS)
+        reads[i] += u.get("cache_read_input_tokens", 0)
+    if not any(sum(v.values()) for v in vals):
+        return None
+    cols = []
+    for k, v, r in zip(keys, vals, reads):
+        when = datetime.fromtimestamp(k).strftime("%H:00") if days == 1 else k.isoformat()
+        parts = ", ".join("%s %s" % (name, _k(v[key])) for key, _, name in ACTIVITY if v[key])
+        cols.append({"label": when[:2] if days == 1 else k.strftime("%m-%d"), "values": v,
+                     "title": "%s: %s work tokens (%s); cache reads %s" % (
+                         when, _k(sum(v.values())), parts, _k(r)) if parts else
+                     "%s: none" % when})
+    return chart(cols, ACTIVITY, height=90)
+
+
+def elsewhere(buckets, n=8):
+    """The sessions no rule tied to a project (docs/token-ledger.md §4, "none"):
+    ``{usd, tokens, sessions, folders: [{cwd, sessions, usd, tokens}]}`` with the
+    ``n`` folders that cost most, so a missing rule or an unregistered project
+    shows. None when there are none."""
+    by = {}
+    for b in buckets:
+        r = b["rec"]
+        if r.get("project") or (r.get("source") or "interactive") != "interactive":
+            continue
+        f = by.setdefault(r.get("cwd") or "", {"cwd": r.get("cwd") or "", "sessions": set(),
+                                               "usd": 0.0, "tokens": 0})
+        f["sessions"].add((r["harness"], r["session_id"]))
+        f["usd"] += b["usd"] or 0
+        f["tokens"] += b["tokens"]
+    if not by:
+        return None
+    rows = sorted(by.values(), key=lambda f: (-f["usd"], f["cwd"]))
+    out = {"usd": sum(f["usd"] for f in rows), "tokens": sum(f["tokens"] for f in rows),
+           "sessions": sum(len(f["sessions"]) for f in rows), "more": max(len(rows) - n, 0),
+           "folders": []}
+    from ..setup import tilde
+    for f in rows[:n]:
+        out["folders"].append(dict(f, sessions=len(f["sessions"]),
+                                   show=tilde(f["cwd"]) if f["cwd"] else "(unknown)"))
     return out
 
 
@@ -380,6 +479,7 @@ def board(entries, now=None, days=7, on=None, home=None, sessions=False):
         if not steps:
             ss = _sess_sum(bs)
             out.append(dict(stats.token_figures([]), name=e["name"], board=b, steps=0,
+                            closed=e.get("closed"),
                             spark=None, sess_usd=ss["usd"], sess_unpriced=ss["unpriced"],
                             total_usd=ss["usd"] or 0))
             continue
@@ -395,7 +495,7 @@ def board(entries, now=None, days=7, on=None, home=None, sessions=False):
             cols.append({"values": v, "title": _title(d.isoformat(), v)})
         ss = _sess_sum(bs)
         f = stats.token_figures(steps)
-        out.append(dict(f, name=e["name"], board=b, steps=len(steps),
+        out.append(dict(f, name=e["name"], board=b, steps=len(steps), closed=e.get("closed"),
                         spark=chart(cols, CONTEXT, width=140, height=28, gap=1,
                                     label_h=0, left=0), sess_usd=ss["usd"] if bs else None,
                         sess_unpriced=ss["unpriced"],
@@ -428,7 +528,10 @@ def board(entries, now=None, days=7, on=None, home=None, sessions=False):
     return {"rows": out, "boards": boards, "total": total, "days": days,
             "quota": quota(every, now),
             "spend": spend(by_board, dates, on, sess_by_board),
-            "split": spend_split(all_steps, all_bs, dates, None) if sessions else None}
+            "split": spend_split(all_steps, all_bs, dates, None) if sessions else None,
+            "activity": activity(home, now, days) if sessions else None,
+            "elsewhere": elsewhere([x for x in sess_all if _day_of(x["t"], None) >= lstart])
+            if sessions else None}
 
 
 SPEND_COLOURS = 8  # --sp0 .. --sp7 in base.html; boards past that reuse them

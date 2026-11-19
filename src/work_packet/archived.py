@@ -116,3 +116,46 @@ def entries(h=None):
 def get(name, h=None):
     e = registry.get(name, h)
     return view(e, h) if e is not None else None
+
+
+def get_closed(name, h=None):
+    """A closed packet (docs/close-remove-plan.md), newest of that name, as an
+    entry the dashboard reads like an archived one: read-only, ``closed`` its
+    record's id. Its runs are read where they are while its folder is kept,
+    else from the history store. None if no closed packet has that name."""
+    from . import closeout
+    rec = next((r for r in closeout.closed(h) if r.get("name") == name), None)
+    if rec is None or not rec.get("entry"):
+        return None
+    e = dict(rec["entry"])
+    try:
+        v = view(e, h)
+    except (OSError, ValueError):
+        v = e
+    if not os.path.isdir(layout.runs_dir(v["path"])):
+        return None             # neither kept nor in history: only its closed page
+    return dict(v, archived=True, closed=rec["id"])
+
+
+def get_or_closed(name, h=None):
+    """``get``, else the closed packet of that name: what the board's project
+    pages show."""
+    return get(name, h) or get_closed(name, h)
+
+
+def closed_entries(h=None):
+    """The closed packets whose names are not registered again, as
+    ``get_closed`` has them, newest of each name: what the stats count beside
+    the registered ones, so closing never takes a packet's cost away."""
+    from . import closeout
+    have = {e["name"] for e in registry.entries(h)}
+    out, seen = [], set()
+    for r in closeout.closed(h):
+        n = r.get("name")
+        if n in have or n in seen:
+            continue
+        seen.add(n)
+        e = get_closed(n, h)
+        if e is not None:
+            out.append(e)
+    return out
