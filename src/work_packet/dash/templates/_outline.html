@@ -1,0 +1,44 @@
+{#- A packet's outline: done/total, a bar and the checklist (docs/outline-on-packet-page.md).
+    ``ol``: data.outline. ``fold``: on the main pages, runs of done items fold to a line and
+    the header says when the file last changed. ``finished``: the packet is done or
+    closing, so open items are flagged. -#}
+{% macro style() -%}
+<style>
+.tasks { list-style: none; margin: 0; padding: 0; }
+.tasks li { padding: 2px 0; }
+.tasks .mark { display: inline-block; width: 1.4em; text-align: center; }
+.tasks .done { color: var(--muted); } .tasks .done .mark { color: var(--COMPLETED); }
+.tasks .current { font-weight: 600; } .tasks .current .mark { color: var(--running); }
+.tasks .deferred { color: var(--muted); text-decoration: line-through; }
+.tasks details > summary { color: var(--muted); cursor: pointer; padding: 2px 0; }
+.tasks details > summary .mark { color: var(--COMPLETED); }
+.bar { height: 6px; background: var(--code); border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
+.bar span { display: block; height: 100%; background: var(--COMPLETED); }
+</style>
+{%- endmacro %}
+
+{% macro item(i) -%}
+<li class="{{ i.state }} {{ 'current' if i.current }}" style="padding-left:{{ i.depth * 1.2 }}em"><span class="mark">{{ {"done": "✓", "active": "▶", "deferred": "–", "added": "+", "partial": "◐"}.get(i.state, "▶" if i.current else "○") }}</span><span title="{{ i.text }}">{{ i.title or i.text }}</span></li>
+{%- endmacro %}
+
+{% macro panel(e, wpid, ol, fold=False, finished=False, id="outline") -%}
+<h2 id="{{ id }}">Outline <span class="muted" style="font-weight:400;font-size:13px">{{ ol.done }} of {{ ol.total }} done
+  {%- if finished and ol.open %} · <span style="color:var(--NEEDS_INPUT)">{{ ol.open }} still open</span>{% endif %}
+  · <code>{{ ol.file }}</code>{% if fold and ol.mtime %} · as of {{ ol.mtime|epoch }}{% endif %}
+  · <a href="/p/{{ e.name|urlencode }}/{{ wpid }}/plan">as a tree, with its history</a></span></h2>
+<div class="bar"><span style="width:{{ (100 * ol.done / ol.total)|round(1) }}%"></span></div>
+<ul class="tasks panel">
+  {% if fold %}{% for g in ol.segments %}
+  {% if g.fold %}<li><details><summary><span class="mark">✓</span>{{ g["items"]|length }} done: {{ (g["items"][0].title or g["items"][0].text)|truncate(40) }} … {{ (g["items"][-1].title or g["items"][-1].text)|truncate(40) }}</summary>
+    <ul class="tasks">{% for i in g["items"] %}{{ item(i) }}{% endfor %}</ul></details></li>
+  {% else %}{% for i in g["items"] %}{{ item(i) }}{% endfor %}{% endif %}
+  {% endfor %}
+  {% else %}{% for i in ol.entries %}{{ item(i) }}{% endfor %}{% endif %}
+</ul>
+{%- endmacro %}
+
+{#- One line for the Snapshot: "7 of 12 done · ▶ 3b Parser". -#}
+{% macro line(ol) -%}
+{%- set cur = ol.entries|selectattr("current")|first -%}
+{{ ol.done }} of {{ ol.total }} done{% if cur %} · ▶ {{ cur.title or cur.text }}{% endif %}
+{%- endmacro %}

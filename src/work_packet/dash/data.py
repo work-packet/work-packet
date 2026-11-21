@@ -1024,7 +1024,7 @@ def packet(entry, wpid, now=None):
         "fields": [(k, meta.get(k)) for k in schema.STATUS_FIELDS if k in meta],
         "summary": body.strip(), "summary_html": md(body.strip()),
         "status_line": _first_line(body), "intent": _intent(body), "memento": memento, "files": files, "children": kids,
-        "draft": _checkpoint_draft(pkt),
+        "draft": _checkpoint_draft(pkt), "outline": outline(pkt),
         "parent": parent, "steps": list(reversed(steps(pkt))), "running": live,
         "timeline": views.timeline(pkt, limit=60),
         "next": _next(meta, now, tz), "journal": pkt.journal().records[-200:],
@@ -1778,9 +1778,38 @@ def outline(pkt):
             if cur:
                 cur["current"] = True
             rel = os.path.relpath(p, pkt.path)
-            return {"file": rel, "entries": items,
-                    "done": sum(i["state"] == "done" for i in items), "total": len(items)}
+            try:
+                mtime = os.path.getmtime(p)
+            except OSError:
+                mtime = None
+            return {"file": rel, "entries": items, "mtime": mtime,
+                    "done": sum(i["state"] == "done" for i in items), "total": len(items),
+                    "open": sum(i["state"] not in ("done", "deferred") for i in items),
+                    "segments": _outline_segments(items)}
     return None
+
+
+def _outline_segments(items, run=3, short=12):
+    """``items`` cut into runs to show and runs to fold, for the packet's main pages
+    (docs/outline-on-packet-page.md): a run of ``run`` or more done items folds to
+    one line; an outline of ``short`` items or fewer is shown whole."""
+    if len(items) <= short:
+        return [{"fold": False, "items": items}]
+    segs = []
+    for i in items:
+        done = i["state"] == "done"
+        if segs and segs[-1]["done"] == done:
+            segs[-1]["items"].append(i)
+        else:
+            segs.append({"done": done, "items": [i]})
+    out = []
+    for g in segs:
+        fold = g["done"] and len(g["items"]) >= run
+        if not fold and out and not out[-1]["fold"]:
+            out[-1]["items"] += g["items"]
+        else:
+            out.append({"fold": fold, "items": g["items"]})
+    return out
 
 
 def live(entry, wpid, now=None, view="feed"):

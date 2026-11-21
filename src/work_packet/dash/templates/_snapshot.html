@@ -1,5 +1,6 @@
 {# The packet page's Snapshot: what the packet is and where it is at (docs/packet-page.md §2.2). #}
-{% macro panel(e, card, tl, on) -%}
+{% import "_outline.html" as olm %}
+{% macro panel(e, card, tl, on, ol=None) -%}
 {% set base = "/p/" ~ (e.name|urlencode) %}
 <style>
 .snap .kv2 { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); gap: 3px 12px; margin: 0 0 10px; }
@@ -21,6 +22,7 @@ svg.tl rect.running { fill: var(--running); }
   <dt>Documents</dt><dd><a href="{{ base }}/doc?path=work">work/</a> <span class="muted">· read and mark up</span></dd>
   <dt>Spend</dt><dd><a href="{{ base }}/cost">{{ card.spend_total|money or "$0" }}</a> total, {{ card.spend_today|money or "$0" }} today</dd>
   <dt>Board</dt><dd><a href="/b/{{ on|urlencode }}">{{ on }}</a></dd>
+  {% if ol %}<dt>Plan</dt><dd><a href="#outline">{{ olm.line(ol) }}</a></dd>{% endif %}
   <dt>Last step</dt><dd>{% if card.last_step != "never" %}<a href="{{ base }}/steps">{{ card.last_step }}</a>{% else %}never{% endif %}</dd>
 </dl>
 {% if tl %}

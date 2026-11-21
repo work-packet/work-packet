@@ -1,9 +1,11 @@
 {% extends "base.html" %}
 {% from "_note.html" import box with context %}
 {% import "_log.html" as lg %}
+{% import "_outline.html" as olm %}
 {% block title %}live · {{ l.short }} · {{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <a href="/p/{{ e.name|urlencode }}/{{ l.wpid }}"><code>{{ l.short }}</code></a> / live{% endblock %}
 {% block head %}
+{{ olm.style() }}
 <style>
 .livegrid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
 @media (max-width: 900px) { .livegrid { grid-template-columns: minmax(0, 1fr); } }
@@ -18,14 +20,6 @@
 .feed .tn { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; margin-right: 6px; }
 .feed .res { color: var(--muted); font-size: 12.5px; margin-top: 1px; word-break: break-word; }
 .feed code { word-break: break-all; }
-.tasks { list-style: none; margin: 0; padding: 0; }
-.tasks li { padding: 2px 0; }
-.tasks .mark { display: inline-block; width: 1.4em; text-align: center; }
-.tasks .done { color: var(--muted); } .tasks .done .mark { color: var(--COMPLETED); }
-.tasks .current { font-weight: 600; } .tasks .current .mark { color: var(--running); }
-.tasks .deferred { color: var(--muted); text-decoration: line-through; }
-.bar { height: 6px; background: var(--code); border-radius: 3px; overflow: hidden; margin: 4px 0 8px; }
-.bar span { display: block; height: 100%; background: var(--COMPLETED); }
 table.procs { width: 100%; table-layout: fixed; font-size: 12px; }
 table.procs td.cmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 table.procs td.cmd code { font-size: 11px; }
@@ -105,15 +99,9 @@ table.procs td.cmd code { font-size: 11px; }
       {% endfor %}
     </ul>
     {% endif %}
-    <h2>Outline{% if l.outline %} <span class="muted" style="font-weight:400;font-size:13px">{{ l.outline.done }} of {{ l.outline.total }} done · <code>{{ l.outline.file }}</code> · <a href="/p/{{ e.name|urlencode }}/{{ l.wpid }}/plan">as a tree, with its history</a></span>{% endif %}</h2>
-    {% if l.outline %}
-    <div class="bar"><span style="width:{{ (100 * l.outline.done / l.outline.total)|round(1) }}%"></span></div>
-    <ul class="tasks panel">
-      {% for i in l.outline.entries %}
-      <li class="{{ i.state }} {{ 'current' if i.current }}" style="padding-left:{{ i.depth * 1.2 }}em"><span class="mark">{{ {"done": "✓", "active": "▶", "deferred": "–", "added": "+", "partial": "◐"}.get(i.state, "▶" if i.current else "○") }}</span><span title="{{ i.text }}">{{ i.title or i.text }}</span></li>
-      {% endfor %}
-    </ul>
-    {% else %}<p class="muted">No checklist in <code>state/</code> (an <code>outline.md</code> with <code>- [ ]</code> lines shows here).</p>{% endif %}
+    {% if l.outline %}{{ olm.panel(e, l.wpid, l.outline) }}
+    {% else %}<h2>Outline</h2>
+    <p class="muted">No checklist in <code>state/</code> (an <code>outline.md</code> with <code>- [ ]</code> lines shows here).</p>{% endif %}
 
     <h2>Steps done</h2>
     {% if l.history %}

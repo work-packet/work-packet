@@ -8,9 +8,11 @@
 {% import "_answer.html" as ans with context %}
 {% import "_plan.html" as plm with context %}
 {% import "_autoopen.html" as aom with context %}
+{% import "_outline.html" as olm %}
 {% block title %}{{ p.short }} · {{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a> / <code>{{ p.short }}</code>{% endblock %}
 {% block main %}
+{% if p.outline %}{{ olm.style() }}{% endif %}
 <h1><code>{{ p.wpid }}</code>
   {% if p.running %}<span class="state running pulse">RUNNING</span>{% endif %}
   {% if p.meta.state == "NEEDS_INPUT" and p.questions and not p.running %}<a class="state NEEDS_INPUT" href="#answer" title="Answer its questions">NEEDS_INPUT</a>
@@ -163,7 +165,8 @@
   </form>
 </details>
 {{ box(e, p.wpid, st, p.running, p.notes) }}
-<p>{% if not p.running %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live">Live view</a>: the last step's activity, the outline and the steps done. {% endif %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/plan">Plan</a>: the outline as a tree, and how it changed step by step.</p>
+{% if p.outline %}{{ olm.panel(e, p.wpid, p.outline, fold=True, finished=p.lifecycle != "open" or p.meta.state == "COMPLETED") }}{% endif %}
+<p>{% if not p.running %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/live">Live view</a>: the last step's activity and the steps done. {% endif %}{% if not p.outline %}<a href="/p/{{ e.name|urlencode }}/{{ p.wpid }}/plan">Plan</a>: the outline as a tree, and how it changed step by step.{% endif %}</p>
 <div class="grid2">
   <section>
     <h2>Status</h2>

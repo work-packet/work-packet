@@ -1058,7 +1058,9 @@ def create_app(home=None, runner=None, shells=None, ide_backend=None, agents=Non
         jl = await run_in_threadpool(jobs.all_jobs, e["path"])
         sv = await run_in_threadpool(split_mod.view, e, home)
         auto = request.query_params.get("open")    # just made: open it (collaboration.md W1)
-        return await arender(request, "project.html", rp=rp, live=True, asks=asks, vsc=vsc,
+        # Where the root packet stands, running or not (docs/outline-on-packet-page.md).
+        ol = await run_in_threadpool(data.outline, Packet(root["path"])) if root else None
+        return await arender(request, "project.html", rp=rp, live=True, asks=asks, vsc=vsc, ol=ol,
                       autoopen=auto if auto in ("ide-web", "ide-desktop", "studio") else None,
                       jobs=jl[:10], more_jobs=max(len(jl) - 10, 0), now_t=time.time(),
                       is_owner=is_owner(request), sv=sv,

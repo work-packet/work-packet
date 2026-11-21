@@ -470,6 +470,49 @@ def test_outline_reads_pending_first(live_pkt):
     assert o["entries"][2]["depth"] == 1 and o["entries"][3]["state"] == "deferred"
 
 
+def _outline(root, n_done, n_open):
+    with open(os.path.join(root.state_dir, "outline.md"), "w") as fp:
+        fp.write("# Outline\n" + "".join("- [x] %d. done item %d\n" % (i, i) for i in range(n_done))
+                 + "".join("- [ ] %d. open item %d\n" % (i, i)
+                           for i in range(n_done, n_done + n_open)))
+
+
+def test_outline_on_the_main_pages_at_rest(acting):
+    """Not running: the project page and the task page still show where it stands
+    (docs/outline-on-packet-page.md)."""
+    e, root, client = acting
+    _outline(root, 2, 2)
+    proj = client.get("/p/q").text
+    assert "2 of 4 done" in proj and "▶ 2. open item 2" in proj and 'id="outline"' in proj
+    assert "as of " in proj and "<details><summary>" not in proj    # short: shown whole
+    task = client.get("/p/q/" + root.wpid).text
+    assert "2 of 4 done" in task and "open item 3" in task and "still open" not in task
+
+
+def test_outline_folds_done_runs_on_main_pages_only(acting):
+    e, root, client = acting
+    _outline(root, 10, 4)
+    o = data.outline(root)
+    assert [(g["fold"], len(g["items"])) for g in o["segments"]] == [(True, 10), (False, 4)]
+    task = client.get("/p/q/" + root.wpid).text
+    assert "10 done: 0. done item 0 … 9. done item 9" in task
+    live = client.get("/p/q/%s/live" % root.wpid).text
+    assert "10 of 14 done" in live and "10 done:" not in live
+
+
+def test_outline_flags_open_items_when_finished(acting):
+    e, root, client = acting
+    _outline(root, 1, 2)
+    client.post("/p/q/%s/act" % root.wpid, data={"action": "done"})
+    assert "2 still open" in client.get("/p/q/" + root.wpid).text
+
+
+def test_no_outline_no_panel_on_main_pages(acting):
+    e, root, client = acting
+    assert 'id="outline"' not in client.get("/p/q").text
+    assert 'id="outline"' not in client.get("/p/q/" + root.wpid).text
+
+
 def test_live_page_and_raw(live_pkt):
     e, root, client = live_pkt
     r = client.get("/p/q/%s/live" % root.wpid)

@@ -6,6 +6,7 @@
 {% import "_answer.html" as ans with context %}
 {% import "_vscode.html" as vsm %}
 {% import "_autoopen.html" as aom with context %}
+{% import "_outline.html" as olm %}
 {% block title %}{{ e.name }}{% endblock %}
 {% block crumbs %}/ <a href="/p/{{ e.name|urlencode }}">{{ e.name }}</a>{% endblock %}
 {% block main %}
@@ -14,7 +15,8 @@
 {% if autoopen and nodes %}{{ aom.form(e, nodes[0].wpid, autoopen) }}{% endif %}
 {% for n, qs in asks %}{{ ans.form(e, n.wpid, qs, "answer" if loop.first else "answer-" ~ n.short,
    (n.name or n.short) if n.depth else None, "project") }}{% endfor %}
-{{ snap.panel(e, card, tl, on) }}
+{{ snap.panel(e, card, tl, on, ol) }}
+{% if ol %}{{ olm.style() }}{{ olm.panel(e, nodes[0].wpid, ol, fold=True, finished=card.lifecycle != "open" or nodes[0].state == "COMPLETED") }}{% endif %}
 {% set runs = nodes|selectattr("running")|list %}
 {% if runs %}
 <div class="panel" style="margin:12px 0">{% for n in runs %}{% if not loop.first %}<br>{% endif %}Running: {{ n.name or n.short }} step {{ n.running.step }}{% if n.running.attempt and n.running.attempt > 1 %}, attempt {{ n.running.attempt }}{% endif %}.
