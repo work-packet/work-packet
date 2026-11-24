@@ -135,8 +135,9 @@ jobs:
           twine check dist/*
           ls -la dist/
           # The bundle has to be IN the wheel, not just on disk beside it.
-          unzip -l dist/*.whl | grep -q 'work_packet/dash/vendor/manifest.json' \
-            || { echo "::error::the wheel has no dash/vendor/manifest.json"; exit 1; }
+          # (zipfile, not `unzip -l | grep -q`: grep exits on the first match,
+          # unzip dies of SIGPIPE, and under pipefail that reads as a failure.)
+          python3 -c "import glob,sys,zipfile; n=zipfile.ZipFile(glob.glob('dist/*.whl')[0]).namelist(); sys.exit(0 if 'work_packet/dash/vendor/manifest.json' in n else '::error::the wheel has no dash/vendor/manifest.json')"
 
       - name: Test
         run: |
