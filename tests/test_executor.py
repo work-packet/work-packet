@@ -450,3 +450,35 @@ def test_retry_prompt_tells_what_the_last_attempt_did(fresh, fake):
     assert "Earlier attempts" not in text1
     assert "that attempt is in `steps/0001.failed-1/`" in text1
     assert "## Last attempt" not in open(os.path.join(root.step_dir(1, 1), "prompt.md")).read()
+
+
+# --- the journal while a step runs (docs/pssc-debug-failures-review.md) -----------
+
+def test_a_session_hook_appending_to_the_journal_does_not_fail_the_step(fresh, fake):
+    """Your own session's hook (a /compact, /clear, the 15-min wait mark) appends
+    to the journal mid-step: the step still commits, and the record stays."""
+    proj, root = fresh
+    fake(fault="session-hook")
+    out = executor.step(proj)
+    assert out.code == 0, out.msg
+    assert (status(root)["step"], status(root)["attempts"]) == (1, 0)
+    rec, = records(root, "session-start")
+    assert rec["session"] == "s-you"
+    assert records(root, "step-failed") == []
+
+
+def test_a_runner_record_written_by_the_model_fails_the_step(fresh, fake):
+    proj, root = fresh
+    fake(fault="write-journal")
+    out = executor.step(proj)
+    assert out.code == 1 and "wrote committed files: journal.jsonl" in out.msg
+    assert [r for r in records(root, "commit-end") if r.get("step") == 99] == []
+
+
+def test_a_failed_step_keeps_the_records_wpk_appended(fresh, fake):
+    proj, root = fresh
+    fake(fault="both-journal")
+    out = executor.step(proj)
+    assert out.code == 1 and "journal.jsonl" in out.msg
+    assert [r["session"] for r in records(root, "session-start")] == ["s-you"]
+    assert [r for r in records(root, "commit-end") if r.get("step") == 99] == []

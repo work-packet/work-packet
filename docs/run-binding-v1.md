@@ -266,7 +266,11 @@ Home directories are often severely limited, so nothing large goes to
     address is `<root>.<child>` (already in the index).
   - `wpk ide` opens the packet with the sibling worktrees as extra roots
     and pauses the packet first.
-- [ ] R8. **Done.** `wpk done`:
+- [ ] R8. **Done.** Mostly done another way. `wpk close [--delete]` harvests,
+  checks for uncommitted files and commits on no remote, keeps those commits
+  as a bundle, and deletes only a folder wpk made (`close-remove-plan.md`).
+  Not done: asking about ignored outputs, and freezing the card. The original
+  plan was `wpk done`:
   - list ignored outputs (`rundir/`, `build/`…) with sizes and ask what to
     keep;
   - harvest (archive, load, verify) into `.work-packet/`;

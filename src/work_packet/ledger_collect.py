@@ -113,8 +113,11 @@ def sync_packets(con, home, stop=None):
         names = _names(name, list(pkts.values()))
         for w in changed:
             pkt, pname = pkts[w], names.get(w)
+            # A scribe step names the session it watched (steps written before
+            # it stopped doing so): that session is yours, not the runner's.
             for r in _journal(pkt):
-                if r.get("type") == "step-start" and r.get("session_id"):
+                if r.get("type") == "step-start" and r.get("session_id") and \
+                        r.get("worker") != "scribe":
                     ledger.note_session(con, "claude", r["session_id"], how="runner",
                                         t=_t(r.get("t")), source="runner", board=board,
                                         project=name, wpid=w, packet_name=pname,
@@ -124,7 +127,7 @@ def sync_packets(con, home, stop=None):
                     meta = fsutil.load_json(os.path.join(s.dir, "meta.json"))
                 except (OSError, ValueError):
                     meta = {}
-                sid = meta.get("session_id")
+                sid = meta.get("session_id") if s.worker != "scribe" else None
                 ledger.put_step(con, s, board=board, packet_name=pname, session_id=sid,
                                 start=meta.get("start"))
                 if sid:
@@ -530,6 +533,27 @@ def _reattribute(con, home):
         % ", ".join("?" * len(HOW_FOLDER)), HOW_FOLDER)}
 
 
+def _unscribe(con):
+    """Once: give back the sessions a scribe step claimed for the runner (before
+    the scribe stopped naming them as its step's session). The scribe found the
+    packet from the session's store record, so they keep it, as ``store``. A
+    runner session (its entrypoint says so) a scribe step only labelled last stays
+    the runner's."""
+    if con.execute("SELECT 1 FROM meta WHERE key = 'unscribe'").fetchone():
+        return
+    for h, sid, ent in con.execute(
+            "SELECT DISTINCT s.harness, s.session, s.entrypoint FROM session s JOIN step t "
+            "ON t.wpid = s.wpid AND t.step = s.step "
+            "WHERE s.how = 'runner' AND t.worker = 'scribe'").fetchall():
+        if ent in RUNNER_ENTRYPOINTS:
+            continue
+        con.execute("UPDATE session SET how = 'store', source = 'interactive', client = ?, "
+                    "step = NULL WHERE harness = ? AND session = ?",
+                    (CLIENT_OF.get(ent, ent), h, sid))
+    con.execute("UPDATE step SET session = NULL WHERE worker = 'scribe'")
+    con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('unscribe', '1')")
+
+
 # --- one pass --------------------------------------------------------------------------
 
 def pass_once(home, env=None, stop=None):
@@ -559,6 +583,7 @@ def pass_once(home, env=None, stop=None):
             got = read_codex_file(con, path, touched, user, stop)
             files += 1 if got else 0
             replies += got
+        _unscribe(con)
         attribute(con, home, touched | _reattribute(con, home), live_tags(proc) if proc else ())
         ledger.prune_seen(con, time.time() - SEEN_DAYS * 86400)
         con.commit()

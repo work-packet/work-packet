@@ -47,8 +47,13 @@ Once answered: start item 0a in state/outline.md. ...
 |---|---|---|---|
 | `id` | name (`[a-z0-9][a-z0-9_-]*`) | yes | unique within the list |
 | `q` | non-empty string | yes | the question |
+| `context` | non-empty string | no | the situation in the owner's terms: what they would write or see, ideally a short example. Shown as a preformatted block |
+| `premise` | non-empty string | no | the earlier decision the question only exists because of, so the owner can reject it |
 | `recommend` | string | no | the agent's recommended answer; "take the recommendations" uses it |
-| `choices` | list of strings | no | the answers a front end offers as buttons; free text is still allowed |
+| `why` | non-empty string | no | why the agent recommends that answer |
+| `choices` | list of strings | no | the answers a front end offers as buttons; free text is still allowed (the board's "Other" box) |
+| `tradeoffs` | mapping | no | `{answer: what it costs or rules out}`, keyed by `choices`, or by `yes` / `no` for a question without them |
+| `weight` | `decide` (default) or `confirm` | no | `confirm`: the agent expects a yes. The board folds confirms together, filled in with their recommendations, after the decisions |
 | `grants` | list of tool strings | no | answering yes (`yes`, `y`, `true`, `ok`, `approve`, `grant`) runs `wpk allow` for these tools before the hand-off |
 | `request` | name | no | answering yes sends the request `state/requests/<name>.md` before the hand-off (docs/delegation.md §3); the brief must exist when the step commits |
 | `sets` | mapping | no | project settings the answer applies before the hand-off, with `wpk set` and a `config` record. `{key: value}` applies on a yes; `{choice: {key: value}}`, where every key is one of `choices`, applies when that choice is the answer (case ignored). Keys: `step_budget_usd`, `step_timeout`, `step_context_tokens`. An answer that would set `step_budget_usd` over `max_step_budget_usd` (`config.toml`, default 10.00) is refused, and nothing is applied |
@@ -116,9 +121,15 @@ place, because it costs nothing. The pages put its token in every form.
 
 - **Packet page, `NEEDS_INPUT`:** an **Answer** panel at the top. Each
   question shows:
-  - its text and the recommendation;
-  - buttons for its `choices`, or a text box filled in with the
-    recommendation;
+  - its text, its `context` as a preformatted block, and its `premise`
+    ("Rests on: …");
+  - buttons for its `choices`, each with its tradeoff, plus an **Other**
+    box whose text beats the button (for an answer outside the choices, or
+    "the premise is wrong"); or a text box with the recommendation as its
+    placeholder;
+  - the recommendation and its `why`;
+  - `weight: confirm` questions come last, folded into one "N to confirm"
+    section, already filled in with their recommendations;
   - "grants: Bash" when answering yes grants something;
   - "“raise budget” sets step_budget_usd 5.0" when an answer sets something.
 

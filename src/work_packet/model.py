@@ -59,6 +59,7 @@ class StepResult:
     account: Optional[str] = None    # how the run paid: "subscription", "key", ...; never the key
     limited: bool = False            # the account's usage limit cut the run off (limits.py)
     limited_until: Optional[datetime] = None      # ... and when it resets, if the harness said
+    auth_failed: bool = False        # the account's login was refused or expired (limits.py)
 
     def failure(self):
         """Why the run failed, or None if it succeeded."""
@@ -66,7 +67,14 @@ class StepResult:
         if self.limit_hit():
             when = self.limited_until.strftime(" (resets %H:%M UTC)") if self.limited_until else ""
             return "usage limit%s" % when
+        if self.auth_hit():
+            return "login refused or expired"
         return why
+
+    def auth_hit(self):
+        """The run failed because the account is not logged in: not the
+        model's failure, and no use retrying until someone logs in again."""
+        return self.auth_failed and self._failure() not in (None, "timeout")
 
     def limit_hit(self):
         """The run failed because the account hit its usage limit. A limit

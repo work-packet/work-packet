@@ -105,6 +105,8 @@ def test_an_ended_session_gets_a_status(tmp_path, fake):
     assert open(pkt.memento_path).read() == memento         # D1: never the scribe
     m = json.load(open(os.path.join(pkt.step_dir(2), "meta.json")))
     assert m["worker"] == "scribe" and m["cost_usd"] == 0.002
+    # the session it watched is yours: not named as the step's own session
+    assert "session_id" not in m and m["scribe"]["session"] == "abcdef12-3456"
     # Once: claimed, and the step is newer than the work now.
     assert scribe.pass_once(registry.home(), ON, now=t + 20, ask=ask, wait=True) == []
 

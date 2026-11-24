@@ -147,3 +147,74 @@ def test_other_packets_on_the_profile_wait_without_running(tmp_path, fake, monke
     assert executor.step(proj_b, force=True).code == executor.OK
     monkeypatch.setenv("WPK_NOW", at(43))
     assert executor.step(proj_a).code == executor.OK
+
+
+# --- an expired login (pssc-debug step 399) -----------------------------------------
+
+def test_claude_parse_of_an_expired_login(tmp_path):
+    path = tmp_path / "t.jsonl"
+    path.write_text(json.dumps({
+        "type": "result", "subtype": "success", "is_error": True, "api_error_status": None,
+        "session_id": "s", "num_turns": 1,
+        "result": "Failed to authenticate: OAuth session expired and could not be refreshed"})
+        + "\n")
+    res = model.StepResult(exit_code=1)
+    claude.Claude().parse(str(path), res)
+    assert res.auth_hit() and not res.limit_hit()
+    assert res.failure() == "login refused or expired"
+
+
+def test_an_expired_login_backs_off_without_counting(fresh, fake, monkeypatch):
+    proj, root = fresh
+    fake(fault="auth")
+    wakes = []
+    for k in range(4):
+        out = executor.step(proj, force=True)
+        assert out.code == executor.NOT_RUNNABLE and "login" in out.msg
+        wakes.append(status(root)["wake_at"])
+        monkeypatch.setenv("WPK_NOW", wakes[-1])
+    st = status(root)
+    assert (st["state"], st["attempts"]) == ("SLEEPING", 0)
+    assert "log in again" in st["reason"]
+    assert wakes == [at(5), at(15), at(35), at(75)]
+    assert all(r["kind"] == "auth" and r["counted"] is False
+               for r in records(root, "step-failed"))
+
+
+def test_waking_the_packet_after_a_login_releases_the_hold(tmp_path, fake, monkeypatch):
+    proj_a, a = make_project(tmp_path / "a")
+    proj_b, b = make_project(tmp_path / "b")
+    fake(fault="auth")
+    executor.step(proj_a)
+    fake(fault=None)
+    # the account's other packets wait too
+    out = executor.step(proj_b)
+    assert out.code == executor.NOT_RUNNABLE and "login refused or expired on" in out.msg
+    assert records(b, "step-start") == []
+    # you log in and wake it: it runs at once, before the backoff ends
+    monkeypatch.setenv("WPK_NOW", at(1))
+    assert executor.admin(a, "wake").code == executor.OK
+    assert executor.step(proj_a).code == executor.OK
+    assert status(a)["step"] == 1
+    assert executor.step(proj_b).code == executor.OK
+
+
+def test_waking_the_packet_after_a_lifted_limit_releases_the_hold(tmp_path, fake, monkeypatch):
+    """pssc-debug, 2026-11-22: the limit was lifted two days early; a wake left the
+    packet asleep on the profile's hold."""
+    proj_a, a = make_project(tmp_path / "a")
+    proj_b, b = make_project(tmp_path / "b")
+    fake(fault="limit")
+    monkeypatch.setenv("WPK_FAKE_RESETS", str(int((T0 + timedelta(days=2)).timestamp())))
+    executor.step(proj_a)
+    fake(fault=None)
+    out = executor.step(proj_b)
+    assert out.code == executor.NOT_RUNNABLE and "usage limit on" in out.msg
+    assert status(b)["state"] == "SLEEPING"
+    # the limit is lifted early and you wake one packet: both run, long before the reset
+    monkeypatch.setenv("WPK_NOW", at(1))
+    assert executor.admin(a, "wake").code == executor.OK
+    assert executor.step(proj_a).code == executor.OK
+    assert status(a)["step"] == 1
+    assert executor.step(proj_b).code == executor.OK
+    assert status(b)["step"] == 1

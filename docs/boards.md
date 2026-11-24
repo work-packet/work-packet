@@ -69,8 +69,9 @@ To settle first:
 - Settled 2026-10-26: boards hold whole projects only. "Move" on a child
   packet moves its project (each project once), and the bar says so. Boards
   will not hold single packets; a child always sits on its root's board.
-- "Remove": unregister the project (`wpk rm`, files kept), or delete a packet
-  subtree? Only the first exists today.
+- "Remove": now **Close** and **Close and delete folder**, with a check of what
+  is outstanding first. `wpk rm` closes too, keeping the history, and `wpk rm
+  --forget` only unregisters the project. See `close-remove-plan.md`.
 - Change state maps onto `executor.admin` (pause, resume, handoff); one POST
   with a list of `project/wpid`, one outcome line per packet in the flash.
 

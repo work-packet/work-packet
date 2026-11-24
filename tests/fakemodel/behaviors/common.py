@@ -46,6 +46,19 @@ def finish(meta, body, summary, fault=""):
         write("state/count.md", "999\n")
         write("state/extra.md", "not allowed\n")
         write("memento.md", "hijacked\n")
+    if fault in ("session-hook", "write-journal", "both-journal"):
+        # what wpk appends from outside a step (hookcmd, the board), or a record
+        # only the runner may write, as a model's Bash `>>` would add it
+        import json
+        lines = []
+        if fault in ("session-hook", "both-journal"):
+            lines.append({"type": "session-start", "t": "2026-10-21T18:00:00Z",
+                          "by": "you", "session": "s-you", "source": "compact",
+                          "actor": {"kind": "claude", "via": "terminal", "session": "s-you"}})
+        if fault in ("write-journal", "both-journal"):
+            lines.append({"type": "commit-end", "t": "2026-10-21T18:00:00Z", "step": 99})
+        with open("journal.jsonl", "a") as fp:
+            fp.write("".join(json.dumps(r) + "\n" for r in lines))
 
 
 def report(outcome, deliverables=()):

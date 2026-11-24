@@ -571,6 +571,29 @@ def test_web_proxy_websocket(short_home, tmp_path):
         c.__exit__(None, None, None)
 
 
+def test_web_proxy_websocket_closes_when_the_board_stops(short_home, tmp_path):
+    # A restart must not wait out uvicorn's grace period and then cancel the
+    # proxies (tracebacks in the log): they close at once, "service restart".
+    from starlette.websockets import WebSocketDisconnect
+    c, be, origin, tok = _web_client(short_home, tmp_path)
+    try:
+        with c.websocket_connect("ws://127.0.0.1:7878/ide/%s/stable-x/remote?reconnectionToken=t"
+                                 % be.key,
+                                 headers=dict(origin, cookie="vscode-k=v")) as ws:
+            ws.receive_text()
+            c.portal.call(be.mgr.closing.set)
+            with pytest.raises(WebSocketDisconnect) as e:
+                ws.receive_text()
+            assert e.value.code == 1012
+        deadline = time.time() + 5
+        while be.clients and time.time() < deadline:
+            time.sleep(0.05)
+        assert be.clients == 0
+    finally:
+        be.stop()
+        c.__exit__(None, None, None)
+
+
 def test_web_proxy_refuses_another_login_without_starting(short_home, tmp_path):
     from test_server import FakeTailscaled, OWNER
     f = FakeTailscaled(whois={"192.0.2.9": (OWNER, None),

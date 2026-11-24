@@ -1057,6 +1057,9 @@ class Backends:
         self.transport = transport
         self.servers = {}
         self._lock = asyncio.Lock()
+        # Set as the board stops: open WebSocket proxies close at once, so
+        # uvicorn's graceful shutdown need not time out and cancel them.
+        self.closing = asyncio.Event()
 
     async def restart(self, key):
         """End desk ``key``'s server and start it again, on the newest release."""
@@ -1200,12 +1203,14 @@ class Backends:
 
     def stop(self):
         """With the board. Call it on the board's event loop thread."""
+        self.closing.set()
         for b in self.servers.values():
             b.stop()
 
     def detach(self):
         """An in-place restart: every server is left running, for the next
         image to adopt (``adopt``). Job servers are left anyway."""
+        self.closing.set()
         for b in self.servers.values():
             b.detach()
         self.servers.clear()
@@ -1634,9 +1639,13 @@ async def proxy_ws(backends, websocket):
             elif m.get("text") is not None:
                 await up.send(m["text"])
 
-    tasks = [asyncio.ensure_future(down()), asyncio.ensure_future(upstream())]
+    tasks = [asyncio.ensure_future(down()), asyncio.ensure_future(upstream()),
+             asyncio.ensure_future(backends.closing.wait())]
+    code = 1000
     try:
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if backends.closing.is_set():
+            code = 1012                 # service restart: the page reconnects
     finally:
         # First, before any await: if this task is cancelled while it cleans up
         # (the board stopping, a test client closing), the count must still drop.
@@ -1645,6 +1654,7 @@ async def proxy_ws(backends, websocket):
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await up.close()
+        with contextlib.suppress(Exception, asyncio.TimeoutError):
+            await asyncio.wait_for(up.close(), 1)
         with contextlib.suppress(Exception):
-            await websocket.close()
+            await websocket.close(code)

@@ -94,8 +94,39 @@ def _snapshot(pkt):
     return snap
 
 
+# Journal records only the runner writes (or a hand-off, which goes through
+# it). Any other valid record added while a step runs came from wpk outside the
+# step: your own session's hook (hookcmd), the board (turn-waiting, seen), a
+# request from another packet (docs/pssc-debug-failures-review.md).
+RUNNER_RECORDS = ("step-start", "step-failed", "step-nudge", "limit-wait",
+                  "commit-begin", "commit-end", "handoff")
+
+
+def _appended(before, after):
+    """(the journal lines added from outside the step, whether that is all the
+    change). The journal is append-only: anything else is the model's."""
+    if not before or not after or before[0] != "f" or after[0] != "f" or \
+            not after[1].startswith(before[1]):
+        return b"", False
+    keep, clean = [], True
+    for line in after[1][len(before[1]):].splitlines(keepends=True):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            rec = None
+        if line.endswith(b"\n") and isinstance(rec, dict) and \
+                rec.get("type") not in RUNNER_RECORDS and not schema.validate_journal_record(rec):
+            keep.append(line)
+        else:
+            clean = False
+    return b"".join(keep), clean
+
+
 def _restore(pkt, snap):
     cur = _snapshot(pkt)
+    J = "journal.jsonl"
+    if J in snap and cur.get(J) != snap[J]:      # keep what wpk appended meanwhile
+        snap = dict(snap, **{J: ("f", snap[J][1] + _appended(snap[J], cur.get(J))[0])})
     for rel in sorted(set(cur) - set(snap), reverse=True):
         _rmtree(os.path.join(pkt.path, rel))
     for rel in sorted(snap):
@@ -448,17 +479,26 @@ def _fail(pkt, st, n, a, why):
     return Outcome(FAILED, "step %d attempt %d failed: %s%s" % (n, a, why, tail))
 
 
-def _limited(pkt, st, n, a, res, prof):
+def _limited(pkt, st, n, a, res, prof, kind="limit"):
     """A run the account's usage limit cut off: kept as ``NNNN.failed-<run>``
     like a failure but not counted, and the packet sleeps until the limit
     resets. The profile is held till then too, so the account's other packets
-    wait instead of running into it (limits.py)."""
+    wait instead of running into it (limits.py). ``kind="auth"``: the login was
+    refused or expired; it backs off from a few minutes, since only a new login
+    lifts it."""
     now = clock.now()
     tries = sum(1 for r in journal.read(pkt.journal_path).records
-                if r.get("type") == "step-failed" and r.get("step") == n and r.get("limited"))
-    until = res.limited_until or limits.reset_from_text(res.text or res.subtype, now)
-    wake = limits.hold(prof.name, limits.wake_time(until, tries, now), pkt.wpid, now)
-    why = "usage limit; resumes %s UTC (not counted as an attempt)" % wake.strftime("%H:%M")
+                if r.get("type") == "step-failed" and r.get("step") == n and r.get("limited")
+                and (r.get("kind") or "limit") == kind)
+    if kind == "auth":
+        wake = limits.hold(prof.name, limits.wake_time(None, tries, now, limits.AUTH_BACKOFF_FIRST),
+                           pkt.wpid, now, kind)
+        why = "login refused or expired on %s: log in again, then wake the packet; " \
+              "retries %s UTC (not counted as an attempt)" % (prof.name, wake.strftime("%H:%M"))
+    else:
+        until = res.limited_until or limits.reset_from_text(res.text or res.subtype, now)
+        wake = limits.hold(prof.name, limits.wake_time(until, tries, now), pkt.wpid, now)
+        why = "usage limit; resumes %s UTC (not counted as an attempt)" % wake.strftime("%H:%M")
     r = _move_failed(pkt, n)
     _keep_pending(pkt, pkt.step_dir(n, r))
     _failed_meta(pkt.step_dir(n, r), n, a, why, limited=_ts(wake))
@@ -467,19 +507,34 @@ def _limited(pkt, st, n, a, res, prof):
     pkt.save_status(meta, body)
     journal.append(pkt.journal_path, {"type": "step-failed", "t": _ts(), "step": n,
                                       "attempt": a, "run": r, "why": why, "counted": False,
-                                      "limited": _ts(wake), "profile": prof.name})
+                                      "limited": _ts(wake), "profile": prof.name, "kind": kind})
     _rmtree(pkt.pending_dir)
     return Outcome(NOT_RUNNABLE, "step %d attempt %d: %s" % (n, a, why))
 
 
-def _hold(pkt, meta, body, n, prof, until):
+def _hold(pkt, meta, body, n, prof, until, kind="limit"):
     """The profile is held for a usage limit: sleep until it lifts, without running."""
     why = "usage limit on %s; resumes %s UTC" % (prof.name, until.strftime("%H:%M"))
+    if kind == "auth":
+        why = "login refused or expired on %s: log in again, then wake the packet; " \
+              "retries %s UTC" % (prof.name, until.strftime("%H:%M"))
     meta.update(state="SLEEPING", wake_at=_ts(until), reason=why, updated=_ts())
     pkt.save_status(meta, body)
     journal.append(pkt.journal_path, {"type": "limit-wait", "t": _ts(), "step": n,
-                                      "until": _ts(until), "profile": prof.name})
+                                      "until": _ts(until), "profile": prof.name, "kind": kind})
     return Outcome(NOT_RUNNABLE, "packet is SLEEPING: %s" % why)
+
+
+def _acted_since(pkt, t):
+    """Someone handed the packet off, woke or resumed it after ``t``."""
+    for r in journal.read(pkt.journal_path).records:
+        if r.get("type") in ("handoff", "admin") and r.get("op") not in ("pause", "take"):
+            try:
+                if t is None or schema.parse_timestamp(r.get("t")) > t:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
 
 
 def _due(pkt, meta, now):
@@ -487,8 +542,19 @@ def _due(pkt, meta, now):
         return True
     if meta["state"] == "SLEEPING" and meta.get("wake_at"):
         return (schema.parse_timestamp(meta["wake_at"]) <= now
-                or waiting.wake_due(pkt, meta))
+                or waiting.wake_due(pkt, meta) or _hold_lifted(pkt, meta, now))
     return False
+
+
+def _hold_lifted(pkt, meta, now):
+    """A packet asleep for a login or usage-limit hold whose hold has been
+    released since (someone woke or handed off a packet on that profile)."""
+    if not (meta.get("reason") or "").startswith(("login refused", "usage limit")):
+        return False
+    last = next((r for r in reversed(journal.read(pkt.journal_path).records)
+                 if r.get("type") in ("step-failed", "limit-wait")), None)
+    return bool(last and (last["type"] == "limit-wait" or last.get("limited"))
+                and last.get("profile") and limits.hold_of(last["profile"], now) is None)
 
 
 def _children(pkt, meta):
@@ -674,9 +740,12 @@ def step(target, force=False, lost=None):
             prof = profiles.select(st.profiles, st.harness, meta["model"], st.profile)
         except profiles.ProfileError as e:
             return Outcome(USAGE, str(e))
-        until = None if force else limits.held(prof.name, now)
-        if until is not None:
-            return _hold(pkt, meta, body, n, prof, until)
+        held = None if force else limits.hold_of(prof.name, now)
+        if held and _acted_since(pkt, held["set"]):
+            limits.release(prof.name)   # handed off or woken since: logged in, or the limit lifted
+            held = None
+        if held is not None:
+            return _hold(pkt, meta, body, n, prof, held["until"], held["kind"])
         out = _run(pkt, st, meta, body, n, a, lease, now, prof)
         docs.after_step(pkt.path)       # stale Sphinx docs rebuild in the background
         return out
@@ -752,8 +821,10 @@ def _size_list(st):
 def _check(pkt, st, snap, res):
     """(why the attempt cannot commit or None, the memento's meta)."""
     after = _snapshot(pkt)
-    if after != snap:
-        changed = sorted(k for k in set(snap) | set(after) if snap.get(k) != after.get(k))
+    changed = sorted(k for k in set(snap) | set(after) if snap.get(k) != after.get(k))
+    if changed == ["journal.jsonl"] and _appended(snap[changed[0]], after.get(changed[0]))[1]:
+        changed = []                    # only wpk's own records, from outside the step
+    if changed:
         _restore(pkt, snap)
         return "model wrote committed files: %s" % ", ".join(changed[:5]), None
     why = res.failure()
@@ -962,6 +1033,8 @@ def _run(pkt, st, meta, body, n, a, lease, now, prof):
         hooks.stop()
     if why is not None and res.limit_hit():
         return _limited(pkt, st, n, a, res, prof)
+    if why is not None and res.auth_hit():
+        return _limited(pkt, st, n, a, res, prof, kind="auth")
     if why is not None:
         return _fail(pkt, st, n, a, why)
     # 12. Resolve.

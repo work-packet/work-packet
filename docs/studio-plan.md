@@ -1,7 +1,9 @@
 # Studio: implementation, test and doc plan
 
-Started 2026-10-30. Status: **P0, S1 and S2 done (exit checks scripted
-and run with the real model); next S3.** The S0 pilot is skipped for
+**Superseded in part by `docs/studio-v2.md` (2026-10-31): S4–S8 shelved, D11 replaced.**
+
+Started 2026-10-30. Status: **P0, S1, S2 and S3 done (exit checks
+scripted and run with the real model); next S4.** The S0 pilot is skipped for
 now (it needs a person in VS Code); decisions D1–D12 taken as assumed. Next: see the status log (§14).
 
 The design is `docs/interactive-tasks.md` ("the design" below, cited by
@@ -603,39 +605,90 @@ steps); `history.steps` is tested in `test_studio_kernel.py`.
 
 ## 8. S3: Renders, versions, self-check
 
-- [ ] **S3.1 Renders per kind** through the render service: documents
+- [x] **S3.1 Renders per kind** *As built:* `studio/renders.py`
+  (`Service`: the browser and queue, `render`, `look`; `key`/`deps`;
+  `CHECK_JS`) and the dash's **render listener** (`dash/render_gate.py`,
+  started by `dash/server.py`): the headless browser cannot sign in, so it
+  loads the studio's frame pages (`?render=1` hides their controls) from a
+  loopback port that wants a per-process secret header, serves GET of the
+  frame/data/file/static routes only, as the studio's owner, and
+  `POST /_render/look`; `$WPK_HOME/run/render.json` (0600) for the CLI.
+  `render.Browser.render` gained `headers`, `thumb` (same load, scaled),
+  `parts_h` and `max_h`. Pictures live in `<run dir>/studio/renders/<key>/`
+  as files, not blobs (a cache: the key is the file's content and what it
+  reads, so versions point at it by key). Tables render through a new
+  `frame/table` (first 30 rows); images are their own picture.
+  `studio_wait.js` holds the ready flag until Vega has drawn. Documents
+  (the fragment page), images (resized), charts (vega view → SVG/PNG in a
+  render page), tables (first page as HTML).
   (the fragment page), images (resized), charts (vega view → SVG/PNG in a
   render page), tables (first page as HTML). Thumbnails in
   `runs/<id>/studio/renders/` keyed by content hash; images stored in
   blobs.
   - Tests: one per kind with fake Chrome; cache hit on unchanged content;
     a `live` test per kind.
-- [ ] **S3.2 Versions (`studio/versions.py`).** At the end of each turn
+- [x] **S3.2 Versions (`studio/versions.py`).** *As built:* a version holds
+  every tracked file (a known kind, ≤ 20 MB; bigger ones listed as
+  skipped), not just the changed ones, so restore is exact; taken at open
+  ("at open"), before each question (the person's edits), at each turn's
+  end (from the socket's output card) and at close ("at close").
+  `restore` removes tracked files the version lacked and marks each write
+  as the person's for the watcher. The step's `studio.versions` lists the
+  session's. At the end of each turn
   that changed tracked files: `runs/<id>/studio/vNNNN/manifest.json`
   (path → blob sha, render shas, parent, turn id, who); files into blobs.
   Restore (writes files back, as a new version); Keep (a flag).
   - Tests: version per changing turn, none for a no-change turn; restore
     round trip byte-exact; deleted files; large files (size limit,
     skipped with a note).
-- [ ] **S3.3 The strip.** Thumbnails, view, compare two side by side,
+- [x] **S3.3 The strip.** *As built:* `studio.js`/`studio.html`; routes
+  `/versions`, `/render/<key>/<thumb|full|full.N>.png`,
+  `/version/<n>/file?path=`, `POST /restore`, `POST /keep`. The page works
+  out each file's picture at any version (the newest render key at or
+  before it). ⚑ on a chip counts flagged checks. Output cards of files
+  deleted since are marked `gone` on replay (no 404 previews). Thumbnails, view, compare two side by side,
   flip in place, restore, keep; S1.8's record lists versions.
   - Tests: routes and JSON; `live` smoke.
-- [ ] **S3.4 The agent looks.** `wpk studio look <path> [--part N]`
+- [x] **S3.4 The agent looks.** *As built:* the CLI posts to the render
+  listener; the pictures are copied to `.studio/look/` (always readable
+  by the agent, inside its cwd) and their paths printed with the checks;
+  `Bash(wpk studio look *)` is allowlisted; `prompts/studio.md` "Look at
+  what you made". `wpk studio look <path> [--part N]`
   writes the render PNG and prints its path; the primer says to `Read`
   the image of what it changed before ending a turn.
   - Tests: CLI; fake behaviour checks it is called; `live` with the real
     model on one example (manual).
-- [ ] **S3.5 Cheap checks.** In the render page: overflow (scroll size >
+- [x] **S3.5 Cheap checks.** *As built:* `CHECK_JS` (page wider than its
+  window, boxes with overflow, SVG text outside its SVG, broken images,
+  Vega warnings via a logger in `studio_chart.js`) plus console errors and
+  "not ready"; shown on the strip and in the next primer ("Checks on what
+  you changed last turn", from the agent's last version). In the render page: overflow (scroll size >
   box) per element, broken images and embeds, Vega warnings; flags on the
   thumbnail and in the next turn's primer.
   - Tests: fixture pages with each fault are flagged; clean ones not.
 
-**S3 docs:** guide "Versions"; design doc §5.3/§5.4 updated with what was
-built.
+**S3 docs (done):** guide "Versions" and "What the agent sees"; design
+doc §5.3/§5.4 as-built notes; the render listener in `docs/server.md` §6a.
 
 **S3 exit:** worked example 1 complete: three charts tried, two kept, a
 one-page document; flip between versions; the agent catches an
 overflowing title by itself.
+
+*Done 2026-10-30, scripted:* `scripts/studio_s3_check.py --model sonnet`
+(the scripted board now starts the render listener too). Three charts
+tried (the agent looked at each with `wpk studio look`, and on one run
+found its heatmap "rendered as one solid rectangle" and fixed the scale),
+two kept (pinned, version marked Keep), the heatmap dropped (a version with
+the deletion), a colour change giving two versions of the bar chart whose
+pictures differ (flip), a one-page document, and a 200-character title set
+on request: the agent looked, saw it clipped and wrapped it (run 3) or
+reported it and offered a short title (run 2) — both count as caught.
+About $0.55–0.67 a run. Screenshot `docs/experiments/studio/s3-studio.png`
+(the strip under the canvas). Found and fixed: output cards of deleted
+files made 404 previews on reload; Vega-Lite's 'Dropping "fit-y"' warning,
+caused by our `width: "container"`, is dropped (an experiment showed
+`autosize` does not stop it); the guide names the Vega-Lite 6 schema (the
+agent wrote v5).
 
 ## 9. S4: Comments everywhere, diagrams, sketches, embeds
 
@@ -875,3 +928,22 @@ in a document.
   server side and the Ask are tested; the brush itself is Vega's); the
   conversation shows the agent's Markdown as plain text (since S1).
 - Next: S3 (renders per kind, versions, the strip, the agent looks).
+
+### 2026-10-30 (late): committed P0–S2; S3 built
+- Committed: `e81fa45` (the earlier local work on spend by board, board and
+  prompts) and `d57fc2d` (studio P0–S2, with that work's hunks in shared
+  files).
+- S3.1–S3.5 built (as-built notes in §8): `studio/renders.py`,
+  `studio/versions.py`, `dash/render_gate.py` (the render listener, started
+  by `wpk dash`), version routes and the strip, `wpk studio look`, checks
+  in the page and in the primer. Versions at open, before each question,
+  at each turn's end and at close; the step lists the session's versions.
+- S3 exit check passes with sonnet (see the S3 exit note).
+- Tests: `test_studio_versions.py` (7, fake browser), a live test of each
+  kind's render and the checks (a too-wide table, a title off the page, a
+  clean page), a test for cards of deleted files. Full suite 1069 passed,
+  10 skipped; live 6 passed.
+- Not done: comment crops (S4 uses the same renders); PDFs and slides have
+  no renders until their kinds; the strip is not tested in a browser
+  beyond the page loading cleanly with it.
+- Next: S4 (comments everywhere, diagrams, sketches, embeds).

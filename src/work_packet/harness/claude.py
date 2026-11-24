@@ -244,6 +244,9 @@ class Claude(Harness):
             if res.is_error and (ev.get("api_error_status") == 429
                                  or limits.looks_limited(res.text)):
                 res.limited = True
+            elif res.is_error and (ev.get("api_error_status") == 401
+                                   or limits.looks_auth(res.text)):
+                res.auth_failed = True
         for u in tail.values():
             for k in ("input_tokens", "cache_creation_input_tokens",
                       "cache_read_input_tokens"):

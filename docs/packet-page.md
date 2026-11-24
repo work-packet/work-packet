@@ -217,6 +217,11 @@ The packet page (§2) is built; the task page (§3) is next, not started.
       its links add `&step=NNNN`, served read-only from the copy. A
       deliverable not kept (too large) is marked and opens as it is now;
       so do all of a report written before snapshots (it says so).
+      Links in the report's body, and in a kept file's own text, follow
+      the same rule (`data.file_link`, `data.snapshot_kept`): `&step=` for
+      a file the step's `deliverables.json` says it `copied`, the file as
+      it is now otherwise, so a link to a file the step did not keep
+      opens instead of giving "not found".
 
 Left open:
 

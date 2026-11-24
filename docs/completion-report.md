@@ -102,6 +102,21 @@ In `executor.py`, at step 12 when the state is COMPLETED or FAILED:
 - **Dash:** the Done card shows `outcome`. The packet page shows the
   rendered report above the "Next batch" panel, and each deliverable
   links to its file.
+- **Paths in the body are links (2026-11-16):** a path under `state/` or
+  `work/` that the body names, as plain text or as a whole code span
+  (`` `state/x.md` ``), becomes a link to the file view, like a Markdown
+  link, if the file exists: in the packet, or, for a task's report, in the
+  step's copy. Trailing punctuation and a `:line` or `#anchor` suffix are
+  not part of the path (`state/x.md:12` opens `state/x.md`). Other code
+  spans and paths that do not exist stay text; a path already inside a
+  link is left alone (`report.paths_in`, `dash/data.md(..., exists=)`).
+  The file view serves any `state/` file, and a `work/` file only if a
+  report of the packet (`report.md`, `state/history/report-*.md`,
+  `steps/NNNN/report.md`) names it or lists it, so it still shows only
+  results. The archive keeps those named `work/` files as it keeps
+  listed ones (`history._linked_work`). The prompt asks runners to write
+  paths as Markdown links too; reports written before that are linked
+  all the same.
 - **Old packets:** a packet that finished before this change has no
   `report.md`. Every view falls back to the last summary, as it does today.
 

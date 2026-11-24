@@ -21,6 +21,12 @@ Runs the behaviour named by ``WPK_FAKE_BEHAVIOR`` (a module in
   limit-text   the same without the event: the reset time is only in the text
   limit-bare   a 429 result "Rate limit exceeded", no reset time anywhere
   limit-passed a rejected event, but the run still finishes normally
+  auth         the login expired: a result "Failed to authenticate: OAuth session
+               expired and could not be refreshed" and exit 1 (pssc-debug step 399)
+  session-hook append a ``session-start`` to the journal mid-step, as your own
+               session's hook does (pssc-debug, docs/pssc-debug-failures-review.md)
+  write-journal  append a ``commit-end`` to the journal: a model's write
+  both-journal   both of those
 
 A behaviour returns the reply's text, or ``{"text": ..., "writes": [(path,
 content)]}``: each write is a Write tool call, passed through the
@@ -83,6 +89,12 @@ def main():
         time.sleep(3600)
     if fault in ("limit", "limit-text", "limit-bare"):
         return hit_limit(args, fault)
+    if fault == "auth":
+        emit({"type": "result", "subtype": "success", "is_error": True,
+              "api_error_status": None, "session_id": args.session_id, "num_turns": 1,
+              "total_cost_usd": 0.0, "result":
+              "Failed to authenticate: OAuth session expired and could not be refreshed"})
+        return 1
     if fault == "limit-passed":
         emit({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected",
                                                               "rateLimitType": "five_hour"}})

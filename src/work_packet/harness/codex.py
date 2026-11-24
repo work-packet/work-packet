@@ -120,6 +120,8 @@ class Codex(Harness):
                 res.subtype = str(err.get("message") or t)[:200]
                 if limits.looks_limited(res.subtype) or "429" in res.subtype:
                     res.limited = True
+                elif limits.looks_auth(res.subtype) or "401" in res.subtype:
+                    res.auth_failed = True
             elif t == "item.completed":
                 item = ev.get("item") or {}
                 if item.get("type") == "agent_message" and isinstance(item.get("text"), str):

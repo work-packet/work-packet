@@ -289,8 +289,9 @@ def scribe(home, rec, ask=None):
         log.warning("%s %s: no draft for session %s", rec["project"], rec["wpid"][:8],
                     rec["session_id"][:8])
         return None
+    # The session it watched goes under "scribe", not "session_id": that names the
+    # session that did a step, and would make the ledger count your session as runner.
     meta = {"cost_usd": round(cost, 6), "harness": rec["harness"],
-            "session_id": rec["session_id"],
             "scribe": {"session": rec["session_id"], "harness": rec["harness"],
                        "work_t": rec.get("last_work_t")}}
     out, n = checkpoint.record(pkt, got["status"], body=got["body"] or None,

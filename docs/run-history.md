@@ -25,7 +25,9 @@ trailers point at whichever of the two holds the run (§5).
 
 ## 2. Harvest
 
-**When.** A packet is harvested when it leaves the board:
+**When.** A packet is harvested when it leaves the board. `wpk close` (and
+Close on the board) does this today, with no 14-day wait: see
+`close-remove-plan.md`. What follows was the original plan:
 - after `close`, once it is archived (14 days by default, or at once
   with `wpk done --archive`; `packet-card.md` O1);
 - when it is discarded. Its metrics are still harvested, because cost

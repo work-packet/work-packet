@@ -147,6 +147,11 @@ socket. The backend has no login and no port of its own (ide.md §4.1):
 browser ─► wpkd Guard (identity, Host, Origin) ─► /ide/<key>/* ─► $WPK_HOME/ide/servers/<key>/serve.sock ─► code serve-web
 ```
 
+> **Since 2026-11-18** wpkd runs VS Code's server itself, from releases it keeps in
+> `$WPK_HOME/ide/releases/`, not through `code serve-web`. `<key>` is one per packet.
+> See `docs/ide-direct-server-plan.md`. What follows describes the serve-web design
+> it replaced, and still holds for the proxy.
+
 `code serve-web` 1.98.2 on the dev host has `--socket-path`,
 `--server-base-path`, `--without-connection-token`,
 `--accept-server-license-terms` and `--server-data-dir` (checked
@@ -227,7 +232,8 @@ job waits for room the page shows "Waiting for room" and reloads every
 
 ### 4.4 Backends
 
-`[ide] backend = "serve-web"` (the default) or `"openvscode-server"`.
+`[ide] backend = "server"` (the default: VS Code's own server from wpk's releases,
+docs/ide-direct-server-plan.md; `"serve-web"` is its old name) or `"openvscode-server"`.
 openvscode-server (Gitpod) is the open-source build of VS Code's own server
 (Code-OSS, MIT): the same flags as `serve-web`, no subcommand. The proxy
 does not care which one runs. Differences that matter:
@@ -296,6 +302,10 @@ A model or usage the harness did not write shows as **unreported**.
   covers only editors the board opened.
 - Codex sessions now also reach the attention list ("Codex (VS Code) is
   waiting for you").
+
+**Their cost:** every session's tokens also count on the project's Cost tab
+and on Statistics, beside the runner's, priced from the models' list prices
+(`docs/token-dashboard.md`, "Your sessions beside the runner").
 
 **Last events:**
 - Prompt submitted.
@@ -369,9 +379,14 @@ workbench  window.open("http://localhost:40731/s/")     (ide_forward.js wraps it
   opaque origin (`sandbox allow-scripts allow-forms allow-modals
   allow-popups allow-downloads`), no cookies either way, GET and HEAD only,
   `no-referrer`, and `Access-Control-Allow-Origin: *` so the page can read
-  its own answers. The page's own CSP is kept too. Upstream gets
-  `Host: localhost:<port>`, and a redirect to its own origin or to a root
-  path stays under `/fwd/<token>/`. A token is bound to the server process
+  its own answers. The page's own CSP is kept too. There is no `nosniff` of
+  ours: in an opaque origin every answer is checked as cross-origin, and
+  with it Chrome's ORB blocks mislabelled assets (vscode-print 1.6.0 serves
+  a script as `application/json` and a stylesheet as `text/plain`). Upstream
+  gets `Host: localhost:<port>`, and a redirect to its own origin or to a
+  root path stays under `/fwd/<token>/`. In HTML, the page's own origin
+  written out (`http://localhost:<port>`) becomes `/fwd/<token>`:
+  vscode-print sets `<base href="http://localhost:<port>/<session>/">`. A token is bound to the server process
   (or the job's certificate) and ends with it, after 1 h idle, or after 12 h.
 - **Which ports.** Only a listener on loopback (or a wildcard) owned by your
   uid, and not wpk's own (the board's or the relay's); every listener on
@@ -387,8 +402,16 @@ workbench  window.open("http://localhost:40731/s/")     (ide_forward.js wraps it
 What works: pages with relative links (vscode-print, `python -m
 http.server`, static reports and doc builds). What does not, yet:
 root-absolute links (`/assets/x.js`: Vite, Next.js, Jupyter, Flask and
-Django apps), which need an origin per port; WebSocket (live reload) and
-POST on `/fwd/`; pages an extension frames inside a webview.
+Django apps), which need an origin per port; URLs a script builds from
+`localhost`; WebSocket (live reload) and POST on `/fwd/`; pages an extension
+frames inside a webview.
+
+Checked live on 2026-11-06 with headless Chrome 134 against serve-web
+1.145.1 and vscode-print 1.6.0, on the board's own host. Print goes through
+the shim. `Sec-Fetch-Site` is `same-origin`. Every asset loads through
+`/fwd/`. `print()` is not blocked by the sandbox. `completed` and then
+`window.close()` close the tab. A `python -m http.server` started in the
+IDE's terminal is forwarded too.
 
 ## 5. Opening a packet the runner owns
 
@@ -417,10 +440,12 @@ costs nothing:
 
 ```toml
 [ide]
-desktop      = true            # show the vscode:// buttons
+desktop      = false           # true: show the vscode:// buttons
 web          = false           # serve VS Code under /ide/ (opt in)
-backend      = "serve-web"     # or "openvscode-server"
-code         = ""              # empty: "code" (serve-web) or "openvscode-server"
+backend      = "server"        # or "openvscode-server" ("serve-web": old name of "server")
+code         = ""              # openvscode-server's program; empty: "openvscode-server"
+release      = ""              # hold desks on this VS Code version or commit; empty: newest
+check_hours  = 24              # look for a new VS Code release this often; 0: never
 ssh_host     = ""              # empty: this node's MagicDNS name
 idle_minutes = 60
 max_servers  = 8               # one server per open target
@@ -494,7 +519,9 @@ V0 spikes ──► V1 targets + wpk ide ──► V2 board desktop buttons
       handling (§4.1, V0 findings 2–4).
 - [x] Lifecycle (§4.2): start on demand behind one lock; a pid file, so a
       server left by a board that crashed is taken over and stopped, not
-      duplicated; idle stop; stop with the board, by process group. The
+      duplicated; idle stop; stop with the board, by process group (not
+      on an in-place restart, which leaves them for the new image to adopt
+      at start: docs/serve-restart-plan.md). The
       `doctor` check `tools.code` (only with `web = true`).
 - [x] Buttons: **In the browser** next to each desktop button (new tab),
       shown with `web = true`; disabled with the reason when the page is

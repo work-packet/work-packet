@@ -176,6 +176,40 @@ def test_a_removed_packet_keeps_its_cost(fake):
     assert "$%.2f" % runner in tile or ("%.3f" % runner) in tile
 
 
+def test_a_session_the_scribe_checkpointed_stays_yours(fake, tmp_path, monkeypatch):
+    # Scribe steps used to name the watched session as their own, so the ledger
+    # labelled your session runner and every view left its cost out.
+    from work_packet import checkpoint
+    e, pkt = _new("a")
+    home = os.environ["WPK_HOME"]
+    d = _claude(tmp_path, monkeypatch)
+    (d / "a.jsonl").write_text(_line("m1", T, 500, cwd=e["path"]) + "\n")
+    out, n = checkpoint.record(pkt, "Did things", worker="scribe", by="scribe",
+                               meta={"session_id": SID, "scribe": {"session": SID}})
+    assert out.code == 0
+    ledger_collect.pass_once(home)
+    con = ledger.connect(home)
+    s = ledger.session(con, "claude", SID)
+    assert (s["source"], s["project"]) == ("interactive", "a")
+    assert con.execute("SELECT session FROM step WHERE step = ?", (n,)).fetchone() == (None,)
+    # a ledger written before the fix: the session labelled runner by the step
+    ledger.note_session(con, "claude", SID, how="runner", source="runner", project="a",
+                        wpid=pkt.wpid, step=n, client="runner")
+    con.execute("UPDATE step SET session = ? WHERE step = ?", (SID, n))
+    con.execute("DELETE FROM meta WHERE key = 'unscribe'")
+    con.commit()
+    con.close()
+    ledger_collect.pass_once(home)
+    con = ledger.connect(home)
+    s = ledger.session(con, "claude", SID)
+    assert (s["how"], s["source"], s["client"], s["step"], s["project"], s["wpid"]) == \
+        ("store", "interactive", "terminal", None, "a", pkt.wpid)
+    assert con.execute("SELECT session FROM step WHERE step = ?", (n,)).fetchone() == (None,)
+    con.close()
+    yours = [u for _, _, u, _ in ledger.buckets(home, runner=False)]
+    assert sum(u.get("output_tokens", 0) for u in yours) == 500
+
+
 def test_a_packet_folder_is_its_projects(tmp_path, monkeypatch):
     # the packet layout: the project is <folder>/.work-packet, people work in <folder>
     from work_packet import registry
