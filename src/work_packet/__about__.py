@@ -1,4 +1,4 @@
-version_info = (0, 0, 1)
+version_info = (0, 1, 0)
 
 # CI rewrites this to ".dev<run-id>+<forge>.g<sha>" on non-tag builds, so a
 # wheel produced by an ordinary push can never carry a version that could

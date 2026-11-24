@@ -128,6 +128,18 @@ jobs:
           esac
           grep -n 'SUFFIX' src/work_packet/__about__.py || true
 
+      - name: Bundle the dash's JavaScript
+        # src/work_packet/dash/vendor/ is build output, not committed
+        # (docs/studio-v2.md §7), and the wheel ships it as package data. Without
+        # this step the build still succeeds -- and the released board has no
+        # terminal, studio canvas or desktop viewer. Node comes with the runner
+        # image on both forges; package-lock.json pins the whole tree.
+        run: |
+          node --version
+          npm ci --prefix tools/vendor --no-audit --no-fund
+          node tools/vendor/build.mjs
+          test -s src/work_packet/dash/vendor/manifest.json
+
       - name: Build sdist and wheel
         # A venv rather than the system interpreter: the image's pip is 22.0.2
         # and predates PEP 660, so an editable install fails on a pyproject-only
@@ -140,6 +152,9 @@ jobs:
           /tmp/buildenv/bin/python -m build .
           /tmp/buildenv/bin/twine check dist/*
           ls -la dist/
+          # The bundle has to be IN the wheel, not just on disk beside it.
+          unzip -l dist/*.whl | grep -q 'work_packet/dash/vendor/manifest.json' \
+            || { echo "::error::the wheel has no dash/vendor/manifest.json"; exit 1; }
 
       - name: Test against the built wheel
         # Against the wheel, not the source tree: what is tested has to be what

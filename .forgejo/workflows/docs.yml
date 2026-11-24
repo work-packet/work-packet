@@ -1,0 +1,88 @@
+# Docs build for work-packet/work-packet on Forgejo Actions.
+#
+# THIS IS THE ONLY THING THAT PUBLISHES THESE DOCS. dvkit.org owns all
+# documentation: this repo's docs land at dvkit.org/work-packet/work-packet/.
+# A deploy replaces the WHOLE site, so the publisher is host-side, not here:
+#
+#   docs-fetch work-packet/work-packet main   # artifact -> staging/
+#   docs-promote / docs-deploy                # -> dvkit.org/work-packet/work-packet/
+#
+# The built HTML leaves as an ARTIFACT and nothing else. A docs artifact from
+# a GitHub workflow is consumed by nothing, so this file has no .github/
+# counterpart.
+#
+# NO RELEASE-AUTHORITY GATE, deliberately. That switch decides who publishes
+# PACKAGES (GitHub, for this repo). Docs are not a release: they publish from
+# Forgejo regardless, and the gate here would stop docs entirely.
+#
+# Runner constraints, as in ci.yml: no third-party actions (so no
+# setup-python), and `python` unqualified does not exist -- use python3.
+
+name: Docs
+
+on:
+  - push
+  - pull_request
+  - workflow_dispatch
+
+jobs:
+  docs:
+    # NOT ubuntu-latest (act-22.04, python3.10): current Sphinx needs 3.11.
+    # act-24.04 has python3.12, and marks it externally-managed (PEP 668), so
+    # everything installs into a venv.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for internal identifiers in tracked files
+        # This repo is published to git.dvkit.org and mirrored to GitHub, so
+        # anything committed here is public. The pathspec excludes the whole
+        # .forgejo/workflows directory: ci.yml carries the same pattern, and
+        # excluding only this file would match the other copy.
+        run: |
+          pattern='perch-char\.ts\.net|\.ts\.net|a9550|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+'
+          if git grep -nIE "$pattern" -- . ':!.forgejo/workflows/' ; then
+            echo "::error::internal identifier found in a tracked file (see matches above)"
+            exit 1
+          fi
+          echo "OK: no internal identifiers in tracked files"
+
+      - name: Install Sphinx
+        run: |
+          python3 -V
+          python3 -m venv /tmp/docsenv
+          /tmp/docsenv/bin/pip install -q --upgrade pip
+          /tmp/docsenv/bin/pip install -q -r docs/requirements.txt
+
+      - name: Build HTML docs
+        # -W: the site is small and builds clean, so keep it that way.
+        run: |
+          /tmp/docsenv/bin/sphinx-build -W --keep-going -b html docs docs/_build/html
+
+      - name: Sanity-check the build
+        # Sphinx exits 0 on a build that produced almost nothing, and an empty
+        # doc set is worse than a failed one BECAUSE IT DEPLOYS: auto-promote
+        # means no one reviews this artifact before dvkit.org for a push to
+        # main. These checks stand in for that review.
+        run: |
+          html=docs/_build/html
+          test -s "$html/index.html" \
+            || { echo "::error::no index.html in the build output"; exit 1; }
+          for page in collaboration-guide sched-guide studio-guide writing-a-starter spec; do
+            test -s "$html/$page.html" \
+              || { echo "::error::$page.html missing from the build"; exit 1; }
+          done
+          n=$(find "$html" -name '*.html' | wc -l)
+          echo "generated pages: $n"
+          # 8 on 2026-11-24 (6 pages + genindex + search). Raise as pages are added.
+          [ "$n" -ge 8 ] || { echo "::error::only $n pages built; expected at least 8"; exit 1; }
+
+      - name: Upload docs
+        # Consumed by the host-side poller: docs-fetch work-packet/work-packet main
+        uses: forgejo/upload-artifact@v4
+        with:
+          name: docs-work-packet-work-packet
+          path: docs/_build/html/**
+          if-no-files-found: error

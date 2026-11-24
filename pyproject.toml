@@ -47,6 +47,7 @@ wpk = "work_packet.cli:main"
 
 [project.urls]
 Source = "https://github.com/work-packet/work-packet"
+Documentation = "https://dvkit.org/work-packet/work-packet/"
 
 [tool.setuptools.dynamic]
 version = {attr = "work_packet.__about__.__version__"}

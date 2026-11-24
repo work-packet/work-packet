@@ -13,6 +13,12 @@ test suite, and short projects have run end to end against the real
 `docs/stage1-plan.md`).
 
 ```bash
+pip install 'work-packet[dash]'   # wpk and the board; [dash,tui,studio] for everything
+```
+
+Documentation: <https://dvkit.org/work-packet/work-packet/>
+
+```bash
 wpk setup                  # a guided setup, with a shell built in (pip install 'work-packet[tui]')
 wpk doctor my-project      # what the setup has, what it lacks, and the command for each
 wpk new count-demo --prompt "Increment state/count.md until it reaches 8, then spawn a child that writes Hello World"

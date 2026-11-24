@@ -16,3 +16,6 @@ tools/vendor/node_modules/
 /node_modules
 # Built by tools/vendor/build.mjs from packages/node (docs/studio-v2.md §7)
 /src/work_packet/dash/vendor/
+
+# Sphinx output (docs/conf.py)
+/docs/_build/
